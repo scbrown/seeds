@@ -33,6 +33,9 @@ STEPS = [
     ("label rename", ["label", "rename", "infra", "ops"]),
     ("label remove", ["label", "remove", "{B}", "-l", "ops"]),
     ("close", ["close", "{A}", "--reason", "done"]),
+    ("reopen", ["reopen", "{A}", "-r", "not done"]),
+    ("defer", ["defer", "{A}", "--until", "+1d"]),
+    ("undefer", ["undefer", "{A}"]),
     ("list all", ["list", "--all"]),
 ]
 

@@ -734,6 +734,264 @@ pub fn label_counts(b: &dyn Backend, at: Option<u64>) -> Result<Vec<(String, usi
     Ok(counts.into_iter().collect())
 }
 
+// ---------------------------------------------------------------- transitions
+
+/// A seed a status transition changed, with the status it left.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Transition {
+    /// The seed after the change.
+    pub seed: Seed,
+    /// Its status before.
+    pub previous_status: String,
+}
+
+/// A seed a status transition left alone, with br's reason.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Skipped {
+    /// The seed.
+    pub id: String,
+    /// Why it was not changed.
+    pub reason: String,
+}
+
+/// What `reopen`, `defer` and `undefer` return.
+pub type Transitions = (Vec<Transition>, Vec<Skipped>, u64);
+
+/// Apply one transition to every named seed in one transaction. `skip` says
+/// why a seed is left alone; `apply` changes the rest. Unknown ids write nothing.
+fn transition(
+    b: &mut dyn Backend,
+    ctx: &Ctx,
+    ids: &[String],
+    source: &str,
+    skip: impl Fn(&Seed) -> Option<String>,
+    apply: impl Fn(&mut Seed),
+    comment: Option<&str>,
+) -> Result<Transitions> {
+    let ids = unique(ids);
+    if ids.is_empty() {
+        return Err(SdError::usage("at least one seed id is required"));
+    }
+    let snap = b.snapshot(None)?;
+    let (mut writes, mut done, mut skipped, mut comments) = (vec![], vec![], vec![], vec![]);
+    for id in &ids {
+        let before = snap.get(id)?;
+        if let Some(reason) = skip(before) {
+            skipped.push(Skipped {
+                id: id.clone(),
+                reason,
+            });
+            continue;
+        }
+        let mut s = before.clone();
+        apply(&mut s);
+        s.updated_at = ctx.now.clone();
+        s.revision = before.revision + 1;
+        if let Some(text) = comment {
+            let index = snap
+                .comments_on(id)
+                .iter()
+                .map(|c| c.index)
+                .max()
+                .unwrap_or(0)
+                + 1;
+            comments.push(Comment {
+                seed: id.clone(),
+                index,
+                author: ctx.actor.clone(),
+                text: text.to_string(),
+                created_at: ctx.now.clone(),
+            });
+        }
+        done.push(Transition {
+            seed: s.clone(),
+            previous_status: before.status.clone(),
+        });
+        writes.push(SeedWrite {
+            seed: s,
+            expected_revision: Some(before.revision),
+        });
+    }
+    let tx = if writes.is_empty() {
+        snap.tx
+    } else {
+        b.commit(
+            &WriteBatch {
+                seeds: writes,
+                comments,
+                source: source.into(),
+                ..WriteBatch::default()
+            },
+            ctx,
+        )?
+    };
+    Ok((done, skipped, tx))
+}
+
+/// `sd reopen`: closed seeds become open; a reason is stored as the comment
+/// "Reopened: <reason>" in the same transaction (br).
+pub fn reopen(
+    b: &mut dyn Backend,
+    ctx: &Ctx,
+    ids: &[String],
+    reason: Option<&str>,
+) -> Result<Transitions> {
+    let comment = reason
+        .map(str::trim)
+        .filter(|r| !r.is_empty())
+        .map(|r| format!("Reopened: {r}"));
+    transition(
+        b,
+        ctx,
+        ids,
+        "seeds:reopen",
+        |s| match s.status.as_str() {
+            "closed" => None,
+            "open" => Some("already open".into()),
+            other => Some(format!("not closed (status: {other})")),
+        },
+        |s| set_status(s, "open", &ctx.now, None),
+        comment.as_deref(),
+    )
+}
+
+/// `sd defer`: status `deferred`, hidden from ready until `until` (br's forms:
+/// `+30m`, `+2h`, `+1d`, `+1w`, `tomorrow`, a date or an RFC 3339 instant).
+/// Without `until` the seed is deferred with no date. Closed seeds are skipped.
+pub fn defer(
+    b: &mut dyn Backend,
+    ctx: &Ctx,
+    ids: &[String],
+    until: Option<&str>,
+) -> Result<Transitions> {
+    let until = until.map(|u| parse_until(u, &ctx.now)).transpose()?;
+    transition(
+        b,
+        ctx,
+        ids,
+        "seeds:defer",
+        |s| (s.status == "closed").then(|| "cannot defer closed issue".to_string()),
+        |s| {
+            s.status = "deferred".into();
+            s.defer_until = until.clone();
+        },
+        None,
+    )
+}
+
+/// `sd undefer`: deferred seeds become open and lose their defer date.
+pub fn undefer(b: &mut dyn Backend, ctx: &Ctx, ids: &[String]) -> Result<Transitions> {
+    transition(
+        b,
+        ctx,
+        ids,
+        "seeds:undefer",
+        |s| (s.status != "deferred").then(|| format!("not deferred (status: {})", s.status)),
+        |s| {
+            s.status = "open".into();
+            s.defer_until = None;
+        },
+        None,
+    )
+}
+
+/// Resolve a `--until` value against `now` (an RFC 3339 UTC instant). Dates and
+/// instants are kept as given; relative forms become a UTC instant or date.
+pub fn parse_until(value: &str, now: &str) -> Result<String> {
+    let v = value.trim();
+    let bad = || {
+        SdError::usage(format!(
+            "cannot read --until {value:?}; use +30m, +2h, +1d, +1w, tomorrow, \
+             YYYY-MM-DD or an RFC 3339 instant"
+        ))
+    };
+    if let Some(rest) = v.strip_prefix('+') {
+        let (n, unit) = rest.split_at(rest.len().saturating_sub(1));
+        let n: i64 = n.parse().map_err(|_| bad())?;
+        let secs = match unit {
+            "m" => 60,
+            "h" => 3600,
+            "d" => 86_400,
+            "w" => 604_800,
+            _ => return Err(bad()),
+        };
+        return Ok(format_instant(
+            parse_instant(now).ok_or_else(bad)? + n * secs,
+        ));
+    }
+    if v.eq_ignore_ascii_case("tomorrow") {
+        let t = parse_instant(now).ok_or_else(bad)? + 86_400;
+        return Ok(format_instant(t)[..10].to_string());
+    }
+    if v.len() == 10 && parse_date(v).is_some() {
+        return Ok(v.to_string());
+    }
+    if v.len() >= 20 && parse_instant(v).is_some() {
+        return Ok(v.to_string());
+    }
+    Err(bad())
+}
+
+fn parse_date(d: &str) -> Option<i64> {
+    let b = d.as_bytes();
+    if b.len() < 10 || b[4] != b'-' || b[7] != b'-' {
+        return None;
+    }
+    let (y, m, day): (i64, i64, i64) = (
+        d[..4].parse().ok()?,
+        d[5..7].parse().ok()?,
+        d[8..10].parse().ok()?,
+    );
+    if !(1..=12).contains(&m) || !(1..=31).contains(&day) {
+        return None;
+    }
+    // Days from the civil calendar (Hinnant), proleptic Gregorian, UTC.
+    let y = if m <= 2 { y - 1 } else { y };
+    let era = y.div_euclid(400);
+    let yoe = y - era * 400;
+    let mp = (m + 9) % 12;
+    let doy = (153 * mp + 2) / 5 + day - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    Some(era * 146_097 + doe - 719_468)
+}
+
+/// Seconds since the epoch of `YYYY-MM-DDTHH:MM:SS` (anything after is ignored:
+/// seeds' instants are UTC).
+fn parse_instant(t: &str) -> Option<i64> {
+    let b = t.as_bytes();
+    if b.len() < 19 || b[10] != b'T' || b[13] != b':' || b[16] != b':' {
+        return None;
+    }
+    let (h, mi, s): (i64, i64, i64) = (
+        t[11..13].parse().ok()?,
+        t[14..16].parse().ok()?,
+        t[17..19].parse().ok()?,
+    );
+    if h > 23 || mi > 59 || s > 60 {
+        return None;
+    }
+    Some(parse_date(&t[..10])? * 86_400 + h * 3600 + mi * 60 + s)
+}
+
+fn format_instant(t: i64) -> String {
+    let (days, secs) = (t.div_euclid(86_400), t.rem_euclid(86_400));
+    let z = days + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let y = yoe + era * 400 + i64::from(m <= 2);
+    format!(
+        "{y:04}-{m:02}-{d:02}T{:02}:{:02}:{:02}Z",
+        secs / 3600,
+        secs % 3600 / 60,
+        secs % 60
+    )
+}
+
 fn claim(snap: &Snapshot, s: &mut Seed, actor: &str) -> Result<()> {
     if actor.trim().is_empty() {
         return Err(SdError::usage(

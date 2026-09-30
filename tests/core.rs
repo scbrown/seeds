@@ -1111,3 +1111,84 @@ fn blocked_lists_open_blockers_and_ignores_a_blocked_status_alone() {
         .issues
         .is_empty());
 }
+
+#[test]
+fn reopen_only_reopens_closed_seeds_and_stores_the_reason_in_the_same_tx() {
+    let mut b = backend();
+    let (x, y) = (mk(&mut b, "x", 1), mk(&mut b, "y", 2));
+    engine::close(
+        &mut b,
+        &ctx(3),
+        std::slice::from_ref(&x),
+        Some("done"),
+        false,
+    )
+    .unwrap();
+    let (done, skipped, tx) =
+        engine::reopen(&mut b, &ctx(4), &[x.clone(), y.clone()], Some("not done")).unwrap();
+    assert_eq!(done.len(), 1);
+    assert_eq!(done[0].seed.status, "open");
+    assert_eq!(done[0].previous_status, "closed");
+    assert_eq!(done[0].seed.closed_at, None);
+    assert_eq!(skipped[0].id, y);
+    assert_eq!(skipped[0].reason, "already open");
+    let cs = engine::comment_list(&b, &x, None).unwrap();
+    assert_eq!(cs.last().unwrap().text, "Reopened: not done");
+    // The comment and the status change are one transaction: pinned before it,
+    // neither exists.
+    assert!(engine::comment_list(&b, &x, Some(tx - 1))
+        .unwrap()
+        .is_empty());
+}
+
+#[test]
+fn defer_and_undefer_move_status_and_date_and_skip_the_wrong_states() {
+    let mut b = backend();
+    let (x, closed) = (mk(&mut b, "x", 1), mk(&mut b, "closed", 2));
+    engine::close(
+        &mut b,
+        &ctx(3),
+        std::slice::from_ref(&closed),
+        Some("done"),
+        false,
+    )
+    .unwrap();
+    let (done, skipped, _) =
+        engine::defer(&mut b, &ctx(4), &[x.clone(), closed.clone()], Some("+1d")).unwrap();
+    assert_eq!(done[0].seed.status, "deferred");
+    assert_eq!(
+        done[0].seed.defer_until.as_deref(),
+        Some("2026-10-01T00:00:04Z")
+    );
+    assert_eq!(skipped[0].reason, "cannot defer closed issue");
+    assert!(!ready_ids(&b, 5).contains(&x));
+    let (done, _, _) = engine::undefer(&mut b, &ctx(6), std::slice::from_ref(&x)).unwrap();
+    assert_eq!(done[0].seed.status, "open");
+    assert_eq!(done[0].seed.defer_until, None);
+    assert!(ready_ids(&b, 7).contains(&x));
+    let (_, skipped, _) = engine::undefer(&mut b, &ctx(8), std::slice::from_ref(&x)).unwrap();
+    assert_eq!(skipped[0].reason, "not deferred (status: open)");
+}
+
+#[test]
+fn until_accepts_brs_forms_and_rolls_over_months_and_years() {
+    let now = "2026-12-31T23:30:00Z";
+    let p = |v| engine::parse_until(v, now).unwrap();
+    assert_eq!(p("+30m"), "2027-01-01T00:00:00Z");
+    assert_eq!(p("+2h"), "2027-01-01T01:30:00Z");
+    assert_eq!(p("+1w"), "2027-01-07T23:30:00Z");
+    assert_eq!(p("tomorrow"), "2027-01-01");
+    assert_eq!(p("2027-03-01"), "2027-03-01");
+    assert_eq!(p("2027-03-01T09:00:00Z"), "2027-03-01T09:00:00Z");
+    assert_eq!(
+        engine::parse_until("+1d", "2028-02-28T12:00:00Z").unwrap(),
+        "2028-02-29T12:00:00Z"
+    );
+    for bad in ["", "soon", "+1y", "+d", "2027-13-01", "2027-3-1"] {
+        assert_eq!(
+            engine::parse_until(bad, now).unwrap_err().kind,
+            ErrorKind::Usage,
+            "{bad:?}"
+        );
+    }
+}
