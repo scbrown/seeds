@@ -43,6 +43,12 @@ pub fn run(cli: &Cli) -> Outcome {
             Err(e) => error_outcome(cli.json, &e, Vec::new()),
         };
     }
+    if let Command::Init(a) = &cli.command {
+        return match init(cli, a) {
+            Ok(o) => o,
+            Err(e) => error_outcome(cli.json, &e, Vec::new()),
+        };
+    }
     let result = config::Inputs::from_env(cli.store.clone(), cli.quipu.clone(), cli.graph.clone())
         .and_then(|i| config::resolve(&i))
         .and_then(|cfg| run_with(cli, &cfg));
@@ -50,6 +56,37 @@ pub fn run(cli: &Cli) -> Outcome {
         Ok(o) => o,
         Err(e) => error_outcome(cli.json, &e, Vec::new()),
     }
+}
+
+/// `sd init`: in the current directory, never a parent project's.
+fn init(cli: &Cli, a: &cli::InitArgs) -> Result<Outcome> {
+    let cwd = std::env::current_dir()
+        .map_err(|e| SdError::failed(format!("cannot read the current directory: {e}")))?;
+    // The default prefix follows the usual layers (env, user config); a parent
+    // project's file is deliberately not consulted.
+    let default_prefix = std::env::var("SEEDS_PREFIX")
+        .ok()
+        .filter(|p| !p.is_empty())
+        .unwrap_or_else(|| config::DEFAULT_PREFIX.to_string());
+    let r = config::init_project(&cwd, a.prefix.as_deref(), &default_prefix, a.force)?;
+    let graph = crate::vocab::project_graph_iri(&format!("{}-{}", r.prefix, r.project_id));
+    let value = serde_json::json!({
+        "path": r.dir.display().to_string(), "prefix": r.prefix, "project_id": r.project_id,
+        "graph": graph, "created": r.created, "kept": r.kept,
+    });
+    let text = format!(
+        "initialized {} (prefix {}, project id {}){}\ncommit .seeds/config.toml and \
+         .seeds/project-id: together they name this project's ledger",
+        r.dir.display(),
+        r.prefix,
+        r.project_id,
+        if r.kept.is_empty() {
+            String::new()
+        } else {
+            format!("; kept {}", r.kept.join(", "))
+        }
+    );
+    Ok(ok(cli.json, value, text, vec![]))
 }
 
 fn error_outcome(json: bool, e: &SdError, warnings: Vec<String>) -> Outcome {
@@ -877,11 +914,13 @@ fn dispatch(cli: &Cli, ctx: &Ctx, b: &mut dyn Backend) -> Result<Outcome> {
                 Ok(ok(json, output::dep_list_json(&rows), text, vec![]))
             }
         },
-        Command::Export(_) | Command::Import(_) | Command::Sync(_) | Command::MergeDriver(_) => {
-            Err(SdError::usage(
-                "export, import and sync are handled before dispatch",
-            ))
-        }
+        Command::Export(_)
+        | Command::Import(_)
+        | Command::Sync(_)
+        | Command::MergeDriver(_)
+        | Command::Init(_) => Err(SdError::usage(
+            "export, import and sync are handled before dispatch",
+        )),
         Command::Label { command } => label(json, at, ctx, b, command),
         Command::Comments { command } => match command {
             CommentsCommand::Add {

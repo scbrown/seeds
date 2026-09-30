@@ -576,3 +576,35 @@ fn every_write_reports_its_tx_and_at_reads_that_state_back() {
     // A dry run writes nothing, so it has no tx.
     assert!(sb.json(&["create", "x", "--dry-run"])["tx"].is_null());
 }
+
+#[test]
+fn init_makes_a_project_and_never_changes_its_id_or_prefix() {
+    let sb = Sandbox::new("init");
+    let first = sb.json(&["init", "--prefix", "ab"]);
+    assert_eq!(first["prefix"], "ab");
+    let id = first["project_id"].as_str().unwrap().to_string();
+    let dir = sb.work().join(".seeds");
+    assert!(dir.join("config.toml").exists() && dir.join(".gitignore").exists());
+    // New seeds use the prefix and write to the project init named.
+    let seed = sb.json(&["create", "x"]);
+    assert!(seed["id"].as_str().unwrap().starts_with("ab-"));
+    // A second init is refused and writes nothing.
+    assert_eq!(code(&sb.run(&["init"])), 4);
+    // --force restores a missing file but keeps the id...
+    std::fs::remove_file(dir.join(".gitignore")).unwrap();
+    let again = sb.json(&["init", "--force"]);
+    assert_eq!(again["project_id"], id.as_str());
+    assert_eq!(again["created"], serde_json::json!([".gitignore"]));
+    // ...and refuses to change the prefix: that would move to another ledger.
+    assert_eq!(code(&sb.run(&["init", "--force", "--prefix", "zz"])), 5);
+    assert_eq!(
+        std::fs::read_to_string(dir.join("project-id"))
+            .unwrap()
+            .trim(),
+        id
+    );
+    assert_eq!(
+        sb.json(&["show", seed["id"].as_str().unwrap()])[0]["title"],
+        "x"
+    );
+}
