@@ -60,10 +60,15 @@ fn clean(field: &str) -> bool {
 
 impl Signer {
     pub fn from_seed(seed: [u8; 32], session: &str, introducer: &str) -> Result<Self> {
-        if session.is_empty() || !clean(session) || !clean(introducer) {
+        if !session_ok(session) {
+            return Err(key_error(format!(
+                "signing session {session:?} must be 1-128 characters of A-Z a-z 0-9 . _ @ - \
+                 (it names a key file and goes into a shell command)"
+            )));
+        }
+        if introducer.is_empty() || !clean(introducer) {
             return Err(key_error(
-                "[quipu] signing session and introducer must be non-empty and contain no \
-                 control characters"
+                "[quipu] signing introducer must be non-empty and contain no control characters"
                     .into(),
             ));
         }
@@ -175,15 +180,40 @@ impl Signer {
         self.header(now, &fresh_nonce()?, method, path, content_type, body)
     }
 
-    /// The command the introducer runs, once, on the quipu host.
+    /// The command the introducer runs, once, on the quipu host. Someone else
+    /// pastes it into a shell, so every value is shell-quoted.
     pub fn register_command(&self, agent: &str, issued_at: u64, expires_at: u64) -> String {
         format!(
-            "quipu attest register --agent {agent} --session {} --public-key {} \
+            "quipu attest register --agent {} --session {} --public-key {} \
              --introducer {} --issued-at {issued_at} --expires-at {expires_at} --allow-write",
-            self.session,
+            sh_quote(agent),
+            sh_quote(&self.session),
             self.public_key_hex(),
-            self.introducer
+            sh_quote(&self.introducer)
         )
+    }
+}
+
+/// A session: `[A-Za-z0-9._@-]{1,128}`, not starting with `.` or `-`.
+pub fn session_ok(s: &str) -> bool {
+    (1..=128).contains(&s.len())
+        && !s.starts_with(['.', '-'])
+        && s.chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '@' | '-'))
+}
+
+/// POSIX shell quoting: bare when every character is plainly safe, otherwise
+/// single-quoted with each `'` written as `'\''`.
+pub fn sh_quote(s: &str) -> String {
+    let safe = !s.is_empty()
+        && !s.starts_with('-')
+        && s.chars().all(|c| {
+            c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '@' | '-' | ':' | '/' | '=' | '+')
+        });
+    if safe {
+        s.to_string()
+    } else {
+        format!("'{}'", s.replace('\'', r"'\''"))
     }
 }
 
@@ -300,6 +330,58 @@ mod tests {
             .header(1, "00", "POST", "/update", "a/b\n", b"")
             .is_err());
         assert!(Signer::from_seed([7; 32], "s\nintroducer=x", "i").is_err());
+    }
+
+    #[test]
+    fn a_session_that_could_break_a_path_or_a_shell_is_refused() {
+        for bad in [
+            "", "a b", "a;b", "$(id)", "a/b", "..", "-x", ".hidden", "a'b", "a`b`",
+        ] {
+            assert!(
+                Signer::from_seed([7; 32], bad, "i").is_err(),
+                "{bad:?} accepted"
+            );
+        }
+        for good in ["seeds-host-me", "e2e.wu", "me@host", "a_b"] {
+            assert!(
+                Signer::from_seed([7; 32], good, "i").is_ok(),
+                "{good:?} refused"
+            );
+        }
+    }
+
+    #[test]
+    fn the_register_command_quotes_every_value_for_the_shell() {
+        let signer = Signer::from_seed([7; 32], "s1", "wu; touch /tmp/pwned").unwrap();
+        let cmd = signer.register_command("urn:a $(id) 'x'", 1, 2);
+        assert!(cmd.contains("--introducer 'wu; touch /tmp/pwned'"), "{cmd}");
+        assert!(cmd.contains(r"--agent 'urn:a $(id) '\''x'\'''"), "{cmd}");
+        assert!(cmd.contains("--session s1 "), "{cmd}");
+        // Round-trip through a real shell: each value arrives as one argument,
+        // unexpanded.
+        #[cfg(unix)]
+        {
+            let script = cmd.replacen("quipu attest register", "printf '%s\\n'", 1);
+            let out = std::process::Command::new("sh")
+                .arg("-c")
+                .arg(&script)
+                .output()
+                .unwrap();
+            let args: Vec<String> = String::from_utf8(out.stdout)
+                .unwrap()
+                .lines()
+                .map(str::to_string)
+                .collect();
+            let after = |flag: &str| {
+                args.iter()
+                    .position(|a| a == flag)
+                    .map(|i| args[i + 1].clone())
+                    .unwrap()
+            };
+            assert_eq!(after("--agent"), "urn:a $(id) 'x'");
+            assert_eq!(after("--introducer"), "wu; touch /tmp/pwned");
+            assert_eq!(after("--session"), "s1");
+        }
     }
 
     #[test]

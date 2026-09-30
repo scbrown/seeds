@@ -831,9 +831,10 @@ fn key_outcome(
                 .join("seeds")
                 .join("keys")
                 .join(format!("{session}.key"));
-            if session.contains(['/', '\\']) || session.starts_with('.') {
+            if !attest::session_ok(&session) {
                 return Err(SdError::usage(format!(
-                    "session {session:?} cannot name a key file"
+                    "session {session:?} must be 1-128 characters of A-Z a-z 0-9 . _ @ - \
+                     (it names a key file and goes into a shell command); pass --session"
                 )));
             }
             let introducer = introducer.as_deref().ok_or_else(|| {
