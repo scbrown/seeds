@@ -74,6 +74,8 @@ pub enum Command {
     Update(UpdateArgs),
     /// Close one or more seeds
     Close(CloseArgs),
+    /// Delete seeds (tombstone: hidden everywhere, kept in history)
+    Delete(DeleteArgs),
     /// Reopen closed seeds
     Reopen(ReopenArgs),
     /// Defer seeds: status deferred, hidden from ready until a date
@@ -483,6 +485,27 @@ pub struct CloseArgs {
     pub force: bool,
 }
 
+/// `sd delete`.
+#[derive(Debug, Args)]
+pub struct DeleteArgs {
+    /// Seed id(s)
+    #[arg(required = true)]
+    pub ids: Vec<String>,
+    /// Why (stored as the comment "Deleted: <reason>")
+    #[arg(long, default_value = "delete")]
+    pub reason: String,
+    /// Delete dependents too, recursively
+    #[arg(long, conflicts_with = "force")]
+    pub cascade: bool,
+    /// Delete even with dependents; they are left pointing at a tombstone,
+    /// which never blocks
+    #[arg(long)]
+    pub force: bool,
+    /// Show what would be deleted; write nothing
+    #[arg(long)]
+    pub dry_run: bool,
+}
+
 /// `sd reopen`.
 #[derive(Debug, Args)]
 pub struct ReopenArgs {
@@ -652,6 +675,7 @@ impl Command {
             | Command::Update(_)
             | Command::Close(_)
             | Command::Reopen(_)
+            | Command::Delete(_)
             | Command::Defer(_)
             | Command::Undefer(_) => true,
             Command::Dep { command } => !matches!(command, DepCommand::List { .. }),
@@ -699,6 +723,7 @@ impl Command {
             Command::Update(_) => "update",
             Command::Close(_) => "close",
             Command::Reopen(_) => "reopen",
+            Command::Delete(_) => "delete",
             Command::Defer(_) => "defer",
             Command::Undefer(_) => "undefer",
             Command::Epic { command } => match command {
@@ -766,6 +791,11 @@ mod tests {
         (&["update", "s-1", "--claim", "--json"], "update", true),
         (&["close", "s-1", "--reason", "done"], "close", true),
         (&["reopen", "s-1", "-r", "not done"], "reopen", true),
+        (
+            &["delete", "s-1", "--cascade", "--reason", "dup"],
+            "delete",
+            true,
+        ),
         (&["defer", "s-1", "s-2", "--until", "+1d"], "defer", true),
         (&["undefer", "s-1"], "undefer", true),
         (&["dep", "add", "s-1", "s-2"], "dep add", true),

@@ -1519,3 +1519,179 @@ fn list_pages_count_dependents_of_every_type_as_br_does() {
     );
     assert_eq!(page.dependent_counts[&blocks], 0);
 }
+
+#[test]
+fn delete_tombstones_hides_everywhere_never_blocks_and_is_not_a_close() {
+    let mut b = backend();
+    let (x, y, z) = (
+        mk(&mut b, "blocker", 1),
+        mk(&mut b, "blocked", 2),
+        mk(&mut b, "other", 3),
+    );
+    engine::dep_add(&mut b, &ctx(4), &y, &x, "blocks").unwrap();
+    // A seed with a live dependent is only previewed without --cascade/--force.
+    let r = engine::delete(
+        &mut b,
+        &ctx(5),
+        std::slice::from_ref(&x),
+        "dup",
+        false,
+        false,
+        false,
+    )
+    .unwrap();
+    assert!(r.preview);
+    assert_eq!(r.blocked_dependents, [y.as_str()]);
+    assert!(engine::list(&b, &ListReq::default(), None)
+        .unwrap()
+        .issues
+        .iter()
+        .any(|s| s.id == x));
+    // --force: deleted; the dependent is orphaned but NOT blocked (constraint 1).
+    let r = engine::delete(
+        &mut b,
+        &ctx(6),
+        std::slice::from_ref(&x),
+        "dup",
+        false,
+        true,
+        false,
+    )
+    .unwrap();
+    assert!(!r.preview && r.tx > 0);
+    assert_eq!(r.orphaned, [y.as_str()]);
+    assert!(ready_ids(&b, 7).contains(&y), "a tombstone never blocks");
+    // Hidden from every listing and count; show still returns it.
+    let listed = engine::list(
+        &b,
+        &ListReq {
+            all: true,
+            ..ListReq::default()
+        },
+        None,
+    )
+    .unwrap();
+    assert!(!listed.issues.iter().any(|s| s.id == x));
+    assert_eq!(
+        engine::count(&b, &CountReq::default(), None).unwrap().total,
+        2
+    );
+    let st = engine::stats(&b, &ctx(8), engine::StatsReq::default(), None).unwrap();
+    assert_eq!((st.total, st.tombstones), (2, 1));
+    let shown = engine::show(&b, std::slice::from_ref(&x), None).unwrap();
+    let t = &shown[0].seed;
+    assert_eq!(t.status, "tombstone");
+    // Not a close (constraint 2): no outcome, no closed_at.
+    assert_eq!((t.outcome.clone(), t.closed_at.clone()), (None, None));
+    assert_eq!(
+        engine::comment_list(&b, &x, None)
+            .unwrap()
+            .last()
+            .unwrap()
+            .text,
+        "Deleted: dup"
+    );
+    // Cannot gain a dependency in either direction (constraint 1).
+    for (from, to) in [(&z, &x), (&x, &z)] {
+        let err = engine::dep_add(&mut b, &ctx(9), from, to, "related").unwrap_err();
+        assert_eq!(err.kind, ErrorKind::Refused);
+    }
+    // update cannot set the status; delete is the only way in.
+    let err = engine::update(
+        &mut b,
+        &ctx(10),
+        std::slice::from_ref(&z),
+        &UpdateReq {
+            status: Some("tombstone".into()),
+            ..UpdateReq::default()
+        },
+    )
+    .unwrap_err();
+    assert_eq!(err.kind, ErrorKind::Usage);
+}
+
+#[test]
+fn delete_cascade_takes_dependents_with_it() {
+    let mut b = backend();
+    let (x, y, z) = (mk(&mut b, "x", 1), mk(&mut b, "y", 2), mk(&mut b, "z", 3));
+    engine::dep_add(&mut b, &ctx(4), &y, &x, "blocks").unwrap();
+    engine::dep_add(&mut b, &ctx(5), &z, &y, "related").unwrap();
+    let dry = engine::delete(
+        &mut b,
+        &ctx(6),
+        std::slice::from_ref(&x),
+        "",
+        true,
+        false,
+        true,
+    )
+    .unwrap();
+    assert!(dry.preview);
+    assert_eq!(
+        engine::count(&b, &CountReq::default(), None).unwrap().total,
+        3,
+        "dry run writes nothing"
+    );
+    let r = engine::delete(
+        &mut b,
+        &ctx(7),
+        std::slice::from_ref(&x),
+        "",
+        true,
+        false,
+        false,
+    )
+    .unwrap();
+    let mut gone = r.deleted.clone();
+    gone.sort();
+    let mut want = vec![x, y, z];
+    want.sort();
+    assert_eq!(gone, want, "transitive: z depends on y depends on x");
+    assert_eq!(
+        engine::count(&b, &CountReq::default(), None).unwrap().total,
+        0
+    );
+}
+
+#[test]
+fn deleting_a_closed_seed_drops_its_close_so_a_tombstone_is_never_a_close() {
+    // wu, seeds#28 review: delete set the status only, so a seed closed first
+    // kept closed_at and close_reason. History keeps them; --at still reads them.
+    let mut b = backend();
+    let x = mk(&mut b, "x", 1);
+    let (_, closed_tx, _) = engine::close(
+        &mut b,
+        &ctx(2),
+        std::slice::from_ref(&x),
+        Some("done earlier"),
+        false,
+    )
+    .unwrap();
+    engine::delete(
+        &mut b,
+        &ctx(3),
+        std::slice::from_ref(&x),
+        "dup",
+        false,
+        false,
+        false,
+    )
+    .unwrap();
+    let t = engine::show(&b, std::slice::from_ref(&x), None).unwrap()[0]
+        .seed
+        .clone();
+    assert_eq!(t.status, "tombstone");
+    assert_eq!(
+        (t.closed_at, t.close_reason, t.outcome),
+        (None, None, None),
+        "a tombstone carries no close"
+    );
+    let before = engine::show(&b, std::slice::from_ref(&x), Some(closed_tx)).unwrap()[0]
+        .seed
+        .clone();
+    assert_eq!(
+        before.close_reason.as_deref(),
+        Some("done earlier"),
+        "history keeps the close"
+    );
+}

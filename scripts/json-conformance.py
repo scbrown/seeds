@@ -45,6 +45,8 @@ STEPS = [
     ("defer", ["defer", "{A}", "--until", "+1d"]),
     ("undefer", ["undefer", "{A}"]),
     ("search closed", ["search", "parity A"]),
+    ("delete preview", ["delete", "{A}", "--dry-run"]),
+    ("delete", ["delete", "{B}", "--reason", "dup"]),
     ("list all", ["list", "--all"]),
 ]
 

@@ -14,6 +14,7 @@
 | `update` | yes | [update](update.md) |
 | `close` | yes | [close](close.md) |
 | `reopen`, `defer`, `undefer` | yes | [reopen, defer, undefer](reopen.md) |
+| `delete` | yes (tombstone) | [delete](delete.md) |
 | `blocked` | no | [blocked](blocked.md) |
 | `label add`, `label remove`, `label rename`, `label list`, `label list-all` | add/remove/rename | [label](label.md) |
 | `epic status`, `epic close-eligible` | close-eligible | [epic](epic.md) |
