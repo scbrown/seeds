@@ -11,13 +11,13 @@ a quipu graph.
 
 | # | intent | what callers do today | what seeds provides |
 |---|---|---|---|
-| 1 | Conditional claim / release | `UPDATE … WHERE status='in_progress' AND assignee=X`, plus a revision token | a compare-and-swap: `seeds update <id> --claim`, `seeds release <id> --if-assignee X` |
+| 1 | Conditional claim / release | `UPDATE … WHERE status='in_progress' AND assignee=X`, plus a revision token | a compare-and-swap: `sd update <id> --claim`, `sd release <id> --if-assignee X` |
 | 2 | Project identity | read or upsert a project-id metadata row; ask for the active branch; probe for the issues table | the project **is** a named-graph IRI, so identity comes built in |
 | 3 | Commit / cursor | stage, commit, count dirty tables, read the head hash | **goes away**: every knot is a transaction and the transaction id is the cursor |
-| 4 | Capability / schema probe | read the max migration version; list tables and columns | `seeds capabilities --json`, derived from the loaded quipu shapes |
+| 4 | Capability / schema probe | read the max migration version; list tables and columns | `sd capabilities --json`, derived from the loaded quipu shapes |
 | 5 | Health / liveness | list databases, read the process list and data dir, start or stop the SQL server | **goes away**: quipu's own health endpoint; there is no server lifecycle |
 | 6 | Maintenance | garbage-collect, purge dropped databases, compact | **goes away**: quipu's own job; a no-op in seeds |
-| 7 | Read projections | `COUNT`, list and `ready` union queries | SPARQL behind `seeds count`, `seeds list` and `seeds ready`, as camayoc stored queries |
+| 7 | Read projections | `COUNT`, list and `ready` union queries | SPARQL behind `sd count`, `sd list` and `sd ready`, as camayoc stored queries |
 
 ## What each surviving intent needs
 

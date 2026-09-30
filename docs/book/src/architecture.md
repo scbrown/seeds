@@ -4,8 +4,8 @@
   agent types `bd ready --json`
           │
           ▼
-  desire-path  (dp alias --cmd bd --replace seeds)
-          │ rewritten to `seeds ready --json`
+  desire-path  (dp alias --cmd bd --replace sd)
+          │ rewritten to `sd ready --json`
           ▼
   seeds CLI ──── reads ────▶ quipu  POST /query   (SPARQL)
           │                    ▲
@@ -31,7 +31,7 @@
 - **caboodle** installs seeds and asserts it in `caboodle verify` with a
   functional round trip.
 - **desire-path** redirects `bd` to seeds with a pre-tool-use rewrite
-  (`dp alias --cmd bd --replace seeds`). Callers that need real beads pass
+  (`dp alias --cmd bd --replace sd`). Callers that need real beads pass
   through unchanged. Every `bd` verb seeds rejects is recorded, so
   `dp paths` becomes the seeds backlog.
 

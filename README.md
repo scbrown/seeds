@@ -42,36 +42,61 @@ The full case, and exactly what it is and is not:
 
 ## Install
 
-v0 is a shell: there is no release yet, and the repository is private for
-now, so you need read access. Build from source (needs Rust 1.85+):
+The command is `sd`; the project and crate are **seeds** / `seeds-ai`.
+Prebuilt `sd` binaries for Linux x86_64/arm64 and macOS arm64/x86_64 are
+attached to each [GitHub release](https://github.com/scbrown/seeds/releases),
+with a `SHA256SUMS.txt`. v0 is a shell, and the first release has not been cut
+yet.
 
 ```bash
-cargo install --git https://github.com/scbrown/seeds --locked
+V=v0.1.0 T=x86_64-unknown-linux-gnu   # or aarch64-unknown-linux-gnu, aarch64-apple-darwin, x86_64-apple-darwin
+curl -fsSLO "https://github.com/scbrown/seeds/releases/download/$V/sd-$V-$T.tar.gz"
+curl -fsSLO "https://github.com/scbrown/seeds/releases/download/$V/SHA256SUMS.txt"
+sha256sum --ignore-missing -c SHA256SUMS.txt     # macOS: shasum -a 256 --ignore-missing -c SHA256SUMS.txt
+tar xzf "sd-$V-$T.tar.gz" && install "sd-$V-$T/sd" ~/.local/bin/
+```
+
+Or from crates.io, once the first version is published (needs Rust 1.85+):
+
+```bash
+cargo install seeds-ai --locked
 ```
 
 Check it:
 
 ```bash
-seeds --version
+sd --version
 ```
 
 ```text
-seeds 0.0.1
+sd 0.0.1
 ```
 
-If that prints an older version, another copy is earlier on your `PATH`:
-`which -a seeds`.
+**Already have `sd`?** [chmln/sd](https://github.com/chmln/sd), the popular
+find-and-replace tool, also installs a command called `sd` (crates.io `sd`,
+Homebrew `sd`). The two cannot share a name on your `PATH`:
+
+- `cargo install seeds-ai` refuses to overwrite an existing `~/.cargo/bin/sd`.
+  `--force` replaces it, which removes chmln/sd from that location.
+- If both are installed in different directories, `PATH` order decides which
+  `sd` runs. `which -a sd` lists them in that order.
+- To keep both, install the prebuilt binary under another name, for example
+  `install "sd-$V-$T/sd" ~/.local/bin/seeds`, and use that name (and
+  `dp alias --cmd bd --replace seeds`).
+
+If `sd --version` prints anything other than `sd <version>`, you are running
+a different `sd`.
 
 ## First success in three commands
 
 ```bash
-seeds --version
-seeds ready --json
+sd --version
+sd ready --json
 echo "exit $?"
 ```
 
 ```text
-seeds 0.0.1
+sd 0.0.1
 seeds: ready not yet implemented (see docs/book)
 exit 13
 ```
@@ -83,11 +108,11 @@ wrapper can tell which verb was asked for and record the demand.
 
 | you want to… | run (once implemented) |
 |---|---|
-| see what is ready to work on | `seeds ready --json` |
-| open a work item | `seeds create "title" -p 1 -t task` |
-| claim it | `seeds update <id> --claim` |
-| record that one blocks another | `seeds dep add <id> <depends-on>` |
-| read an item as it was | `seeds show <id> --at <tx>` |
+| see what is ready to work on | `sd ready --json` |
+| open a work item | `sd create "title" -p 1 -t task` |
+| claim it | `sd update <id> --claim` |
+| record that one blocks another | `sd dep add <id> <depends-on>` |
+| read an item as it was | `sd show <id> --at <tx>` |
 
 Every verb, flag and exit code: [Reference](docs/book/src/reference.md).
 
@@ -97,7 +122,7 @@ Agents keep typing `bd`. [desire-path](https://github.com/scbrown/desire-path)
 rewrites that to seeds before the tool call runs:
 
 ```bash
-dp alias --cmd bd --replace seeds
+dp alias --cmd bd --replace sd
 ```
 
 A `bd` verb seeds rejects is recorded, so `dp paths` becomes the seeds backlog.

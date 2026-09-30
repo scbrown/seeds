@@ -1,5 +1,7 @@
 # Reference
 
+The command is `sd` (crate `seeds-ai`).
+
 ## Global options
 
 These are accepted on every verb.

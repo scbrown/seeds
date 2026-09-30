@@ -6,12 +6,13 @@ seeds is an experiment: beads-shaped work items stored as facts in a
 [quipu](https://github.com/scbrown/quipu) knowledge graph. It answers the
 `bd`/`br` verbs agents already type, with `--json` in the same shape, and it
 exists to test one design question: **fact-level versus snapshot versioning**.
-It is deliberately **not** a competing beads implementation. Read
+It is deliberately **not** a competing beads implementation. The command is `sd`;
+the project, repository and prose name are "seeds"; the crate is `seeds-ai`. Read
 `docs/book/src/experiment.md` before changing its scope.
 
 Sibling repos: scbrown/quipu (governed store), scbrown/camayoc (shapes and
 stored queries), scbrown/caboodle (installer and verify),
-scbrown/desire-path (the `bd` -> `seeds` redirect), scbrown/yupana (code
+scbrown/desire-path (the `bd` -> `sd` redirect), scbrown/yupana (code
 structure), scbrown/bobbin (retrieval).
 
 ## Conventions
@@ -65,6 +66,15 @@ so **the quality gates are the only gate**.
 - **Work that cannot pass the gates does not get pushed.** Finish it, or leave
   it uncommitted and say so at handoff.
 - **Conventional commit subjects** (`feat:`, `fix:`, `docs:`, `chore:`, …).
+
+## Releases
+
+Versioning is release-please: conventional commits on `main` feed a release
+PR, and merging it tags, builds the `sd` binaries for four targets, publishes
+the GitHub release and publishes `seeds-ai` to crates.io through Trusted
+Publishing (no registry token in the repo). `crates.yml` is the manual recovery
+lane. To rehearse without releasing, dispatch `release.yml` with
+`dry_run: true` (the default).
 
 ## Before Every Push
 

@@ -16,13 +16,13 @@ else rewinds.
 ## The demo
 
 ```bash
-seeds create "Ship the parser" -p 1 --json      # -> s-7, written in tx 1042
-seeds update s-7 --status in_progress           # tx 1043
-seeds update s-7 --title "Ship the streaming parser" -p 0   # tx 1051
+sd create "Ship the parser" -p 1 --json      # -> s-7, written in tx 1042
+sd update s-7 --status in_progress           # tx 1043
+sd update s-7 --title "Ship the streaming parser" -p 0   # tx 1051
 
-seeds show s-7                  # today: P0, "Ship the streaming parser", in_progress
-seeds show s-7 --at 1042        # the pin: P1, "Ship the parser", open
-seeds ready --json              # the project has moved on without it
+sd show s-7                  # today: P0, "Ship the streaming parser", in_progress
+sd show s-7 --at 1042        # the pin: P1, "Ship the parser", open
+sd ready --json              # the project has moved on without it
 ```
 
 The pin still resolves to the old state while the rest of the project reads
