@@ -31,6 +31,7 @@
   - [comments](verbs/comments.md)
   - [export, import, sync](verbs/sync.md)
   - [version, where, info](verbs/about.md)
+  - [completions](verbs/completions.md)
 - [Formulas: shuttle](formulas.md)
 - [Reference](reference.md)
 - [What is built, and what is not](status.md)

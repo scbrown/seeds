@@ -100,6 +100,8 @@ pub enum Command {
         #[command(subcommand)]
         command: LabelCommand,
     },
+    /// Print a shell completion script (bash, zsh, fish, powershell, elvish)
+    Completions(CompletionsArgs),
     /// Print the version (and how this build was made)
     Version(VersionArgs),
     /// Show where the ledger lives: store file or server, graph, prefix, pendant
@@ -128,6 +130,16 @@ pub struct MergeDriverArgs {
     pub ours: String,
     /// Theirs (git's %B)
     pub theirs: String,
+}
+
+/// `sd completions`.
+#[derive(Debug, Args)]
+pub struct CompletionsArgs {
+    /// The shell to generate completions for
+    pub shell: clap_complete::Shell,
+    /// Write `<dir>/<file>` for the shell instead of printing to stdout
+    #[arg(short, long, value_name = "DIR")]
+    pub output: Option<String>,
 }
 
 /// `sd version`.
@@ -635,6 +647,7 @@ impl Command {
             ),
             Command::Import(_) | Command::Sync(_) | Command::MergeDriver(_) => true,
             Command::Export(_)
+            | Command::Completions(_)
             | Command::Version(_)
             | Command::Where
             | Command::Info
@@ -686,6 +699,7 @@ impl Command {
                 LabelCommand::ListAll => "label list-all",
                 LabelCommand::Rename { .. } => "label rename",
             },
+            Command::Completions(_) => "completions",
             Command::Version(_) => "version",
             Command::Where => "where",
             Command::Info => "info",
@@ -764,6 +778,7 @@ mod tests {
         (&["label", "rename", "a", "b"], "label rename", true),
         (&["export", "--to", "p"], "export", false),
         (&["version", "--short"], "version", false),
+        (&["completions", "bash"], "completions", false),
         (&["where"], "where", false),
         (&["info"], "info", false),
         (&["import", "p", "--prefer", "store"], "import", true),
