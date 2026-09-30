@@ -1311,3 +1311,68 @@ fn stale_lists_untouched_non_closed_seeds_oldest_first() {
     let err = engine::stale(&b, &now, 30, &["nope".into()], None).unwrap_err();
     assert_eq!(err.kind, ErrorKind::Usage);
 }
+
+#[test]
+fn epic_status_and_close_eligible_follow_br() {
+    let mut b = backend();
+    let epic = |b: &mut QuipuBackend, t: &str, n: u32| {
+        engine::create(
+            b,
+            &ctx(n),
+            &CreateReq {
+                title: t.into(),
+                issue_type: Some("epic".into()),
+                ..CreateReq::default()
+            },
+        )
+        .unwrap()
+        .0
+        .id
+    };
+    let (done, empty) = (epic(&mut b, "done", 1), epic(&mut b, "empty", 2));
+    let kid = engine::create(
+        &mut b,
+        &ctx(3),
+        &CreateReq {
+            title: "kid".into(),
+            parent: Some(done.clone()),
+            ..CreateReq::default()
+        },
+    )
+    .unwrap()
+    .0
+    .id;
+    let rows = engine::epic_status(&b, false, None).unwrap();
+    assert_eq!(rows.len(), 2);
+    assert!(
+        rows.iter().all(|r| !r.eligible_for_close),
+        "no children closed yet; empty is never eligible"
+    );
+    engine::close(
+        &mut b,
+        &ctx(4),
+        std::slice::from_ref(&kid),
+        Some("done"),
+        false,
+    )
+    .unwrap();
+    let eligible = engine::epic_status(&b, true, None).unwrap();
+    assert_eq!(eligible.len(), 1);
+    assert_eq!(
+        (eligible[0].total_children, eligible[0].closed_children),
+        (1, 1)
+    );
+    let (closed, skipped, _) = engine::epic_close_eligible(&mut b, &ctx(5)).unwrap();
+    assert_eq!(closed[0].id, done);
+    assert_eq!(
+        closed[0].close_reason.as_deref(),
+        Some("All children completed")
+    );
+    assert!(skipped.is_empty());
+    // A closed epic leaves status; the childless one stays, ineligible.
+    let rows = engine::epic_status(&b, false, None).unwrap();
+    assert_eq!(
+        rows.iter().map(|r| r.epic.id.clone()).collect::<Vec<_>>(),
+        [empty]
+    );
+}

@@ -78,6 +78,11 @@ pub enum Command {
     Defer(DeferArgs),
     /// Undefer seeds: back to open, defer date cleared
     Undefer(UndeferArgs),
+    /// Epic progress and closing
+    Epic {
+        #[command(subcommand)]
+        command: EpicCommand,
+    },
     /// Manage dependencies
     Dep {
         #[command(subcommand)]
@@ -431,6 +436,23 @@ pub struct UndeferArgs {
     pub ids: Vec<String>,
 }
 
+/// `sd epic ...`.
+#[derive(Debug, Subcommand)]
+pub enum EpicCommand {
+    /// Every epic that is not closed, with child progress and eligibility
+    Status {
+        /// Only epics whose children are all closed
+        #[arg(long)]
+        eligible_only: bool,
+    },
+    /// Close every epic whose children are all closed
+    CloseEligible {
+        /// List what would be closed without writing
+        #[arg(long)]
+        dry_run: bool,
+    },
+}
+
 /// `sd dep ...`.
 #[derive(Debug, Subcommand)]
 pub enum DepCommand {
@@ -555,6 +577,9 @@ impl Command {
             | Command::Defer(_)
             | Command::Undefer(_) => true,
             Command::Dep { command } => !matches!(command, DepCommand::List { .. }),
+            Command::Epic { command } => {
+                matches!(command, EpicCommand::CloseEligible { dry_run: false })
+            }
             Command::Comments { command } => matches!(command, CommentsCommand::Add { .. }),
             Command::Label { command } => matches!(
                 command,
@@ -590,6 +615,10 @@ impl Command {
             Command::Reopen(_) => "reopen",
             Command::Defer(_) => "defer",
             Command::Undefer(_) => "undefer",
+            Command::Epic { command } => match command {
+                EpicCommand::Status { .. } => "epic status",
+                EpicCommand::CloseEligible { .. } => "epic close-eligible",
+            },
             Command::Dep { command } => match command {
                 DepCommand::Add { .. } => "dep add",
                 DepCommand::Remove { .. } => "dep remove",
@@ -648,6 +677,13 @@ mod tests {
         (&["defer", "s-1", "s-2", "--until", "+1d"], "defer", true),
         (&["undefer", "s-1"], "undefer", true),
         (&["dep", "add", "s-1", "s-2"], "dep add", true),
+        (&["epic", "status", "--eligible-only"], "epic status", false),
+        (&["epic", "close-eligible"], "epic close-eligible", true),
+        (
+            &["epic", "close-eligible", "--dry-run"],
+            "epic close-eligible",
+            false,
+        ),
         (
             &["dep", "remove", "s-1", "s-2", "-t", "related"],
             "dep remove",

@@ -21,6 +21,8 @@ STEPS = [
     ("ready", ["ready"]),
     ("count", ["count"]),
     ("stale", ["stale", "--days", "0"]),
+    ("epic status", ["epic", "status"]),
+    ("epic close-eligible --dry-run", ["epic", "close-eligible", "--dry-run"]),
     ("search", ["search", "parity"]),
     ("update", ["update", "{A}", "--status", "in_progress", "--assignee", "probe"]),
     ("dep add", ["dep", "add", "{B}", "{A}"]),

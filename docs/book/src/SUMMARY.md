@@ -25,6 +25,7 @@
   - [reopen, defer, undefer](verbs/reopen.md)
   - [blocked](verbs/blocked.md)
   - [label](verbs/label.md)
+  - [epic](verbs/epic.md)
   - [dep](verbs/dep.md)
   - [comments](verbs/comments.md)
   - [export, import, sync](verbs/sync.md)
