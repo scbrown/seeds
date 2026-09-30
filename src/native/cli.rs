@@ -144,6 +144,14 @@ pub enum Command {
         #[arg(long = "command", alias = "for", value_name = "COMMAND_PATH")]
         command_path: Option<String>,
     },
+    /// JSON Schemas for sd's --json output, generated from the same tables the
+    /// contract tests pin
+    Schema {
+        /// all, issue, issue-with-counts, issue-details, ready-issue,
+        /// stale-issue, blocked-issue, comment, statistics, error or commands
+        #[arg(default_value = "all")]
+        target: String,
+    },
     /// Show the resolved configuration (list, get, path)
     Config {
         #[command(subcommand)]
@@ -862,6 +870,7 @@ impl Command {
             | Command::Completions(_)
             | Command::Version(_)
             | Command::Where
+            | Command::Schema { .. }
             | Command::Capabilities { .. }
             | Command::Info
             | Command::Config { .. }
@@ -939,6 +948,7 @@ impl Command {
             Command::Version(_) => "version",
             Command::Where => "where",
             Command::Info => "info",
+            Command::Schema { .. } => "schema",
             Command::Capabilities { .. } => "capabilities",
             Command::Config { command } => match command {
                 ConfigCommand::List => "config list",
@@ -1046,6 +1056,7 @@ mod tests {
         (&["completions", "bash"], "completions", false),
         (&["where"], "where", false),
         (&["info"], "info", false),
+        (&["schema", "issue"], "schema", false),
         (
             &["capabilities", "--for", "comments add"],
             "capabilities",

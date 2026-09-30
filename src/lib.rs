@@ -35,6 +35,7 @@ pub mod model;
 pub mod output;
 pub mod pendant;
 pub mod quipu_backend;
+pub mod schema;
 pub mod sync;
 pub mod validate;
 pub mod vocab;
