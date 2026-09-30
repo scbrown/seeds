@@ -22,7 +22,7 @@ pub struct Cli {
     #[arg(long, global = true, visible_alias = "robot")]
     pub json: bool,
 
-    /// Output format: text or json (json is --json). br's toon is not supported.
+    /// Output format: text, json (json is --json) or csv (list and search). br's toon is not supported.
     #[arg(long, global = true, value_name = "FORMAT")]
     pub format: Option<String>,
 
@@ -448,6 +448,9 @@ pub struct ListArgs {
     /// Include deferred seeds (hidden by default, as br does)
     #[arg(long)]
     pub deferred: bool,
+    /// With --format csv: the columns, comma-separated (default id,title,status,priority,issue_type,assignee,created_at,updated_at)
+    #[arg(long)]
+    pub fields: Option<String>,
 }
 
 /// `sd search`.
@@ -512,6 +515,9 @@ pub struct SearchArgs {
     /// Include deferred seeds (hidden by default, as br does)
     #[arg(long)]
     pub deferred: bool,
+    /// With --format csv: the columns, comma-separated (default id,title,status,priority,issue_type,assignee,created_at,updated_at)
+    #[arg(long)]
+    pub fields: Option<String>,
 }
 
 /// `sd ready`.

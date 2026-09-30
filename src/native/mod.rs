@@ -38,13 +38,16 @@ pub struct Outcome {
 /// Run a parsed command against the configuration in the environment.
 pub fn run(cli: &Cli) -> Outcome {
     if let Some(f) = cli.format.as_deref() {
-        if !matches!(f, "text" | "json") {
+        if !matches!(f, "text" | "json" | "csv") {
             let e = SdError::usage(format!(
-                "--format {f:?} is not supported; sd prints text or json (--format json is --json). \
-                 br's toon format is not implemented"
+                "--format {f:?} is not supported; sd prints text, json (--format json is --json) \
+                 or csv (list and search). br's toon format is not implemented"
             ));
             return error_outcome(false, &e, Vec::new());
         }
+    }
+    if let Err(e) = csv_usage(cli) {
+        return error_outcome(false, &e, Vec::new());
     }
 
     if let Command::MergeDriver(a) = &cli.command {
@@ -1366,6 +1369,41 @@ fn split_csv(s: &Option<String>) -> Vec<String> {
         .unwrap_or_default()
 }
 
+/// `--format csv` is list's and search's, `--fields` shapes only it, and it
+/// cannot also be `--json`: each would otherwise be ignored, so each is refused.
+fn csv_usage(cli: &Cli) -> Result<()> {
+    let csv = cli.format.as_deref() == Some("csv");
+    let fields = match &cli.command {
+        Command::List(a) => Some(&a.fields),
+        Command::Search(a) => Some(&a.fields),
+        _ => None,
+    };
+    match fields {
+        None if csv => Err(SdError::usage(
+            "--format csv is supported on list and search only",
+        )),
+        Some(Some(_)) if !csv => Err(SdError::usage(
+            "--fields shapes --format csv output; add --format csv",
+        )),
+        _ if csv && cli.json => Err(SdError::usage("--json and --format csv conflict; pick one")),
+        Some(Some(f)) => output::csv_fields(f).map(|_| ()),
+        _ => Ok(()),
+    }
+}
+
+/// The CSV for a list or search page, when `--format csv` asked for it.
+fn csv_of(
+    cli: &Cli,
+    seeds: &[crate::model::Seed],
+    fields: &Option<String>,
+) -> Result<Option<String>> {
+    if cli.format.as_deref() != Some("csv") {
+        return Ok(None);
+    }
+    let f = output::csv_fields(fields.as_deref().unwrap_or(output::CSV_DEFAULT))?;
+    Ok(Some(output::seeds_csv(seeds, &f)))
+}
+
 fn ok(json: bool, value: Json, text: String, warnings: Vec<String>) -> Outcome {
     Outcome {
         code: 0,
@@ -1493,12 +1531,11 @@ fn dispatch(cli: &Cli, cfg: &Resolved, ctx: &Ctx, b: &mut dyn Backend) -> Result
                     p.total
                 ));
             }
-            Ok(ok(
-                json,
-                output::list_json(&p),
-                output::page_text(&p, "matching"),
-                warnings,
-            ))
+            let text = match csv_of(cli, &p.issues, &a.fields)? {
+                Some(csv) => csv,
+                None => output::page_text(&p, "matching"),
+            };
+            Ok(ok(json, output::list_json(&p), text, warnings))
         }
         Command::Ready(a) => {
             let assignee = match a.assignee.as_deref() {
@@ -1565,12 +1602,11 @@ fn dispatch(cli: &Cli, cfg: &Resolved, ctx: &Ctx, b: &mut dyn Backend) -> Result
                 deferred: a.deferred,
             };
             let r = engine::search(b, &req, at)?;
-            Ok(ok(
-                json,
-                output::search_json(&r),
-                output::search_text(&r, &a.query),
-                vec![],
-            ))
+            let text = match csv_of(cli, &r.page.issues, &a.fields)? {
+                Some(csv) => csv,
+                None => output::search_text(&r, &a.query),
+            };
+            Ok(ok(json, output::search_json(&r), text, vec![]))
         }
         Command::Stats(a) => {
             let req = engine::StatsReq {
