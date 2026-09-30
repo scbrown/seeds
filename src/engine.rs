@@ -58,6 +58,10 @@ pub struct CreateReq {
     /// Which entry into `step` this is (1 when absent).
     pub visit: Option<u32>,
     /// Compute and return the seed without writing it.
+    /// Initial status (open, in_progress, blocked, deferred); default open.
+    pub status: Option<String>,
+    /// Defer until this (br's forms); implies status deferred.
+    pub defer: Option<String>,
     pub dry_run: bool,
 }
 
@@ -154,6 +158,24 @@ pub fn create_outcome(b: &mut dyn Backend, ctx: &Ctx, req: &CreateReq) -> Result
         let (dep_type, target) = parse_dep_spec(spec)?;
         snap.get(&target)?;
         seed.add_dep(&target, &dep_type);
+    }
+    if let Some(st) = &req.status {
+        let st = model::parse_status(st)?;
+        if st == model::TOMBSTONE || st == "closed" {
+            return Err(SdError::usage(format!(
+                "create cannot start a seed as {st}; create it, then sd close or sd delete it"
+            )));
+        }
+        seed.status = st;
+    }
+    if let Some(d) = &req.defer {
+        if req.status.as_deref().is_some_and(|s| s != "deferred") {
+            return Err(SdError::usage(
+                "--defer makes the seed deferred; do not combine it with another --status",
+            ));
+        }
+        seed.status = "deferred".into();
+        seed.defer_until = Some(parse_until(d, &ctx.now)?);
     }
     if req.dry_run {
         return Ok(Created {
@@ -1461,6 +1483,12 @@ pub struct UpdateReq {
     pub workflow_run: Option<String>,
     /// A comment written with the change, in the same transaction.
     pub transition_comment: Option<String>,
+    /// New type.
+    pub issue_type: Option<String>,
+    /// Replace all labels with these (comma-separated allowed).
+    pub set_labels: Option<Vec<String>>,
+    /// New parent; empty detaches the seed.
+    pub parent: Option<String>,
 }
 
 /// `sd update`: all named seeds change in one transaction, or none do.
@@ -1471,6 +1499,11 @@ pub fn update(
     req: &UpdateReq,
 ) -> Result<(Vec<Seed>, u64)> {
     let status = req.status.as_deref().map(model::parse_status).transpose()?;
+    let issue_type = req
+        .issue_type
+        .as_deref()
+        .map(model::parse_type)
+        .transpose()?;
     if status.as_deref() == Some(model::TOMBSTONE) {
         return Err(SdError::usage(
             "use sd delete to delete a seed; update cannot set the tombstone status",
@@ -1522,6 +1555,15 @@ pub fn update(
         }
         if let Some(r) = &req.workflow_run {
             s.workflow_run = non_empty(Some(r.trim())).map(|r| vocab::run_iri(&r));
+        }
+        if let Some(t) = &issue_type {
+            s.issue_type = t.clone();
+        }
+        if let Some(set) = &req.set_labels {
+            s.labels = clean_labels(set);
+        }
+        if let Some(p) = &req.parent {
+            s.parent = reparent(&snap, id, p)?;
         }
         for l in clean_labels(&req.add_labels) {
             s.labels.insert(l);
@@ -2117,6 +2159,26 @@ pub fn delete(
         )?
     };
     Ok(report)
+}
+
+/// The new parent for `update --parent`: empty detaches; otherwise it must
+/// exist, not be the seed itself, and not make the seed its own ancestor.
+fn reparent(snap: &Snapshot, id: &str, parent: &str) -> Result<Option<String>> {
+    let parent = parent.trim();
+    if parent.is_empty() {
+        return Ok(None);
+    }
+    snap.get(parent)?;
+    let mut cur = Some(parent.to_string());
+    while let Some(p) = cur {
+        if p == id {
+            return Err(SdError::refused(format!(
+                "{parent} is {id} or one of its descendants; a seed cannot be its own ancestor"
+            )));
+        }
+        cur = snap.seeds.get(&p).and_then(|s| s.parent.clone());
+    }
+    Ok(Some(parent.to_string()))
 }
 
 fn claim(snap: &Snapshot, s: &mut Seed, actor: &str) -> Result<()> {
