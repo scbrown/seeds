@@ -997,6 +997,43 @@ fn dispatch(cli: &Cli, cfg: &Resolved, ctx: &Ctx, b: &mut dyn Backend) -> Result
                 warnings,
             ))
         }
+        Command::Delete(a) => {
+            let r = engine::delete(b, ctx, &a.ids, &a.reason, a.cascade, a.force, a.dry_run)?;
+            let value = if r.preview {
+                serde_json::json!({"preview": true, "would_delete": r.deleted,
+                                   "cascade_delete": r.cascade,
+                                   "blocked_dependents": r.blocked_dependents,
+                                   "orphaned_issues": r.orphaned})
+            } else {
+                serde_json::json!({"deleted": r.deleted, "deleted_count": r.deleted.len(),
+                                   "dependencies_removed": 0, "labels_removed": 0,
+                                   "events_removed": 0, "references_updated": 0,
+                                   "orphaned_issues": r.orphaned, "tx": r.tx})
+            };
+            let mut warnings = vec![];
+            let text = if r.preview {
+                if !a.dry_run {
+                    warnings.push(format!(
+                        "nothing deleted: {} has dependents ({}); pass --cascade to delete them \
+                         too or --force to leave them pointing at a tombstone",
+                        r.deleted.join(", "),
+                        r.blocked_dependents.join(", ")
+                    ));
+                }
+                format!(
+                    "would delete {}{}",
+                    r.deleted.join(", "),
+                    if r.cascade.is_empty() {
+                        String::new()
+                    } else {
+                        format!(" (--cascade would also delete {})", r.cascade.join(", "))
+                    }
+                )
+            } else {
+                format!("deleted {}{}", r.deleted.join(", "), tx_note(r.tx))
+            };
+            Ok(ok(json, value, text, warnings))
+        }
         Command::Reopen(a) => {
             let r = engine::reopen(b, ctx, &a.ids, a.reason.as_deref())?;
             Ok(transitions(json, "reopened", "reopened", r))

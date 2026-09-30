@@ -211,7 +211,7 @@ pub fn ready_query(graph_iri: &str) -> String {
          PREFIX seeds: <{SEEDS}>\n\
          SELECT ?id WHERE {{ GRAPH <{graph_iri}> {{\n\
          \x20 ?item a aegis:WorkItem ; aegis:identifier ?id ; seeds:status \"open\" .\n\
-         \x20 FILTER NOT EXISTS {{ ?item aegis:blockedOn ?blocker . ?blocker seeds:status ?bs . FILTER(?bs != \"closed\") }}\n\
+         \x20 FILTER NOT EXISTS {{ ?item aegis:blockedOn ?blocker . ?blocker seeds:status ?bs . FILTER(?bs != \"closed\" && ?bs != \"tombstone\") }}\n\
          }} }}"
     )
 }

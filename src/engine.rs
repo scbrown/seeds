@@ -366,7 +366,7 @@ pub fn list(b: &dyn Backend, req: &ListReq, at: Option<u64>) -> Result<Page> {
     let mut seeds: Vec<Seed> = snap
         .seeds
         .values()
-        .filter(|s| req.all || f.status.is_some() || s.status != "closed")
+        .filter(|s| f.status.is_some() || (!s.is_tombstone() && (req.all || s.status != "closed")))
         .filter(|s| f.matches(s))
         .cloned()
         .collect();
@@ -434,7 +434,11 @@ pub fn search(b: &dyn Backend, req: &SearchReq, at: Option<u64>) -> Result<Searc
     };
     let show_closed = req.all || f.status.is_some();
     let (mut seeds, mut hidden_closed) = (Vec::new(), 0);
-    for s in snap.seeds.values().filter(|s| f.matches(s) && hit(s)) {
+    for s in snap
+        .seeds
+        .values()
+        .filter(|s| f.matches(s) && hit(s) && (f.status.is_some() || !s.is_tombstone()))
+    {
         if s.status == "closed" && !show_closed {
             hidden_closed += 1;
         } else {
@@ -474,7 +478,7 @@ pub fn stale(
         .values()
         .filter(|s| {
             if statuses.is_empty() {
-                s.status != "closed"
+                s.status != "closed" && !s.is_tombstone()
             } else {
                 statuses.contains(&s.status)
             }
@@ -514,6 +518,8 @@ pub struct Stats {
     pub blocked: usize,
     /// Deferred.
     pub deferred: usize,
+    /// Deleted (tombstoned); not counted in `total` or any other count.
+    pub tombstones: usize,
     /// What `sd ready` would list now.
     pub ready: usize,
     /// Open epics whose children are all closed.
@@ -527,7 +533,8 @@ pub struct Stats {
 /// `sd stats`, as of `at`. Breakdowns count every seed, closed included (br).
 pub fn stats(b: &dyn Backend, ctx: &Ctx, req: StatsReq, at: Option<u64>) -> Result<Stats> {
     let snap = b.snapshot(at)?;
-    let seeds: Vec<&Seed> = snap.seeds.values().collect();
+    let tombstones = snap.seeds.values().filter(|s| s.is_tombstone()).count();
+    let seeds: Vec<&Seed> = snap.seeds.values().filter(|s| !s.is_tombstone()).collect();
     let count = |st: &str| seeds.iter().filter(|s| s.status == st).count();
     let lead: Vec<f64> = seeds
         .iter()
@@ -589,6 +596,7 @@ pub fn stats(b: &dyn Backend, ctx: &Ctx, req: StatsReq, at: Option<u64>) -> Resu
         closed: count("closed"),
         blocked: count("blocked"),
         deferred: count("deferred"),
+        tombstones,
         ready: ready(b, ctx, &ReadyReq::default(), at)?.total,
         epics_eligible_for_closure: eligible,
         average_lead_time_hours: if lead.is_empty() {
@@ -624,12 +632,12 @@ pub fn epic_status(
     for e in snap
         .seeds
         .values()
-        .filter(|e| e.issue_type == "epic" && e.status != "closed")
+        .filter(|e| e.issue_type == "epic" && e.status != "closed" && !e.is_tombstone())
     {
         let kids: Vec<&Seed> = snap
             .seeds
             .values()
-            .filter(|c| c.parent.as_deref() == Some(e.id.as_str()))
+            .filter(|c| c.parent.as_deref() == Some(e.id.as_str()) && !c.is_tombstone())
             .collect();
         let closed = kids.iter().filter(|c| c.status == "closed").count();
         let eligible = !kids.is_empty() && closed == kids.len();
@@ -712,7 +720,11 @@ pub fn blocked(b: &dyn Backend, req: &BlockedReq, at: Option<u64>) -> Result<Blo
     let snap = b.snapshot(at)?;
     let mut blocked_by = BTreeMap::new();
     let mut seeds: Vec<Seed> = Vec::new();
-    for s in snap.seeds.values().filter(|s| s.status != "closed") {
+    for s in snap
+        .seeds
+        .values()
+        .filter(|s| s.status != "closed" && !s.is_tombstone())
+    {
         let blockers = snap.open_blockers(s);
         if blockers.is_empty()
             || !(types.is_empty() || types.contains(&s.issue_type))
@@ -805,7 +817,10 @@ pub fn count(b: &dyn Backend, req: &CountReq, at: Option<u64>) -> Result<Count> 
     let seeds: Vec<&Seed> = snap
         .seeds
         .values()
-        .filter(|s| req.include_closed || f.status.is_some() || s.status != "closed")
+        .filter(|s| {
+            f.status.is_some()
+                || (!s.is_tombstone() && (req.include_closed || s.status != "closed"))
+        })
         .filter(|s| f.matches(s))
         .collect();
     let groups = match req.by.as_deref() {
@@ -881,6 +896,11 @@ pub fn update(
     req: &UpdateReq,
 ) -> Result<(Vec<Seed>, u64)> {
     let status = req.status.as_deref().map(model::parse_status).transpose()?;
+    if status.as_deref() == Some(model::TOMBSTONE) {
+        return Err(SdError::usage(
+            "use sd delete to delete a seed; update cannot set the tombstone status",
+        ));
+    }
     let priority = req
         .priority
         .as_deref()
@@ -1199,6 +1219,7 @@ pub fn reopen(
         "seeds:reopen",
         |s| match s.status.as_str() {
             "closed" => None,
+            model::TOMBSTONE => Some("deleted (not reopenable)".into()),
             "open" => Some("already open".into()),
             other => Some(format!("not closed (status: {other})")),
         },
@@ -1222,7 +1243,11 @@ pub fn defer(
         ctx,
         ids,
         "seeds:defer",
-        |s| (s.status == "closed").then(|| "cannot defer closed issue".to_string()),
+        |s| match s.status.as_str() {
+            "closed" => Some("cannot defer closed issue".to_string()),
+            model::TOMBSTONE => Some("cannot defer a deleted seed".to_string()),
+            _ => None,
+        },
         |s| {
             s.status = "deferred".into();
             s.defer_until = until.clone();
@@ -1342,6 +1367,144 @@ fn format_instant(t: i64) -> String {
         secs % 3600 / 60,
         secs % 60
     )
+}
+
+// ---------------------------------------------------------------- delete
+
+/// What `sd delete` did, or would do (br's shape).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct DeleteReport {
+    /// Nothing was written: a preview (--dry-run, or dependents without
+    /// --cascade/--force).
+    pub preview: bool,
+    /// The seeds deleted, or that would be.
+    pub deleted: Vec<String>,
+    /// Dependents that --cascade deletes too.
+    pub cascade: Vec<String>,
+    /// Dependents that stop a plain delete.
+    pub blocked_dependents: Vec<String>,
+    /// Dependents left pointing at a tombstone (--force). A tombstone never
+    /// blocks, so they are not stuck.
+    pub orphaned: Vec<String>,
+    /// The transaction (0 for a preview).
+    pub tx: u64,
+}
+
+/// `sd delete`: tombstone seeds (br's model). A seed with live dependents is
+/// only previewed unless `cascade` (tombstone them too) or `force` (orphan
+/// them). One transaction; each tombstone gets a `Deleted: <reason>` comment.
+/// Not a close: no outcome, no closed_at.
+pub fn delete(
+    b: &mut dyn Backend,
+    ctx: &Ctx,
+    ids: &[String],
+    reason: &str,
+    cascade: bool,
+    force: bool,
+    dry_run: bool,
+) -> Result<DeleteReport> {
+    let ids = unique(ids);
+    if ids.is_empty() {
+        return Err(SdError::usage("at least one seed id is required"));
+    }
+    let snap = b.snapshot(None)?;
+    for id in &ids {
+        snap.get(id)?;
+    }
+    let live_dependents = |id: &str| -> Vec<String> {
+        snap.dependents(id)
+            .into_iter()
+            .map(|(d, _)| d)
+            .filter(|d| snap.seeds.get(d).is_some_and(|s| !s.is_tombstone()))
+            .collect()
+    };
+    // The cascade closure: every live seed that (transitively) depends on a target.
+    let mut cascade_ids: Vec<String> = Vec::new();
+    let mut queue: Vec<String> = ids.clone();
+    while let Some(id) = queue.pop() {
+        for d in live_dependents(&id) {
+            if !ids.contains(&d) && !cascade_ids.contains(&d) {
+                cascade_ids.push(d.clone());
+                queue.push(d);
+            }
+        }
+    }
+    let direct: Vec<String> = {
+        let mut v: Vec<String> = ids
+            .iter()
+            .flat_map(|id| live_dependents(id))
+            .filter(|d| !ids.contains(d))
+            .collect();
+        v.sort();
+        v.dedup();
+        v
+    };
+    let mut report = DeleteReport {
+        deleted: ids.clone(),
+        cascade: cascade_ids.clone(),
+        blocked_dependents: direct.clone(),
+        ..DeleteReport::default()
+    };
+    if dry_run || (!direct.is_empty() && !cascade && !force) {
+        report.preview = true;
+        return Ok(report);
+    }
+    let targets: Vec<String> = if cascade {
+        ids.iter().chain(cascade_ids.iter()).cloned().collect()
+    } else {
+        ids.clone()
+    };
+    report.blocked_dependents.clear();
+    report.cascade = if cascade { cascade_ids } else { Vec::new() };
+    report.orphaned = if cascade { Vec::new() } else { direct };
+    report.deleted = targets.clone();
+    let (mut writes, mut comments) = (Vec::new(), Vec::new());
+    let reason = reason.trim();
+    for id in &targets {
+        let before = snap.get(id)?;
+        if before.is_tombstone() {
+            continue;
+        }
+        let mut s = before.clone();
+        s.status = model::TOMBSTONE.into();
+        s.updated_at = ctx.now.clone();
+        s.revision = before.revision + 1;
+        writes.push(SeedWrite {
+            seed: s,
+            expected_revision: Some(before.revision),
+        });
+        let index = snap
+            .comments_on(id)
+            .iter()
+            .map(|c| c.index)
+            .max()
+            .unwrap_or(0)
+            + 1;
+        comments.push(Comment {
+            seed: id.clone(),
+            index,
+            author: ctx.actor.clone(),
+            text: format!(
+                "Deleted: {}",
+                if reason.is_empty() { "delete" } else { reason }
+            ),
+            created_at: ctx.now.clone(),
+        });
+    }
+    report.tx = if writes.is_empty() {
+        snap.tx
+    } else {
+        b.commit(
+            &WriteBatch {
+                seeds: writes,
+                comments,
+                source: "seeds:delete".into(),
+                ..WriteBatch::default()
+            },
+            ctx,
+        )?
+    };
+    Ok(report)
 }
 
 fn claim(snap: &Snapshot, s: &mut Seed, actor: &str) -> Result<()> {
@@ -1538,7 +1701,15 @@ pub fn dep_add(
     }
     let snap = b.snapshot(None)?;
     let before = snap.get(issue)?;
-    snap.get(depends_on)?;
+    let target = snap.get(depends_on)?;
+    for s in [before, target] {
+        if s.is_tombstone() {
+            return Err(SdError::refused(format!(
+                "{} is deleted; a deleted seed cannot gain a dependency",
+                s.id
+            )));
+        }
+    }
     if before.has_dep(depends_on, &dep_type) {
         return Ok(DepChange {
             issue_id: issue.into(),

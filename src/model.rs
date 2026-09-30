@@ -8,7 +8,20 @@ use crate::error::{Result, SdError};
 use crate::vocab::{self, term};
 
 /// Status values a seed can hold.
-pub const STATUSES: &[&str] = &["open", "in_progress", "blocked", "deferred", "closed"];
+pub const STATUSES: &[&str] = &[
+    "open",
+    "in_progress",
+    "blocked",
+    "deferred",
+    "closed",
+    TOMBSTONE,
+];
+
+/// The status `sd delete` sets. A tombstone is kept (so sync propagates the
+/// delete as an ordinary change and `--at` still reads what was there), but it
+/// is hidden from every listing, never blocks, cannot gain a dependency, and is
+/// not a close: it carries no outcome (aegis-w3k75d.8).
+pub const TOMBSTONE: &str = "tombstone";
 /// Types a seed can have (br's set).
 pub const TYPES: &[&str] = &[
     "task", "bug", "feature", "epic", "chore", "docs", "question",
@@ -169,6 +182,11 @@ pub enum Obj {
 pub type Fact = (String, Obj);
 
 impl Seed {
+    /// Whether `sd delete` tombstoned this seed.
+    pub fn is_tombstone(&self) -> bool {
+        self.status == TOMBSTONE
+    }
+
     /// The facts that describe this seed, in a stable order.
     pub fn facts(&self) -> Vec<Fact> {
         let mut f: Vec<Fact> = vec![
@@ -515,7 +533,11 @@ impl Snapshot {
     pub fn open_blockers(&self, seed: &Seed) -> Vec<String> {
         seed.blocked_on
             .iter()
-            .filter(|b| self.seeds.get(*b).is_some_and(|s| s.status != "closed"))
+            .filter(|b| {
+                self.seeds
+                    .get(*b)
+                    .is_some_and(|s| s.status != "closed" && !s.is_tombstone())
+            })
             .cloned()
             .collect()
     }
