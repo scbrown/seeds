@@ -685,3 +685,25 @@ fn init_makes_a_project_and_never_changes_its_id_or_prefix() {
         "x"
     );
 }
+
+#[test]
+fn owner_is_set_changed_cleared_and_survives_a_pendant_round_trip() {
+    let sb = Sandbox::new("owner");
+    let a = sb
+        .ok(&["create", "a", "--owner", "ada@example.org", "--silent"])
+        .trim()
+        .to_string();
+    assert_eq!(sb.json(&["show", &a])[0]["owner"], "ada@example.org");
+    // br's update output carries owner: it is a real field now, not a null key.
+    let up = sb.json(&["update", &a, "--owner", "bo@example.org"]);
+    assert_eq!(up[0]["owner"], "bo@example.org");
+    // The owner travels in the pendant: export here, import into a fresh store.
+    let dir = sb.root.join("pendant");
+    sb.ok(&["export", "--to", dir.to_str().unwrap()]);
+    let other = Sandbox::new("owner-import");
+    other.ok(&["import", dir.to_str().unwrap()]);
+    assert_eq!(other.json(&["show", &a])[0]["owner"], "bo@example.org");
+    // "" clears it.
+    sb.ok(&["update", &a, "--owner", ""]);
+    assert_eq!(sb.json(&["show", &a])[0]["owner"], Value::Null);
+}
