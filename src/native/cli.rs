@@ -137,6 +137,13 @@ pub enum Command {
     Where,
     /// Show the ledger's location, mode and size
     Info,
+    /// sd's machine-readable contract: commands (read or write), global flags,
+    /// exit codes, environment, safety guarantees
+    Capabilities {
+        /// Detail for one command path, e.g. "create" or "comments add"
+        #[arg(long = "command", alias = "for", value_name = "COMMAND_PATH")]
+        command_path: Option<String>,
+    },
     /// JSON Schemas for sd's --json output, generated from the same tables the
     /// contract tests pin
     Schema {
@@ -864,6 +871,7 @@ impl Command {
             | Command::Version(_)
             | Command::Where
             | Command::Schema { .. }
+            | Command::Capabilities { .. }
             | Command::Info
             | Command::Config { .. }
             | Command::Show(_)
@@ -941,6 +949,7 @@ impl Command {
             Command::Where => "where",
             Command::Info => "info",
             Command::Schema { .. } => "schema",
+            Command::Capabilities { .. } => "capabilities",
             Command::Config { command } => match command {
                 ConfigCommand::List => "config list",
                 ConfigCommand::Get { .. } => "config get",
@@ -1048,6 +1057,11 @@ mod tests {
         (&["where"], "where", false),
         (&["info"], "info", false),
         (&["schema", "issue"], "schema", false),
+        (
+            &["capabilities", "--for", "comments add"],
+            "capabilities",
+            false,
+        ),
         (&["config", "list"], "config list", false),
         (&["config", "get", "project.prefix"], "config get", false),
         (&["config", "unset", "x"], "config delete", false),

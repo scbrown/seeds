@@ -28,6 +28,7 @@
 | `comments add`, `comments list` | add | [comments](comments.md) |
 | `version`, `where`, `info` | no | [version, where, info](about.md) |
 | `config list`, `get`, `path` | no | [config](config.md) |
+| `capabilities` | no | [capabilities](capabilities.md) |
 | `schema` | no | [schema](schema.md) |
 | `completions` | no | [completions](completions.md) |
 | `export`, `import`, `sync`, `merge-driver` | import, sync, merge-driver | [export, import, sync](sync.md) |
