@@ -1,17 +1,13 @@
 name: Docs
 
-# Builds the mdBook on every docs change and publishes it to GitHub Pages
-# (https://scbrown.github.io/seeds/) from main. The Pages source must be
-# "GitHub Actions" in the repository settings.
+# Publishes the mdBook to GitHub Pages (https://scbrown.github.io/seeds/) from
+# main. The Pages source must be "GitHub Actions" in the repository settings.
 #
-# The two path lists are duplicated on purpose: GitHub Actions does not
-# support YAML anchors in workflow files. Keep them identical.
+# Pull requests are covered by ci.yml's `book` job, which builds the same book
+# with the same mdBook. This workflow deliberately does not run on
+# pull_request: a deploy job skipped on every PR would read as a conditional
+# skip, and the merge gate refuses those unless they are allow-listed.
 on:
-  pull_request:
-    paths:
-      - 'docs/**'
-      - 'README.md'
-      - '.github/workflows/docs.yml'
   push:
     branches: [main]
     paths:
@@ -49,7 +45,6 @@ jobs:
           done
 
       - uses: actions/upload-pages-artifact@v3
-        if: github.ref == 'refs/heads/main'
         with:
           path: docs/book/book
 
