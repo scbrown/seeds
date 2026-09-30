@@ -19,6 +19,8 @@ sd create "Blocked work" --deps sd-a3f,related:sd-b7c
 | `--parent ID` | parent seed; the new id is `<parent>.<n>` |
 | `--deps` | comma-separated: `ID` (a `blocks` dependency) or `TYPE:ID` |
 | `--workflow-run RUN` | the shuttle run that creates or drives it: a run IRI, or a bare id (becomes `urn:shuttle:run:<id>`); see [Formulas](../formulas.md) |
+| `--step STEP` | the workflow step creating the seed (needs `--workflow-run`). The id is derived from run, step and visit (`<prefix>-w<hash>`), so repeating the create returns the same seed (exit 0, `exists ...`) instead of a duplicate, even when two writers race |
+| `--visit N` | which entry into `--step` this is, from 1 (default 1); a step the run enters again gets a new seed |
 | `--dry-run` | print what would be created, write nothing |
 | `--silent` | print only the new id |
 

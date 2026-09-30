@@ -8,12 +8,14 @@
 | `ready` | no | [ready](ready.md) |
 | `search` | no | [search](search.md) |
 | `stale` | no | [stale](stale.md) |
+| `stats` | no | [stats](stats.md) |
 | `count` | no | [count](count.md) |
 | `update` | yes | [update](update.md) |
 | `close` | yes | [close](close.md) |
 | `reopen`, `defer`, `undefer` | yes | [reopen, defer, undefer](reopen.md) |
 | `blocked` | no | [blocked](blocked.md) |
 | `label add`, `label remove`, `label rename`, `label list`, `label list-all` | add/remove/rename | [label](label.md) |
+| `epic status`, `epic close-eligible` | close-eligible | [epic](epic.md) |
 | `dep add`, `dep remove`, `dep list` | add/remove | [dep](dep.md) |
 | `comments add`, `comments list` | add | [comments](comments.md) |
 | `version`, `where`, `info` | no | [version, where, info](about.md) |

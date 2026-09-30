@@ -14,7 +14,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::backend::{Backend, Ctx, SeedWrite, WriteBatch};
-use crate::error::{Result, SdError};
+use crate::error::{ErrorKind, Result, SdError};
 use crate::ids;
 use crate::model::{self, Comment, Seed, Snapshot};
 use crate::vocab;
@@ -49,6 +49,12 @@ pub struct CreateReq {
     pub deps: Vec<String>,
     /// The shuttle run that creates or drives this seed (an IRI or a bare run id).
     pub workflow_run: Option<String>,
+    /// The workflow step creating this seed. With `workflow_run`, the seed's
+    /// id is derived from (run, step, visit) and the create is idempotent: if
+    /// that seed exists it is returned unchanged (transaction 0).
+    pub step: Option<String>,
+    /// Which entry into `step` this is (1 when absent).
+    pub visit: Option<u32>,
     /// Compute and return the seed without writing it.
     pub dry_run: bool,
 }
@@ -60,12 +66,40 @@ pub fn create(b: &mut dyn Backend, ctx: &Ctx, req: &CreateReq) -> Result<(Seed, 
         return Err(SdError::usage("a seed needs a non-empty title"));
     }
     let snap = b.snapshot(None)?;
-    let id = match &req.parent {
-        Some(p) => {
+    let run = non_empty(req.workflow_run.as_deref()).map(|r| vocab::run_iri(&r));
+    let keyed = match (non_empty(req.step.as_deref()), &run) {
+        (Some(step), Some(run)) => {
+            if req.parent.is_some() {
+                return Err(SdError::usage(
+                    "--step mints the id from the run and step, so it cannot take --parent",
+                ));
+            }
+            let visit = req.visit.unwrap_or(1);
+            if visit == 0 {
+                return Err(SdError::usage("--visit counts from 1"));
+            }
+            Some(ids::keyed(&ctx.prefix, run, &step, visit))
+        }
+        (Some(_), None) => {
+            return Err(SdError::usage("--step needs --workflow-run"));
+        }
+        (None, _) if req.visit.is_some() => {
+            return Err(SdError::usage("--visit needs --step"));
+        }
+        (None, _) => None,
+    };
+    if let Some(id) = &keyed {
+        if let Some(existing) = existing_keyed(&snap, id, run.as_deref())? {
+            return Ok((existing, 0));
+        }
+    }
+    let id = match (&keyed, &req.parent) {
+        (Some(id), _) => id.clone(),
+        (None, Some(p)) => {
             snap.get(p)?;
             ids::child(p, |c| snap.seeds.contains_key(c))
         }
-        None => ids::mint(&ctx.prefix, title, &ctx.now, |c| snap.seeds.contains_key(c)),
+        (None, None) => ids::mint(&ctx.prefix, title, &ctx.now, |c| snap.seeds.contains_key(c)),
     };
     let mut seed = Seed {
         id,
@@ -86,7 +120,7 @@ pub fn create(b: &mut dyn Backend, ctx: &Ctx, req: &CreateReq) -> Result<(Seed, 
         created_by: non_empty(Some(&ctx.actor)),
         updated_at: ctx.now.clone(),
         parent: req.parent.clone(),
-        workflow_run: non_empty(req.workflow_run.as_deref()).map(|r| vocab::run_iri(&r)),
+        workflow_run: run.clone(),
         revision: 1,
         ..Seed::default()
     };
@@ -98,7 +132,7 @@ pub fn create(b: &mut dyn Backend, ctx: &Ctx, req: &CreateReq) -> Result<(Seed, 
     if req.dry_run {
         return Ok((seed, 0));
     }
-    let tx = b.commit(
+    let written = b.commit(
         &WriteBatch {
             seeds: vec![SeedWrite {
                 seed: seed.clone(),
@@ -109,8 +143,38 @@ pub fn create(b: &mut dyn Backend, ctx: &Ctx, req: &CreateReq) -> Result<(Seed, 
             ..WriteBatch::default()
         },
         ctx,
-    )?;
-    Ok((seed, tx))
+    );
+    match (written, &keyed) {
+        (Ok(tx), _) => Ok((seed, tx)),
+        // A keyed create that lost a race: the other writer created the same
+        // seed between our read and our write, and the compare-and-set refused
+        // ours. That is the idempotent outcome, not a failure.
+        (Err(e), Some(id)) if e.kind == ErrorKind::Conflict => {
+            let snap = b.snapshot(None)?;
+            match existing_keyed(&snap, id, run.as_deref())? {
+                Some(existing) => Ok((existing, 0)),
+                None => Err(e),
+            }
+        }
+        (Err(e), _) => Err(e),
+    }
+}
+
+/// The seed a keyed create names, if it already exists. A seed with that id
+/// but a different run is refused rather than returned: it is not the seed
+/// this step asked for.
+fn existing_keyed(snap: &Snapshot, id: &str, run: Option<&str>) -> Result<Option<Seed>> {
+    let Some(existing) = snap.seeds.get(id) else {
+        return Ok(None);
+    };
+    if existing.workflow_run.as_deref() != run {
+        return Err(SdError::refused(format!(
+            "{id} exists but belongs to a different workflow run ({}), so it is not the seed \
+             this step names",
+            existing.workflow_run.as_deref().unwrap_or("none")
+        )));
+    }
+    Ok(Some(existing.clone()))
 }
 
 /// br's `--deps` element: `id` means `blocks`, `type:id` names the type.
@@ -412,6 +476,192 @@ pub fn stale(
         .collect();
     seeds.sort_by(|a, b| (&a.updated_at, &a.id).cmp(&(&b.updated_at, &b.id)));
     Ok(seeds)
+}
+
+/// Which breakdowns `sd stats` adds to its summary.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct StatsReq {
+    /// By issue type.
+    pub by_type: bool,
+    /// By priority (`P0`..`P4`).
+    pub by_priority: bool,
+    /// By assignee (`(unassigned)` for none).
+    pub by_assignee: bool,
+    /// By label (`(no labels)` for none).
+    pub by_label: bool,
+}
+
+/// `sd stats`: br's summary counts and optional breakdowns.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Stats {
+    /// Every seed.
+    pub total: usize,
+    /// Seeds by status.
+    pub open: usize,
+    /// In progress.
+    pub in_progress: usize,
+    /// Closed.
+    pub closed: usize,
+    /// Status `blocked` (br counts the status, not the dependency graph).
+    pub blocked: usize,
+    /// Deferred.
+    pub deferred: usize,
+    /// What `sd ready` would list now.
+    pub ready: usize,
+    /// Open epics whose children are all closed.
+    pub epics_eligible_for_closure: usize,
+    /// Mean hours from creation to close, over closed seeds (0 when none).
+    pub average_lead_time_hours: f64,
+    /// (dimension, [(key, count)]) in br's order: type, priority, assignee, label.
+    pub breakdowns: Vec<(&'static str, Vec<(String, usize)>)>,
+}
+
+/// `sd stats`, as of `at`. Breakdowns count every seed, closed included (br).
+pub fn stats(b: &dyn Backend, ctx: &Ctx, req: StatsReq, at: Option<u64>) -> Result<Stats> {
+    let snap = b.snapshot(at)?;
+    let seeds: Vec<&Seed> = snap.seeds.values().collect();
+    let count = |st: &str| seeds.iter().filter(|s| s.status == st).count();
+    let lead: Vec<f64> = seeds
+        .iter()
+        .filter(|s| s.status == "closed")
+        .filter_map(|s| {
+            let closed = parse_instant(s.closed_at.as_deref()?)?;
+            Some((closed - parse_instant(&s.created_at)?) as f64 / 3600.0)
+        })
+        .collect();
+    let eligible = seeds
+        .iter()
+        .filter(|e| e.issue_type == "epic" && e.status != "closed")
+        .filter(|e| {
+            let children: Vec<&&Seed> = seeds
+                .iter()
+                .filter(|c| c.parent.as_deref() == Some(e.id.as_str()))
+                .collect();
+            !children.is_empty() && children.iter().all(|c| c.status == "closed")
+        })
+        .count();
+    let tally = |keys: &dyn Fn(&Seed) -> Vec<String>| {
+        let mut m: BTreeMap<String, usize> = BTreeMap::new();
+        for s in &seeds {
+            for k in keys(s) {
+                *m.entry(k).or_default() += 1;
+            }
+        }
+        m.into_iter().collect::<Vec<_>>()
+    };
+    let mut breakdowns = Vec::new();
+    if req.by_type {
+        breakdowns.push(("type", tally(&|s| vec![s.issue_type.clone()])));
+    }
+    if req.by_priority {
+        breakdowns.push(("priority", tally(&|s| vec![format!("P{}", s.priority)])));
+    }
+    if req.by_assignee {
+        breakdowns.push((
+            "assignee",
+            tally(&|s| vec![s.assignee.clone().unwrap_or_else(|| "(unassigned)".into())]),
+        ));
+    }
+    if req.by_label {
+        breakdowns.push((
+            "label",
+            tally(&|s| {
+                if s.labels.is_empty() {
+                    vec!["(no labels)".into()]
+                } else {
+                    s.labels.iter().cloned().collect()
+                }
+            }),
+        ));
+    }
+    Ok(Stats {
+        total: seeds.len(),
+        open: count("open"),
+        in_progress: count("in_progress"),
+        closed: count("closed"),
+        blocked: count("blocked"),
+        deferred: count("deferred"),
+        ready: ready(b, ctx, &ReadyReq::default(), at)?.total,
+        epics_eligible_for_closure: eligible,
+        average_lead_time_hours: if lead.is_empty() {
+            0.0
+        } else {
+            lead.iter().sum::<f64>() / lead.len() as f64
+        },
+        breakdowns,
+    })
+}
+
+/// One epic's progress, as `sd epic status` reports it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EpicStatus {
+    /// The epic.
+    pub epic: Seed,
+    /// Its children (seeds whose parent it is).
+    pub total_children: usize,
+    /// How many of them are closed.
+    pub closed_children: usize,
+    /// Every child closed, and at least one child (br).
+    pub eligible_for_close: bool,
+}
+
+/// `sd epic status`: every epic that is not closed, with child progress.
+pub fn epic_status(
+    b: &dyn Backend,
+    eligible_only: bool,
+    at: Option<u64>,
+) -> Result<Vec<EpicStatus>> {
+    let snap = b.snapshot(at)?;
+    let mut out = Vec::new();
+    for e in snap
+        .seeds
+        .values()
+        .filter(|e| e.issue_type == "epic" && e.status != "closed")
+    {
+        let kids: Vec<&Seed> = snap
+            .seeds
+            .values()
+            .filter(|c| c.parent.as_deref() == Some(e.id.as_str()))
+            .collect();
+        let closed = kids.iter().filter(|c| c.status == "closed").count();
+        let eligible = !kids.is_empty() && closed == kids.len();
+        if eligible || !eligible_only {
+            out.push(EpicStatus {
+                epic: e.clone(),
+                total_children: kids.len(),
+                closed_children: closed,
+                eligible_for_close: eligible,
+            });
+        }
+    }
+    Ok(out)
+}
+
+/// `sd epic close-eligible`: close every eligible epic in one transaction with
+/// br's reason. An eligible epic that still has an open blocker of its own is
+/// left open and reported, never force-closed.
+pub fn epic_close_eligible(
+    b: &mut dyn Backend,
+    ctx: &Ctx,
+) -> Result<(Vec<Seed>, Vec<Skipped>, u64)> {
+    let snap = b.snapshot(None)?;
+    let (mut ids, mut skipped) = (Vec::new(), Vec::new());
+    for st in epic_status(b, true, None)? {
+        let blockers = snap.open_blockers(&st.epic);
+        if blockers.is_empty() {
+            ids.push(st.epic.id);
+        } else {
+            skipped.push(Skipped {
+                id: st.epic.id,
+                reason: format!("blocked by {}", blockers.join(", ")),
+            });
+        }
+    }
+    if ids.is_empty() {
+        return Ok((vec![], skipped, snap.tx));
+    }
+    let (closed, tx, _) = close(b, ctx, &ids, Some("All children completed"), false)?;
+    Ok((closed, skipped, tx))
 }
 
 /// `sd blocked`. Repeated types and priorities are alternatives; labels must
@@ -1122,6 +1372,16 @@ fn claim(snap: &Snapshot, s: &mut Seed, actor: &str) -> Result<()> {
 }
 
 fn set_status(s: &mut Seed, status: &str, now: &str, reason: Option<&str>) {
+    set_status_as(s, status, now, reason, None);
+}
+
+fn set_status_as(
+    s: &mut Seed,
+    status: &str,
+    now: &str,
+    reason: Option<&str>,
+    outcome: Option<&str>,
+) {
     if status == "closed" {
         if s.status != "closed" {
             s.closed_at = Some(now.to_string());
@@ -1129,9 +1389,16 @@ fn set_status(s: &mut Seed, status: &str, now: &str, reason: Option<&str>) {
         if let Some(r) = reason {
             s.close_reason = non_empty(Some(r));
         }
+        s.outcome = Some(
+            outcome
+                .map(str::to_string)
+                .or_else(|| s.outcome.clone())
+                .unwrap_or_else(|| "done".into()),
+        );
     } else {
         s.closed_at = None;
         s.close_reason = None;
+        s.outcome = None;
     }
     s.status = status.to_string();
 }
@@ -1145,6 +1412,20 @@ pub fn close(
     reason: Option<&str>,
     force: bool,
 ) -> Result<(Vec<Seed>, u64, Warnings)> {
+    close_as(b, ctx, ids, reason, None, force)
+}
+
+/// [`close`] with an explicit outcome (one of [`model::OUTCOMES`]; `done`
+/// when `None`).
+pub fn close_as(
+    b: &mut dyn Backend,
+    ctx: &Ctx,
+    ids: &[String],
+    reason: Option<&str>,
+    outcome: Option<&str>,
+    force: bool,
+) -> Result<(Vec<Seed>, u64, Warnings)> {
+    let outcome = outcome.map(model::parse_outcome).transpose()?;
     let mut warnings = Vec::new();
     let reason = reason.map(str::trim).filter(|r| !r.is_empty());
     if reason.is_none() {
@@ -1171,7 +1452,7 @@ pub fn close(
             )));
         }
         let mut s = before.clone();
-        set_status(&mut s, "closed", &ctx.now, reason);
+        set_status_as(&mut s, "closed", &ctx.now, reason, outcome.as_deref());
         s.updated_at = ctx.now.clone();
         s.revision = before.revision + 1;
         writes.push(SeedWrite {

@@ -24,6 +24,7 @@ const SEED_KEYS: &[&str] = &[
     "issue_type",
     "labels",
     "notes",
+    "outcome",
     "parent",
     "priority",
     "revision",
