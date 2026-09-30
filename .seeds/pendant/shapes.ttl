@@ -1,0 +1,91 @@
+# --- seeds ---
+# Shapes every seeds write is validated against (native builds; see
+# docs/book/src/storage.md).
+#
+# Two node shapes target the same class, aegis:WorkItem:
+#
+# 1. CamayocWorkItemShape is reproduced from scbrown/camayoc
+#    shapes/core.shapes.ttl (Apache-2.0, Copyright the camayoc authors), so a
+#    seed is a WorkItem camayoc's own gate would accept. The namespace is
+#    camayoc's published vocabulary namespace, not a host.
+# 2. SeedsWorkItemShape adds what a tracker needs that camayoc does not model:
+#    status, priority, type and the compare-and-set revision.
+
+@prefix aegis: <http://aegis.gastown.local/ontology/> .
+@prefix seeds: <https://seeds.local/ontology/> .
+@prefix sh:    <http://www.w3.org/ns/shacl#> .
+@prefix rdfs:  <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix xsd:   <http://www.w3.org/2001/XMLSchema#> .
+
+aegis:CamayocWorkItemShape a sh:NodeShape ;
+    sh:targetClass aegis:WorkItem ;
+    sh:property [
+        sh:path aegis:sourceKind ;
+        sh:minCount 1 ;
+        sh:maxCount 1 ;
+        sh:in ("observed" "declared" "inferred") ;
+        sh:message "camayoc: every WorkItem carries exactly one sourceKind of observed|declared|inferred" ;
+    ] ;
+    sh:property [
+        sh:path rdfs:label ;
+        sh:minCount 1 ;
+        sh:maxCount 1 ;
+        sh:datatype xsd:string ;
+        sh:message "camayoc: a WorkItem needs exactly one rdfs:label" ;
+    ] ;
+    sh:property [
+        sh:path aegis:outcome ;
+        sh:maxCount 1 ;
+        sh:in ("done" "abandoned" "superseded" "failed") ;
+        sh:message "camayoc: outcome, when set, is one of done|abandoned|superseded|failed" ;
+    ] ;
+    sh:property [
+        sh:path aegis:blockedOn ;
+        sh:class aegis:WorkItem ;
+        sh:message "camayoc: blockedOn must point at a WorkItem the graph actually holds" ;
+    ] .
+
+seeds:SeedsWorkItemShape a sh:NodeShape ;
+    sh:targetClass aegis:WorkItem ;
+    sh:property [
+        sh:path aegis:identifier ;
+        sh:minCount 1 ;
+        sh:maxCount 1 ;
+        sh:datatype xsd:string ;
+        sh:message "seeds: a seed has exactly one identifier" ;
+    ] ;
+    sh:property [
+        sh:path seeds:status ;
+        sh:minCount 1 ;
+        sh:maxCount 1 ;
+        sh:in ("open" "in_progress" "blocked" "deferred" "closed") ;
+        sh:message "seeds: status is exactly one of open|in_progress|blocked|deferred|closed" ;
+    ] ;
+    sh:property [
+        sh:path seeds:priority ;
+        sh:minCount 1 ;
+        sh:maxCount 1 ;
+        sh:datatype xsd:integer ;
+        sh:minInclusive 0 ;
+        sh:maxInclusive 4 ;
+        sh:message "seeds: priority is exactly one integer from 0 to 4" ;
+    ] ;
+    sh:property [
+        sh:path seeds:revision ;
+        sh:minCount 1 ;
+        sh:maxCount 1 ;
+        sh:datatype xsd:integer ;
+        sh:message "seeds: a seed carries exactly one revision, the compare-and-set token" ;
+    ] ;
+    sh:property [
+        sh:path seeds:workflowRun ;
+        sh:maxCount 1 ;
+        sh:nodeKind sh:IRI ;
+        sh:message "seeds: a seed is driven by at most one workflow run, named by its IRI" ;
+    ] ;
+    sh:property [
+        sh:path seeds:issueType ;
+        sh:minCount 1 ;
+        sh:maxCount 1 ;
+        sh:message "seeds: a seed has exactly one type" ;
+    ] .

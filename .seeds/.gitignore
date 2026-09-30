@@ -1,0 +1,5 @@
+# written by sd: the working store and its sidecars stay local;
+# the pendant directory is the part to commit.
+seeds.db
+seeds.db-*
+seeds.db.*

@@ -1,0 +1,7 @@
+# written by sd: see https://github.com/scbrown/seeds (docs/book/src/storage-modes.md)
+# export.nt merges field by field once the driver is registered:
+#   git config merge.seeds.driver "sd merge-driver %O %A %B"
+# Without it, git falls back to a line merge and sd validates the result.
+export.nt merge=seeds
+manifest.json merge=union
+manifest.ttl merge=union
