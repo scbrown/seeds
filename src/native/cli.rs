@@ -85,6 +85,12 @@ pub enum Command {
     RobotDocs(MappedArgs),
     /// What a seed unblocks (or, with --dependencies, what it waits on)
     Graph(GraphArgs),
+    /// A seed's transaction history: every version, with the tx that wrote it
+    /// and what changed (quipu's fact history, not br's backup files)
+    History {
+        /// The seed
+        id: String,
+    },
     /// Count seeds (open ones by default)
     Count(CountArgs),
     /// Update fields on one or more seeds
@@ -790,6 +796,7 @@ impl Command {
             | Command::Ready(_)
             | Command::Blocked(_)
             | Command::Stale(_)
+            | Command::History { .. }
             | Command::Graph(_)
             | Command::Stats(_)
             | Command::Query(_)
@@ -812,6 +819,7 @@ impl Command {
             Command::Ready(_) => "ready",
             Command::Blocked(_) => "blocked",
             Command::Stale(_) => "stale",
+            Command::History { .. } => "history",
             Command::Graph(_) => "graph",
             Command::Stats(_) => "stats",
             Command::Q(_) => "q",
@@ -873,6 +881,7 @@ mod tests {
         (&["list", "--status", "open", "--limit", "0"], "list", false),
         (&["ready", "--json", "--limit", "5"], "ready", false),
         (&["count", "--by", "status"], "count", false),
+        (&["history", "s-1"], "history", false),
         (
             &["graph", "s-1", "--dependencies", "--compact"],
             "graph",

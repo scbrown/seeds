@@ -836,6 +836,76 @@ pub fn graph_all(b: &dyn Backend, at: Option<u64>) -> Result<Vec<Graph>> {
     Ok(graphs)
 }
 
+/// One version of a seed in `sd history`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HistoryEntry {
+    /// The transaction that produced this version.
+    pub tx: u64,
+    /// The seed as that transaction left it.
+    pub seed: Seed,
+    /// What changed from the previous version, as `field: old (before) vs new
+    /// (after)`; empty for the first version.
+    pub changes: Vec<String>,
+}
+
+/// The seed's revision as of `tx`, or 0 if it did not exist yet.
+fn revision_at(b: &dyn Backend, id: &str, tx: u64) -> Result<u64> {
+    Ok(b.snapshot(Some(tx))?
+        .seeds
+        .get(id)
+        .map_or(0, |s| s.revision))
+}
+
+/// The first transaction from `lo` at which the seed's revision exceeds
+/// `after` (revisions only grow). Galloping, then binary search, over `--at`
+/// reads: it needs no head transaction, which a quipu server does not report,
+/// because a read as of a tx past the head is the current state.
+fn first_tx_after(b: &dyn Backend, id: &str, after: u64, mut lo: u64) -> Result<u64> {
+    let mut hi = lo.max(1);
+    while revision_at(b, id, hi)? <= after {
+        lo = hi + 1;
+        hi = hi.checked_mul(2).filter(|h| *h < 1 << 48).ok_or_else(|| {
+            SdError::failed(format!("{id}: no version after revision {after} was found"))
+        })?;
+    }
+    while lo < hi {
+        let mid = lo + (hi - lo) / 2;
+        if revision_at(b, id, mid)? > after {
+            hi = mid;
+        } else {
+            lo = mid + 1;
+        }
+    }
+    Ok(lo)
+}
+
+/// `sd history <id>`: every version of one seed, oldest first, with the
+/// transaction that wrote it and what changed. This is the seed's FACT
+/// history in quipu (what `--at` reads), not br's local backup files.
+pub fn history(b: &dyn Backend, id: &str) -> Result<Vec<HistoryEntry>> {
+    let current = b.snapshot(None)?.get(id)?.clone();
+    let mut out: Vec<HistoryEntry> = Vec::new();
+    let (mut after, mut lo) = (0u64, 1u64);
+    while after < current.revision {
+        let tx = first_tx_after(b, id, after, lo)?;
+        let snap = b.snapshot(Some(tx))?;
+        let Some(seed) = snap.seeds.get(id).cloned() else {
+            break;
+        };
+        if seed.revision <= after {
+            break; // never advanced: the head is not readable as a tx
+        }
+        let changes = out
+            .last()
+            .map(|p| crate::sync::diff_fields(&p.seed, &seed, "before", "after"))
+            .unwrap_or_default();
+        after = seed.revision;
+        lo = tx + 1;
+        out.push(HistoryEntry { tx, seed, changes });
+    }
+    Ok(out)
+}
+
 /// `sd blocked`. Repeated types and priorities are alternatives; labels must
 /// all match (br's semantics).
 #[derive(Debug, Clone, Default)]

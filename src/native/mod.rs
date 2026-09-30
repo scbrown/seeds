@@ -1015,6 +1015,39 @@ fn dispatch(cli: &Cli, cfg: &Resolved, ctx: &Ctx, b: &mut dyn Backend) -> Result
             }
             Ok(ok(json, value, lines.join("\n").trim_end().to_string(), vec![]))
         }
+        Command::History { id } => {
+            if at.is_some() {
+                return Err(SdError::usage("history lists every version; it takes no --at"));
+            }
+            let entries = engine::history(b, id)?;
+            // wu's triage ruling: history NAMES its meaning, because br's verb of
+            // the same name manages local backup files.
+            let meaning = "transaction history: every version of the seed in quipu, \
+                           with the tx that wrote it (read any one with --at <tx>); \
+                           not br's local backup files";
+            let value = serde_json::json!({
+                "meaning": meaning,
+                "id": id,
+                "versions": entries.iter().map(|e| {
+                    let mut o = e.seed.to_json();
+                    o["tx"] = serde_json::json!(e.tx);
+                    o["changes"] = serde_json::json!(e.changes);
+                    o
+                }).collect::<Vec<_>>(),
+            });
+            let mut lines = vec![format!("{id}: {meaning}")];
+            for e in &entries {
+                lines.push(format!(
+                    "tx {}  revision {}  {}  {}",
+                    e.tx, e.seed.revision, e.seed.updated_at, e.seed.status
+                ));
+                if e.changes.is_empty() && e.seed.revision == 1 {
+                    lines.push("  created".into());
+                }
+                lines.extend(e.changes.iter().map(|c| format!("  {c}")));
+            }
+            Ok(ok(json, value, lines.join("\n"), vec![]))
+        }
         Command::Stale(a) => {
             let seeds = engine::stale(b, ctx, a.days, &a.status, at)?;
             let text = if seeds.is_empty() {

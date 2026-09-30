@@ -750,3 +750,21 @@ fn a_mapped_verb_honours_a_trailing_json_flag() {
     let j: Value = serde_json::from_slice(&o.stdout).unwrap();
     assert_eq!(j["error"]["code"], "ELSEWHERE");
 }
+
+#[test]
+fn history_names_its_meaning_in_text_and_json() {
+    // wu's triage ruling: br's `history` manages backup files; sd's must say
+    // that it means something else.
+    let sb = Sandbox::new("history");
+    let id = sb.ok(&["create", "x", "--silent"]).trim().to_string();
+    sb.ok(&["update", &id, "--priority", "0"]);
+    let text = sb.ok(&["history", &id]);
+    assert!(text.contains("transaction history") && text.contains("not br's local backup files"));
+    let j = sb.json(&["history", &id]);
+    assert_eq!(j["versions"].as_array().unwrap().len(), 2);
+    assert!(j["versions"][1]["changes"][0]
+        .as_str()
+        .unwrap()
+        .starts_with("priority:"));
+    assert_eq!(code(&sb.run(&["history", &id, "--at", "1"])), 2);
+}
