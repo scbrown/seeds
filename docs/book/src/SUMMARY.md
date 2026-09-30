@@ -13,6 +13,7 @@
   - [Pinning: `--at <tx>`](pinning.md)
   - [Sharing a ledger as a qpack](qpack-sharing.md)
 - [The verbs](verbs/README.md)
+  - [init](verbs/init.md)
   - [create](verbs/create.md)
   - [show](verbs/show.md)
   - [list](verbs/list.md)

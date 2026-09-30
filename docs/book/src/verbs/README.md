@@ -2,6 +2,7 @@
 
 | verb | writes | page |
 |---|---|---|
+| `init` | yes (files) | [init](init.md) |
 | `create` | yes | [create](create.md) |
 | `show` | no | [show](show.md) |
 | `list` | no | [list](list.md) |

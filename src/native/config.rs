@@ -568,6 +568,117 @@ pub fn project_graph(cfg: &Resolved, create: bool) -> Result<(Option<String>, Op
 
 /// Ten base36 characters from the clock, the process and the hasher's
 /// per-process random keys: unique enough to name a project.
+/// What `sd init` did in one directory.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InitReport {
+    /// The `.seeds/` directory.
+    pub dir: PathBuf,
+    /// The prefix the project uses.
+    pub prefix: String,
+    /// The project id (new, or the one already there).
+    pub project_id: String,
+    /// Files written, relative to `dir`.
+    pub created: Vec<String>,
+    /// Files that were already there and were left untouched.
+    pub kept: Vec<String>,
+}
+
+/// `sd init`: make `<cwd>/.seeds/` a project: `config.toml` (with the prefix),
+/// `project-id` and `.gitignore`.
+///
+/// The graph a project writes to is derived from its prefix AND its id, so
+/// changing either orphans every seed already written. So an initialized
+/// project is refused, and `force` only restores missing files: it never
+/// replaces the id or changes the prefix.
+pub fn init_project(
+    cwd: &Path,
+    prefix: Option<&str>,
+    default_prefix: &str,
+    force: bool,
+) -> Result<InitReport> {
+    let dir = cwd.join(PROJECT_DIR);
+    let (config, id_file) = (dir.join(CONFIG_FILE), dir.join("project-id"));
+    let existing_id = std::fs::read_to_string(&id_file)
+        .ok()
+        .map(|s| s.trim().to_string());
+    if existing_id.is_some() && !force {
+        return Err(SdError::conflict(format!(
+            "{} is already a seeds project (project id in {}); nothing was written. \
+             --force restores missing files but never changes the id or prefix",
+            dir.display(),
+            id_file.display()
+        )));
+    }
+    let configured = std::fs::read_to_string(&config)
+        .ok()
+        .map(|t| {
+            toml::from_str::<FileConfig>(&t)
+                .map_err(|e| config_error(format!("{}: {e}", config.display())))
+        })
+        .transpose()?
+        .map(|c| c.project.prefix);
+    let prefix = match (prefix, &configured) {
+        (Some(p), Some(Some(c))) if p != c => {
+            return Err(SdError::refused(format!(
+                "{} already sets prefix {c:?}; changing it to {p:?} would move this project to a \
+                 different ledger. Nothing was written",
+                config.display()
+            )))
+        }
+        (Some(p), _) => p.to_string(),
+        (None, Some(Some(c))) => c.clone(),
+        (None, _) => default_prefix.to_string(),
+    };
+    if prefix.is_empty()
+        || !prefix
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+    {
+        return Err(SdError::usage(format!(
+            "id prefix {prefix:?} must be non-empty ASCII letters, digits, '-' or '_'"
+        )));
+    }
+    std::fs::create_dir_all(&dir)
+        .map_err(|e| config_error(format!("cannot create {}: {e}", dir.display())))?;
+    let (mut created, mut kept) = (Vec::new(), Vec::new());
+    let write = |path: &Path, text: String| {
+        std::fs::write(path, text)
+            .map_err(|e| config_error(format!("cannot write {}: {e}", path.display())))
+    };
+    if config.exists() {
+        kept.push(CONFIG_FILE.to_string());
+    } else {
+        write(&config, format!("[project]\nprefix = {prefix:?}\n"))?;
+        created.push(CONFIG_FILE.to_string());
+    }
+    let project_id = match existing_id {
+        Some(id) => {
+            kept.push("project-id".into());
+            id
+        }
+        None => {
+            let id = new_project_id();
+            write(&id_file, format!("{id}\n"))?;
+            created.push("project-id".into());
+            id
+        }
+    };
+    let gitignore = dir.join(".gitignore");
+    if gitignore.exists() {
+        kept.push(".gitignore".into());
+    } else {
+        crate::native::store::ensure_gitignore(&dir.join(DEFAULT_STORE_FILE));
+        created.push(".gitignore".into());
+    }
+    Ok(InitReport {
+        dir,
+        prefix,
+        project_id,
+        created,
+        kept,
+    })
+}
+
 fn new_project_id() -> String {
     use std::collections::hash_map::RandomState;
     use std::hash::{BuildHasher, Hasher};
