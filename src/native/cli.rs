@@ -100,6 +100,12 @@ pub enum Command {
         #[command(subcommand)]
         command: LabelCommand,
     },
+    /// Print the version (and how this build was made)
+    Version(VersionArgs),
+    /// Show where the ledger lives: store file or server, graph, prefix, pendant
+    Where,
+    /// Show the ledger's location, mode and size
+    Info,
     /// Write the ledger as a pendant (quipu's share files) to a directory
     Export(ExportArgs),
     /// Read a pendant into the configured store; conflicts are reported, never
@@ -122,6 +128,14 @@ pub struct MergeDriverArgs {
     pub ours: String,
     /// Theirs (git's %B)
     pub theirs: String,
+}
+
+/// `sd version`.
+#[derive(Debug, Args)]
+pub struct VersionArgs {
+    /// Print only the version number (for scripts)
+    #[arg(short, long)]
+    pub short: bool,
 }
 
 /// `sd export`.
@@ -621,6 +635,9 @@ impl Command {
             ),
             Command::Import(_) | Command::Sync(_) | Command::MergeDriver(_) => true,
             Command::Export(_)
+            | Command::Version(_)
+            | Command::Where
+            | Command::Info
             | Command::Show(_)
             | Command::List(_)
             | Command::Ready(_)
@@ -669,6 +686,9 @@ impl Command {
                 LabelCommand::ListAll => "label list-all",
                 LabelCommand::Rename { .. } => "label rename",
             },
+            Command::Version(_) => "version",
+            Command::Where => "where",
+            Command::Info => "info",
             Command::Export(_) => "export",
             Command::Import(_) => "import",
             Command::Sync(_) => "sync",
@@ -743,6 +763,9 @@ mod tests {
         (&["label", "list-all"], "label list-all", false),
         (&["label", "rename", "a", "b"], "label rename", true),
         (&["export", "--to", "p"], "export", false),
+        (&["version", "--short"], "version", false),
+        (&["where"], "where", false),
+        (&["info"], "info", false),
         (&["import", "p", "--prefer", "store"], "import", true),
         (&["sync"], "sync", true),
         (&["merge-driver", "o", "a", "b"], "merge-driver", true),

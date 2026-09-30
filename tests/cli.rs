@@ -609,3 +609,30 @@ fn every_write_reports_its_tx_and_at_reads_that_state_back() {
     // A dry run writes nothing, so it has no tx.
     assert!(sb.json(&["create", "x", "--dry-run"])["tx"].is_null());
 }
+
+#[test]
+fn version_where_and_info_describe_the_ledger_without_creating_it() {
+    let sb = Sandbox::new("about");
+    let v = sb.json(&["version"]);
+    assert_eq!(v["version"], env!("CARGO_PKG_VERSION"));
+    assert!(
+        v["commit"].is_null(),
+        "not embedded, so null rather than guessed"
+    );
+    assert_eq!(
+        sb.ok(&["version", "--short"]).trim(),
+        env!("CARGO_PKG_VERSION")
+    );
+    // where reads configuration only: no store and no project id appear.
+    let w = sb.json(&["where"]);
+    assert_eq!(w["mode"], "local");
+    assert!(w["database_path"].as_str().unwrap().ends_with("seeds.db"));
+    assert!(!sb.work().join(".seeds/project-id").exists());
+    assert!(!sb.work().join(".seeds/seeds.db").exists());
+    sb.json(&["create", "a"]);
+    let i = sb.json(&["info"]);
+    assert_eq!(i["issue_count"], 1);
+    assert_eq!(i["mode"], "local");
+    assert!(i["tx"].as_u64().unwrap() > 0);
+    assert!(i["db_size"].as_u64().unwrap() > 0);
+}
