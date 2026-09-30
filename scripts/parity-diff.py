@@ -13,7 +13,7 @@ import subprocess
 
 COMMANDS = re.compile(r"^  ([a-z][a-z0-9-]*)\s{2,}", re.M)
 FLAG = re.compile(r"^\s+(?:-[A-Za-z], )?(--[a-z][a-z0-9-]*)", re.M)
-ALIAS = re.compile(r"\[aliases?: ([^\]]+)\]")
+ALIAS = re.compile(r"\[alias(?:es)?: ([^\]]+)\]")
 
 
 def help_text(tool, *path):
@@ -21,12 +21,20 @@ def help_text(tool, *path):
     return out.stdout + out.stderr
 
 
+# sd verbs whose capability lives elsewhere in the stack: they print a pointer
+# and exit 21. They are reported separately and never counted as implemented.
+MAPPED = {"query", "upgrade", "gate", "scheduler", "audit", "robot-docs"}
+
+
 def verbs(tool, *path):
     text = help_text(tool, *path)
     if "Commands:" not in text:
         return set()
     block = text.split("Commands:", 1)[1].split("\n\n", 1)[0]
-    return set(COMMANDS.findall("\n" + block)) - {"help"}
+    found = set(COMMANDS.findall("\n" + block))
+    for group in ALIAS.findall(block):  # visible aliases are real verbs too
+        found |= {a.strip() for a in group.split(",") if a.strip()}
+    return found - {"help"}
 
 
 def flags(tool, *path):
@@ -60,7 +68,7 @@ def main():
     ap.add_argument("--json", action="store_true")
     a = ap.parse_args()
     b, s = verbs(a.br), verbs(a.sd)
-    shared = sorted(b & s)
+    shared = sorted((b & s) - MAPPED)
     gb, gs = flags(a.br), flags(a.sd)
     per_verb = {}
     for verb in shared:
@@ -75,7 +83,9 @@ def main():
                                         "not_applicable": sorted(na),
                                         "shared": len(fb & fs), "br_total": len(fb)}
     gna = gb & set(NOT_APPLICABLE)
-    report = {"br_verbs": len(b), "sd_verbs": len(s), "covered": len(b & s),
+    mapped = sorted((b & s) & MAPPED)
+    report = {"br_verbs": len(b), "sd_verbs": len(s), "covered": len(b & s) - len(mapped),
+              "mapped": mapped,
               "br_only_verbs": sorted(b - s), "sd_only_verbs": sorted(s - b),
               "global_flags": {"br_only": sorted(gb - gs - gna), "sd_only": sorted(gs - gb),
                                "not_applicable": sorted(gna), "shared": sorted(gb & gs)},
@@ -85,7 +95,9 @@ def main():
     if a.json:
         print(json.dumps(report, indent=2, sort_keys=True))
         return
-    print(f"verbs covered: {report['covered']}/{report['br_verbs']} (sd has {report['sd_verbs']})")
+    print(f"verbs covered: {report['covered']}/{report['br_verbs']} implemented "
+          f"(+{len(report['mapped'])} mapped to another tool; sd has {report['sd_verbs']})")
+    print("mapped (pointer, exit 21):", " ".join(report["mapped"]) or "-")
     fp = report["flag_parity"]
     print(f"flag parity on shared verbs: {fp['shared']}/{fp['br_total']} br flags present in sd")
     print("br-only verbs:", " ".join(report["br_only_verbs"]))

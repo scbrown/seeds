@@ -67,7 +67,22 @@ pub enum Command {
     /// List seeds not updated for --days days (default 30), oldest first
     Stale(StaleArgs),
     /// Summary counts (by status, ready, lead time) with optional breakdowns
+    #[command(visible_alias = "status")]
     Stats(StatsArgs),
+    /// Quick capture: create a seed and print only its id
+    Q(QArgs),
+    /// Saved queries live in quipu (stored queries), not in sd
+    Query(MappedArgs),
+    /// sd is installed and upgraded by caboodle
+    Upgrade(MappedArgs),
+    /// Workflow gates live in shuttle
+    Gate(MappedArgs),
+    /// Ranking ready work for a swarm lives in shuttle
+    Scheduler(MappedArgs),
+    /// Provenance lives in quipu: every sd write is a transaction with its actor
+    Audit(MappedArgs),
+    /// The automation docs are the book and `sd <verb> --help`
+    RobotDocs(MappedArgs),
     /// Count seeds (open ones by default)
     Count(CountArgs),
     /// Update fields on one or more seeds
@@ -402,6 +417,38 @@ pub struct StatsArgs {
     pub by_label: bool,
 }
 
+/// `sd q`.
+#[derive(Debug, Args)]
+pub struct QArgs {
+    /// Title words (joined with spaces)
+    #[arg(required = true)]
+    pub title: Vec<String>,
+    /// 0-4 or P0-P4 (default 2)
+    #[arg(short, long)]
+    pub priority: Option<String>,
+    /// task, bug, feature, epic, chore, docs or question (default task)
+    #[arg(short = 't', long = "type")]
+    pub issue_type: Option<String>,
+    /// Labels (repeatable; comma-separated allowed)
+    #[arg(short, long)]
+    pub labels: Vec<String>,
+    /// Description
+    #[arg(short, long, alias = "body")]
+    pub description: Option<String>,
+    /// Parent seed
+    #[arg(long)]
+    pub parent: Option<String>,
+}
+
+/// A br verb whose capability lives elsewhere in the stack: any arguments are
+/// accepted so the pointer is printed instead of a usage error.
+#[derive(Debug, Args)]
+pub struct MappedArgs {
+    /// Ignored
+    #[arg(allow_hyphen_values = true)]
+    pub rest: Vec<String>,
+}
+
 /// `sd count`.
 #[derive(Debug, Args)]
 pub struct CountArgs {
@@ -667,10 +714,29 @@ impl LabelCommand {
     }
 }
 
+impl Cli {
+    /// Whether JSON output was asked for. A mapped verb accepts any arguments
+    /// (so the pointer is printed instead of a usage error), which can swallow
+    /// a trailing `--json`; it still counts.
+    pub fn wants_json(&self) -> bool {
+        self.json
+            || match &self.command {
+                Command::Query(a)
+                | Command::Upgrade(a)
+                | Command::Gate(a)
+                | Command::Scheduler(a)
+                | Command::Audit(a)
+                | Command::RobotDocs(a) => a.rest.iter().any(|r| r == "--json"),
+                _ => false,
+            }
+    }
+}
+
 impl Command {
     /// Whether the verb writes (and so takes the store's write lock).
     pub fn writes(&self) -> bool {
         match self {
+            Command::Q(_) => true,
             Command::Create(_)
             | Command::Update(_)
             | Command::Close(_)
@@ -703,6 +769,12 @@ impl Command {
             | Command::Blocked(_)
             | Command::Stale(_)
             | Command::Stats(_)
+            | Command::Query(_)
+            | Command::Upgrade(_)
+            | Command::Gate(_)
+            | Command::Scheduler(_)
+            | Command::Audit(_)
+            | Command::RobotDocs(_)
             | Command::Search(_)
             | Command::Count(_) => false,
         }
@@ -718,6 +790,13 @@ impl Command {
             Command::Blocked(_) => "blocked",
             Command::Stale(_) => "stale",
             Command::Stats(_) => "stats",
+            Command::Q(_) => "q",
+            Command::Query(_) => "query",
+            Command::Upgrade(_) => "upgrade",
+            Command::Gate(_) => "gate",
+            Command::Scheduler(_) => "scheduler",
+            Command::Audit(_) => "audit",
+            Command::RobotDocs(_) => "robot-docs",
             Command::Search(_) => "search",
             Command::Count(_) => "count",
             Command::Update(_) => "update",
@@ -771,6 +850,10 @@ mod tests {
         (&["ready", "--json", "--limit", "5"], "ready", false),
         (&["count", "--by", "status"], "count", false),
         (&["stats", "--by-type", "--by-label"], "stats", false),
+        (&["status"], "stats", false),
+        (&["q", "a", "quick", "one", "-p", "1"], "q", true),
+        (&["query", "list", "--json"], "query", false),
+        (&["upgrade"], "upgrade", false),
         (
             &["stale", "--days", "7", "--status", "open,in_progress"],
             "stale",
@@ -866,7 +949,7 @@ mod tests {
             let mut with_json: Vec<&str> =
                 args.iter().copied().filter(|a| *a != "--json").collect();
             with_json.push("--json");
-            assert!(parse(&with_json).json);
+            assert!(parse(&with_json).wants_json());
         }
     }
 

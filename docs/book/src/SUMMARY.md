@@ -21,6 +21,7 @@
   - [search](verbs/search.md)
   - [stale](verbs/stale.md)
   - [stats](verbs/stats.md)
+  - [q, status, and verbs that live elsewhere](verbs/q.md)
   - [count](verbs/count.md)
   - [update](verbs/update.md)
   - [close](verbs/close.md)
