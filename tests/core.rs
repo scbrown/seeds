@@ -1493,3 +1493,29 @@ fn epic_status_and_close_eligible_follow_br() {
         [empty]
     );
 }
+
+#[test]
+fn list_pages_count_dependents_of_every_type_as_br_does() {
+    let mut b = backend();
+    let target = mk(&mut b, "target", 1);
+    let blocks = mk(&mut b, "blocks", 2);
+    let related = mk(&mut b, "related", 3);
+    engine::dep_add(&mut b, &ctx(4), &blocks, &target, "blocks").unwrap();
+    engine::dep_add(&mut b, &ctx(5), &related, &target, "related").unwrap();
+    engine::create(
+        &mut b,
+        &ctx(6),
+        &CreateReq {
+            title: "child".into(),
+            parent: Some(target.clone()),
+            ..CreateReq::default()
+        },
+    )
+    .unwrap();
+    let page = engine::list(&b, &ListReq::default(), None).unwrap();
+    assert_eq!(
+        page.dependent_counts[&target], 3,
+        "blocks + related + parent-child"
+    );
+    assert_eq!(page.dependent_counts[&blocks], 0);
+}

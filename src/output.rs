@@ -44,8 +44,13 @@ fn view_json(v: &SeedView) -> Json {
 
 /// `list --json`: br's paged envelope.
 pub fn list_json(p: &Page) -> Json {
+    let issue = |s: &Seed| {
+        let mut o = s.to_json();
+        o["dependent_count"] = json!(p.dependent_counts.get(&s.id).copied().unwrap_or(0));
+        o
+    };
     json!({
-        "issues": p.issues.iter().map(Seed::to_json).collect::<Vec<_>>(),
+        "issues": p.issues.iter().map(issue).collect::<Vec<_>>(),
         "total": p.total,
         "limit": p.limit,
         "offset": 0,
