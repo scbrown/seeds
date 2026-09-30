@@ -28,7 +28,7 @@ required-features = ["native"]
 # core, which builds for wasm32-unknown-unknown with `--no-default-features`
 # (see `just wasm`).
 default = ["native"]
-native = ["dep:clap", "dep:clap_complete", "dep:toml", "dep:ureq", "shacl"]
+native = ["dep:clap", "dep:clap_complete", "dep:toml", "dep:ureq", "dep:ed25519-dalek", "dep:getrandom", "dep:base64", "shacl"]
 # Validate every write against the WorkItem shapes (camayoc's, plus the seeds
 # shape). quipu's SHACL engine is not part of quipu's own wasm32 gate, so the
 # wasm build leaves it out and says so rather than claiming a check it did not
@@ -46,6 +46,11 @@ clap_complete = { version = "4.5", optional = true }
 toml = { version = "0.8", optional = true }
 # The shared-server backend (native only): quipu over HTTP.
 ureq = { version = "2", optional = true }
+# Signed writes to quipu (native only): an Ed25519 key registered once with
+# `quipu attest`, a random nonce per write, base64url for the header.
+ed25519-dalek = { version = "2", optional = true }
+getrandom = { version = "0.2", optional = true }
+base64 = { version = "0.22", optional = true }
 # quipu-ai 0.9 declares `shacl = "^0.3.16"`, but shacl 0.3.24 changed
 # `ShaclProcessor::validate`'s arity and quipu-ai 0.9.1 no longer compiles
 # against it. Pin the version quipu's own lockfile builds with, so an unlocked

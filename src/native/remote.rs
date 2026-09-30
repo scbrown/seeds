@@ -49,6 +49,9 @@ pub struct RemoteBackend {
     base: String,
     graph: String,
     token: Option<String>,
+    /// Signs writes on the paths quipu accepts signed (aegis-bys8d1); those
+    /// then carry no bearer.
+    signer: Option<super::attest::Signer>,
     agent: ureq::Agent,
     graph_registered: bool,
 }
@@ -64,6 +67,32 @@ fn transport(url: &str, e: &ureq::Transport) -> SdError {
 }
 
 fn status_error(what: &str, code: u16, body: &str) -> SdError {
+    if let Some(verdict) = attestation_verdict(code, body) {
+        let hint = match verdict.as_str() {
+            "skew" => {
+                " This machine's clock is more than 5 minutes off the server's; fix the clock."
+            }
+            "unbound" => {
+                " The server has no binding for this key and session: run `sd key show` and have \
+                 your introducer run the `quipu attest register` line it prints."
+            }
+            "revoked" | "expired" => {
+                " This key's binding is no longer valid: `sd key init` a new key and register it."
+            }
+            "replay" => " The server had already seen this request's nonce; nothing was written.",
+            "scope" => {
+                " The key is registered for trusting shares only, not for writing: have your \
+                 introducer run `quipu attest allow-write <session>` on the quipu host."
+            }
+            "badsig" => {
+                " The signature did not verify: the key file does not match the registered key."
+            }
+            _ => "",
+        };
+        return SdError::failed(format!(
+            "quipu {what}: signed write refused ({verdict}).{hint}"
+        ));
+    }
     let hint = if code == 401 || code == 403 {
         " The server wants a bearer token for writes: set SEEDS_QUIPU_TOKEN, or \
          [quipu] token_file in the config."
@@ -74,6 +103,16 @@ fn status_error(what: &str, code: u16, body: &str) -> SdError {
     SdError::failed(format!("quipu {what} failed (HTTP {code}): {body}{hint}"))
 }
 
+/// The verdict of a refused signed write: quipu answers 401 with
+/// `{"reason":"attestation_refused","verdict":...}`.
+fn attestation_verdict(code: u16, body: &str) -> Option<String> {
+    if code != 401 {
+        return None;
+    }
+    let v: Json = serde_json::from_str(body).ok()?;
+    (v["reason"] == "attestation_refused").then(|| v["verdict"].as_str().unwrap_or("?").to_string())
+}
+
 impl RemoteBackend {
     /// Connect to the quipu server at `base` (checked with `GET /health`).
     /// `plain_http_ok` is the user's `allow_plain_http_hosts`: hosts a token
@@ -82,6 +121,7 @@ impl RemoteBackend {
         base: &str,
         graph: &str,
         token: Option<String>,
+        signer: Option<super::attest::Signer>,
         plain_http_ok: &[String],
     ) -> Result<Self> {
         if token.is_some() && !secure_enough(base) && !plain_http_allowed(base, plain_http_ok) {
@@ -102,6 +142,7 @@ impl RemoteBackend {
             base: base.trim_end_matches('/').to_string(),
             graph: graph.to_string(),
             token,
+            signer,
             agent,
             graph_registered: false,
         };
@@ -145,8 +186,19 @@ impl RemoteBackend {
             .set("Accept", "application/sparql-results+json")
             .set("X-Quipu-Client", "seeds");
         if auth {
-            if let Some(t) = &self.token {
-                req = req.set("Authorization", &format!("Bearer {t}"));
+            match &self.signer {
+                // A signed write carries the attestation and never the bearer.
+                Some(s) if super::attest::SIGNED_PATHS.contains(&path) => {
+                    let header = s
+                        .header_now("POST", path, content_type, body.as_bytes())
+                        .map_err(|e| (false, e))?;
+                    req = req.set(super::attest::HEADER, &header);
+                }
+                _ => {
+                    if let Some(t) = &self.token {
+                        req = req.set("Authorization", &format!("Bearer {t}"));
+                    }
+                }
             }
         }
         match req.send_string(body) {
@@ -259,16 +311,72 @@ impl RemoteBackend {
         if self.graph_registered {
             return Ok(());
         }
+        // Create only what is missing. /graphs is an open read, so a client that
+        // signs its writes (no bearer) can still write to graphs that exist;
+        // /graph/create needs whatever write credential the server accepts.
+        let existing = self.graph_iris();
         for g in [self.graph.clone(), provenance_graph(&self.graph)] {
-            self.post(
-                "/graph/create",
-                "application/json",
-                &json!({ "graph": g }).to_string(),
-                true,
-            )?;
+            if existing.as_ref().is_some_and(|e| e.contains(&g)) {
+                continue;
+            }
+            let body = json!({ "graph": g }).to_string();
+            match self.post("/graph/create", "application/json", &body, true) {
+                Ok(_) => {}
+                // A server older than signed /graph/create refuses the signed
+                // request. Creating a graph is idempotent, so retry once with
+                // the bearer when one is configured.
+                Err(_) if self.signer.is_some() && self.token.is_some() => {
+                    self.send_bearer("/graph/create", "application/json", &body)?;
+                }
+                Err(e) => return Err(e),
+            }
         }
         self.graph_registered = true;
         Ok(())
+    }
+
+    /// POST with the bearer even when a signer is configured.
+    fn send_bearer(&self, path: &str, content_type: &str, body: &str) -> Result<String> {
+        let mut req = self
+            .agent
+            .post(&format!("{}{path}", self.base))
+            .set("Content-Type", content_type)
+            .set("X-Quipu-Client", "seeds");
+        if let Some(t) = &self.token {
+            req = req.set("Authorization", &format!("Bearer {t}"));
+        }
+        match req.send_string(body) {
+            Ok(r) => r
+                .into_string()
+                .map_err(|e| SdError::failed(format!("quipu {path}: reading the response: {e}"))),
+            Err(ureq::Error::Transport(t)) => Err(transport(&self.base, &t)),
+            Err(ureq::Error::Status(code, r)) => Err(status_error(
+                path,
+                code,
+                &r.into_string().unwrap_or_default(),
+            )),
+        }
+    }
+
+    /// The server's registered graph IRIs, or `None` if it would not say (an
+    /// older server, or any failure): then every graph is created, as before.
+    fn graph_iris(&self) -> Option<std::collections::BTreeSet<String>> {
+        let text = self
+            .agent
+            .get(&format!("{}/graphs", self.base))
+            .set("X-Quipu-Client", "seeds")
+            .call()
+            .ok()?
+            .into_string()
+            .ok()?;
+        let v: Json = serde_json::from_str(&text).ok()?;
+        Some(
+            v["graphs"]
+                .as_array()?
+                .iter()
+                .filter_map(|g| g["iri"].as_str().map(str::to_string))
+                .collect(),
+        )
     }
 }
 
@@ -611,9 +719,15 @@ mod tests {
         assert!(!secure_enough("http://quipu.example.org"));
         assert!(!secure_enough("http://localhost.evil.example.org"));
         assert!(!secure_enough("http://user@quipu.example.org"));
-        let e = RemoteBackend::connect("http://quipu.example.org", "urn:g", Some("t".into()), &[])
-            .err()
-            .unwrap();
+        let e = RemoteBackend::connect(
+            "http://quipu.example.org",
+            "urn:g",
+            Some("t".into()),
+            None,
+            &[],
+        )
+        .err()
+        .unwrap();
         assert_eq!(e.kind, ErrorKind::Config);
         assert!(
             e.message.contains("allow_plain_http_hosts"),
@@ -660,11 +774,11 @@ mod tests {
         // Port 9 on the loopback-free TEST-NET: the token check runs first, so
         // a refusal is Config and a pass reaches the health check (Unreachable).
         let ok = vec!["192.0.2.1:9".to_string()];
-        let e = RemoteBackend::connect("http://192.0.2.1:9", "urn:g", Some("t".into()), &ok)
+        let e = RemoteBackend::connect("http://192.0.2.1:9", "urn:g", Some("t".into()), None, &ok)
             .err()
             .unwrap();
         assert_ne!(e.kind, ErrorKind::Config, "{}", e.message);
-        let e = RemoteBackend::connect("http://192.0.2.2:9", "urn:g", Some("t".into()), &ok)
+        let e = RemoteBackend::connect("http://192.0.2.2:9", "urn:g", Some("t".into()), None, &ok)
             .err()
             .unwrap();
         assert_eq!(e.kind, ErrorKind::Config);

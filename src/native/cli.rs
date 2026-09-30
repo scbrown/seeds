@@ -145,6 +145,11 @@ pub enum Command {
     Info,
     /// Check the ledger and configuration (read-only; exit 1 if any check fails)
     Doctor,
+    /// The key that signs your writes to a quipu server (no bearer on the wire)
+    Key {
+        #[command(subcommand)]
+        command: KeyCommand,
+    },
     /// sd's machine-readable contract: commands (read or write), global flags,
     /// exit codes, environment, safety guarantees
     Capabilities {
@@ -200,6 +205,27 @@ pub struct CompletionsArgs {
     /// Write `<dir>/<file>` for the shell instead of printing to stdout
     #[arg(short, long, value_name = "DIR")]
     pub output: Option<String>,
+}
+
+/// `sd key ...`.
+#[derive(Debug, Subcommand)]
+pub enum KeyCommand {
+    /// Generate a signing key (owner-only file, never overwritten) and print
+    /// the config lines and the one-time `quipu attest register` command
+    Init {
+        /// The session to register the key under (default seeds-<host>-<user>)
+        #[arg(long)]
+        session: Option<String>,
+        /// Who registers it on the quipu host: your lead or a human, never you
+        /// (required)
+        #[arg(long)]
+        introducer: Option<String>,
+        /// The agent the server records as the writer (default: the session)
+        #[arg(long)]
+        agent: Option<String>,
+    },
+    /// Show the configured key: public key, key_id and the register command
+    Show,
 }
 
 /// `sd config ...`.
@@ -981,6 +1007,7 @@ impl Command {
             | Command::Version(_)
             | Command::Where
             | Command::Doctor
+            | Command::Key { .. }
             | Command::Schema { .. }
             | Command::Capabilities { .. }
             | Command::Info
@@ -1062,6 +1089,10 @@ impl Command {
             Command::Where => "where",
             Command::Info => "info",
             Command::Doctor => "doctor",
+            Command::Key { command } => match command {
+                KeyCommand::Init { .. } => "key init",
+                KeyCommand::Show => "key show",
+            },
             Command::Schema { .. } => "schema",
             Command::Capabilities { .. } => "capabilities",
             Command::Config { command } => match command {
