@@ -117,12 +117,16 @@ signing_introducer = "wu"
   project file needs its host in `trusted_hosts`. The signature does not name
   the server, so a server a cloned project chose could otherwise pass your
   signed write on to yours.
-- `/graph/create` is not signable yet. seeds creates a graph only when the
-  server does not already list it (`GET /graphs`), so a signing-only setup
-  writes to graphs that exist; creating a new one still needs a token.
+- `/graph/create` is signed too. seeds creates a graph only when the server
+  does not already list it (`GET /graphs`). Against a server too old to
+  accept a signed `/graph/create`, seeds retries that one idempotent call
+  with your token, if you have one.
+- The key must be registered **with write granted** (`--allow-write`, or
+  `quipu attest allow-write <session>` later). A key registered only to trust
+  someone's shares is refused with `scope`.
 - A refusal says which check failed: `skew` (fix this machine's clock),
-  `unbound` (the key is not registered: `sd key show`), `revoked`/`expired`,
-  `replay`, `badsig`.
+  `unbound` (the key is not registered: `sd key show`), `scope` (registered
+  without write), `revoked`/`expired`, `replay`, `badsig`.
 
 See [sd key](verbs/key.md).
 

@@ -19,7 +19,7 @@ pub const HEADER: &str = "x-quipu-attestation";
 pub const VERSION: &str = "quipu-write-v1";
 
 /// The paths quipu accepts a signed write on. Anything else still needs a bearer.
-pub const SIGNED_PATHS: [&str; 3] = ["/knot", "/update", "/episode"];
+pub const SIGNED_PATHS: [&str; 4] = ["/knot", "/update", "/episode", "/graph/create"];
 
 /// A registered signing identity: the private key and the binding it was
 /// registered under (`quipu attest register --session S --introducer I`).
@@ -179,7 +179,7 @@ impl Signer {
     pub fn register_command(&self, agent: &str, issued_at: u64, expires_at: u64) -> String {
         format!(
             "quipu attest register --agent {agent} --session {} --public-key {} \
-             --introducer {} --issued-at {issued_at} --expires-at {expires_at}",
+             --introducer {} --issued-at {issued_at} --expires-at {expires_at} --allow-write",
             self.session,
             self.public_key_hex(),
             self.introducer

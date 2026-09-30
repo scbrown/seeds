@@ -80,6 +80,10 @@ fn status_error(what: &str, code: u16, body: &str) -> SdError {
                 " This key's binding is no longer valid: `sd key init` a new key and register it."
             }
             "replay" => " The server had already seen this request's nonce; nothing was written.",
+            "scope" => {
+                " The key is registered for trusting shares only, not for writing: have your \
+                 introducer run `quipu attest allow-write <session>` on the quipu host."
+            }
             "badsig" => {
                 " The signature did not verify: the key file does not match the registered key."
             }
@@ -315,15 +319,43 @@ impl RemoteBackend {
             if existing.as_ref().is_some_and(|e| e.contains(&g)) {
                 continue;
             }
-            self.post(
-                "/graph/create",
-                "application/json",
-                &json!({ "graph": g }).to_string(),
-                true,
-            )?;
+            let body = json!({ "graph": g }).to_string();
+            match self.post("/graph/create", "application/json", &body, true) {
+                Ok(_) => {}
+                // A server older than signed /graph/create refuses the signed
+                // request. Creating a graph is idempotent, so retry once with
+                // the bearer when one is configured.
+                Err(_) if self.signer.is_some() && self.token.is_some() => {
+                    self.send_bearer("/graph/create", "application/json", &body)?;
+                }
+                Err(e) => return Err(e),
+            }
         }
         self.graph_registered = true;
         Ok(())
+    }
+
+    /// POST with the bearer even when a signer is configured.
+    fn send_bearer(&self, path: &str, content_type: &str, body: &str) -> Result<String> {
+        let mut req = self
+            .agent
+            .post(&format!("{}{path}", self.base))
+            .set("Content-Type", content_type)
+            .set("X-Quipu-Client", "seeds");
+        if let Some(t) = &self.token {
+            req = req.set("Authorization", &format!("Bearer {t}"));
+        }
+        match req.send_string(body) {
+            Ok(r) => r
+                .into_string()
+                .map_err(|e| SdError::failed(format!("quipu {path}: reading the response: {e}"))),
+            Err(ureq::Error::Transport(t)) => Err(transport(&self.base, &t)),
+            Err(ureq::Error::Status(code, r)) => Err(status_error(
+                path,
+                code,
+                &r.into_string().unwrap_or_default(),
+            )),
+        }
     }
 
     /// The server's registered graph IRIs, or `None` if it would not say (an

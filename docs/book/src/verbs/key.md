@@ -14,8 +14,9 @@ sd key show
 - writes a new Ed25519 key to `~/.config/seeds/keys/<session>.key`, readable
   by you only, and **never overwrites** an existing key;
 - prints the three `[quipu]` lines to add to your **user** config;
-- prints the one `quipu attest register` command your introducer runs on the
-  quipu host. seeds never registers its own key: a key that vouches for itself
+- prints the one `quipu attest register … --allow-write` command your
+  introducer runs on the quipu host (without `--allow-write` the key could
+  only vouch for shares, and writes are refused with `scope`). seeds never registers its own key: a key that vouches for itself
   proves nothing.
 
 `sd key show` prints the configured key's public key, `key_id` and the same
