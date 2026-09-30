@@ -1,0 +1,83 @@
+[changelog]
+header = """
+# Changelog\n
+All notable changes to this project will be documented in this file.\n
+"""
+body = """
+{%- macro remote_url() -%}
+  https://github.com/scbrown/seeds
+{%- endmacro -%}
+
+{% if version -%}
+    ## [{{ version | trim_start_matches(pat="seeds-ai-") | trim_start_matches(pat="v") }}] - {{ timestamp | date(format="%Y-%m-%d") }}
+{% else -%}
+    ## [Unreleased]
+{% endif -%}
+
+{% for group, commits in commits | group_by(attribute="group") %}
+    ### {{ group | striptags | trim | upper_first }}
+    {% for commit in commits %}
+        - {% if commit.scope %}*({{ commit.scope }})* {% endif %}\
+          {% if commit.breaking %}[**breaking**] {% endif %}\
+          {{ commit.message | upper_first }} \
+          ([{{ commit.id | truncate(length=7, end="") }}]({{ self::remote_url() }}/commit/{{ commit.id }}))\
+    {% endfor %}
+{% endfor %}
+"""
+trim = true
+
+[git]
+# Strip internal issue-tracker IDs from the rendered CHANGELOG. Commit subjects
+# carry an issue ref by team convention — fine for internal git history, findable
+# there — but a public CHANGELOG must not: an outside reader cannot resolve them,
+# and release-plz copies the subject verbatim. These rewrite ONLY the message
+# git-cliff renders; the real commits are untouched, so `git log` keeps the ref.
+# Order matters: the paren-aware rules run first so a co-located "(ID, #NN)" keeps
+# its PR number. Prefixes match the internal trackers; the shape is <prefix>-<id>.
+#
+# THE ID SHAPE IS <prefix>-<id>[.N]... -- the trailing dotted part is a CHILD bead
+# and it is why the published changelog carried residue for weeks (aegis-1rw616).
+# `[a-z0-9]{3,6}` matches `aegis-iv3df7` and stops at the word boundary before the
+# dot, so `[aegis-iv3df7.3]` scrubbed down to a literal `[.3]`. Every rule below
+# therefore ends the id with `(?:\.[0-9]+)*`.
+#
+# SQUARE brackets are the common form in this repo and were not handled at all:
+# subjects end `... [aegis-tpqccc]` or `... [aegis-t4oyjy] [aegis-em5oaz]`, and the
+# bare-ref rule removed the ref while leaving its delimiters, publishing `[]` and
+# `[] []`. The bracket rules mirror the paren ones, and the run rule comes first so
+# a sequence of bracketed refs collapses in one pass rather than leaving gaps.
+commit_preprocessors = [
+    # "(ID, rest)" -> "(rest)"   e.g. (proj-1a2b, #36/#37) -> (#36/#37)
+    { pattern = '\((?:aegis|hq|gassy|qp)-[a-z0-9]{3,6}(?:\.[0-9]+)*,[ \t]*', replace = "(" },
+    # "(rest, ID)" -> "(rest)"
+    { pattern = ',[ \t]*(?:aegis|hq|gassy|qp)-[a-z0-9]{3,6}(?:\.[0-9]+)*\)', replace = ")" },
+    # " (ID)" standalone paren -> removed   e.g. ... shape (proj-1a2b) -> ... shape
+    { pattern = '[ \t]*\((?:aegis|hq|gassy|qp)-[a-z0-9]{3,6}(?:\.[0-9]+)*\)', replace = "" },
+    # a RUN of bracketed refs -> removed   e.g. ... dirs [proj-1a2b] [proj-3c4d]
+    { pattern = '(?:[ \t]*\[(?:aegis|hq|gassy|qp)-[a-z0-9]{3,6}(?:\.[0-9]+)*\])+', replace = "" },
+    # "[ID, rest]" -> "[rest]" and "[rest, ID]" -> "[rest]", mirroring the parens
+    { pattern = '\[(?:aegis|hq|gassy|qp)-[a-z0-9]{3,6}(?:\.[0-9]+)*,[ \t]*', replace = "[" },
+    { pattern = ',[ \t]*(?:aegis|hq|gassy|qp)-[a-z0-9]{3,6}(?:\.[0-9]+)*\]', replace = "]" },
+    # any bare leftover " ID"
+    { pattern = '[ \t]*\b(?:aegis|hq|gassy|qp)-[a-z0-9]{3,6}\b', replace = "" },
+]
+conventional_commits = true
+filter_unconventional = true
+split_commits = false
+protect_breaking_commits = false
+filter_commits = false
+tag_pattern = "seeds-ai-v[0-9].*"
+sort_commits = "oldest"
+
+commit_parsers = [
+    { message = "^feat", group = "Added" },
+    { message = "^fix", group = "Fixed" },
+    { message = "^refactor", group = "Changed" },
+    { message = "^doc", group = "Documentation" },
+    { message = "^test", group = "Testing" },
+    { message = "^chore", group = "Miscellaneous" },
+    { message = "^ci", group = "CI/CD" },
+    { body = ".*security", group = "Security" },
+    { message = "^revert", group = "Reverted" },
+    { message = "^\\.[0-9]", group = "Other" },
+]
