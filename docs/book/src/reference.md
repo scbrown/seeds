@@ -35,7 +35,7 @@ Accepted on every verb.
 | [`comments list <ID>`](verbs/comments.md) | |
 | [`export`](verbs/sync.md#sd-export) | `--to <DIR>` |
 | [`import <DIR>`](verbs/sync.md#sd-import) | `--prefer pendant\|store`, `--replace` |
-| [`sync`](verbs/sync.md#sd-sync) | `--remote <URL>` |
+| [`sync`](verbs/sync.md#sd-sync) | `--remote <URL>`, `--allow-remote-deletes` |
 | [`merge-driver <BASE> <OURS> <THEIRS>`](verbs/sync.md#sd-merge-driver) | |
 
 `create` and `update` also take `--workflow-run <RUN>` ([Formulas](formulas.md)).
@@ -54,10 +54,11 @@ Exit codes are a contract. A code is never reused or renumbered.
 | 5 | refused: the shapes rejected the write, a dependency cycle, closing a seed with open blockers without `--force` |
 | 6 | configuration: contradictory or unreadable config (for example `store` and `url` both set) |
 | 7 | unreachable: the configured quipu server cannot be reached (seeds never falls back to a local store) |
+| 8 | indeterminate: a remote write's response was lost and a read-back does not show it; it may still land. Check the named ids before doing anything; do not simply retry |
 | 10-18 | **retired**: the v0 shell's per-verb "not yet implemented" codes. Never reused. |
 | 20 | not built: reserved for a configured capability that exists in the design but not in this build (no verb returns it today) |
 
 In `--json` mode an error prints `{"error": {"code": "<NAME>", "message":
 "..."}}` on stdout, where `<NAME>` is `FAILED`, `USAGE`, `NOT_FOUND`,
-`CONFLICT`, `REFUSED`, `CONFIG`, `UNREACHABLE` or `NOT_BUILT`. The message
+`CONFLICT`, `REFUSED`, `CONFIG`, `UNREACHABLE`, `INDETERMINATE` or `NOT_BUILT`. The message
 always goes to stderr as well.

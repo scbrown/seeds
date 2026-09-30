@@ -27,6 +27,10 @@ pub enum ErrorKind {
     /// The configured quipu server could not be reached. seeds never falls
     /// back to a local store when this happens.
     Unreachable,
+    /// A write whose outcome is unknown: the server's response was lost and
+    /// a read-back could not confirm the write. It may yet land. Check before
+    /// doing anything else; a blind retry can duplicate it.
+    Indeterminate,
     /// A configured capability exists in the design but is not built yet.
     NotBuilt,
 }
@@ -42,6 +46,7 @@ impl ErrorKind {
             ErrorKind::Refused => 5,
             ErrorKind::Config => 6,
             ErrorKind::Unreachable => 7,
+            ErrorKind::Indeterminate => 8,
             ErrorKind::NotBuilt => 20,
         }
     }
@@ -56,6 +61,7 @@ impl ErrorKind {
             ErrorKind::Refused => "REFUSED",
             ErrorKind::Config => "CONFIG",
             ErrorKind::Unreachable => "UNREACHABLE",
+            ErrorKind::Indeterminate => "INDETERMINATE",
             ErrorKind::NotBuilt => "NOT_BUILT",
         }
     }

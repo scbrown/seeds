@@ -33,7 +33,7 @@ identical one is left alone; one that differs is a **conflict** unless
 With `--prefer pendant`, the pendant's version lands at a revision above both
 sides, so no reader holding the store's old revision can write over it.
 
-**`--json`**: `{status, created, updated, removed, unchanged, comments_added, tx}`.
+**`--json`**: `{status, created, updated, removed, unchanged, comments_added, tx, wrote}`.
 
 ## sd sync
 
@@ -43,10 +43,14 @@ sd sync --remote https://quipu.example.org
 ```
 
 Three-way merge of the local store and the remote against the ledger as of the
-last sync, written to both sides; conflicts are listed and nothing is written.
+last sync with that remote, written to both sides; conflicts are listed and
+nothing is written. Removals (a seed the base had that one side lacks) are
+refused with exit 5 unless `--allow-remote-deletes`.
 See [Mode 3](../storage-modes.md#mode-3-sync).
 
-**`--json`**: `{status, local: {…}, remote: {…}}`, each side shaped like import's.
+**`--json`**: `{status, local: {…}, remote: {…}}`, each side shaped like
+import's; `wrote` says whether that side was written (a quipu server reports no
+transaction id, so `tx` is 0 there).
 
 ## sd merge-driver
 

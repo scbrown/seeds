@@ -98,8 +98,14 @@ pub struct QuipuSection {
     pub store: Option<String>,
     /// A shared quipu server, `http://` or `https://`.
     pub url: Option<String>,
-    /// A file holding the bearer token quipu wants for writes.
+    /// A file holding the bearer token quipu wants for writes. USER-LEVEL
+    /// config only: a project file that sets it is refused, because a cloned
+    /// repository could otherwise send your token to a server of its choosing.
     pub token_file: Option<String>,
+    /// Hosts the token may be sent to when the server URL came from a
+    /// PROJECT file (user-level config only). A URL you set yourself (flag,
+    /// environment, user file) is trusted without this.
+    pub trusted_hosts: Option<Vec<String>>,
 }
 
 /// `[project]`.
@@ -130,8 +136,17 @@ pub struct Resolved {
     pub location_source: String,
     /// The id prefix.
     pub prefix: String,
-    /// The project's named graph IRI.
-    pub graph: String,
+    /// The project's named graph IRI, once known: configured, or derived
+    /// from the project id (see [`project_graph`]).
+    pub graph: Option<String>,
+    /// Where this project's id lives (`<project>/.seeds/project-id`).
+    pub project_id_file: PathBuf,
+    /// Whether the server URL in `location` came from the project file.
+    pub location_from_project: bool,
+    /// Whether `sync_remote` came from the project file.
+    pub sync_remote_from_project: bool,
+    /// Hosts the user allows the token to go to for project-chosen URLs.
+    pub trusted_hosts: Vec<String>,
     /// The repo-local pendant directory, when one is configured (mode 1).
     pub pendant: Option<PathBuf>,
     /// The remote `sd sync` exchanges with (mode 3).
@@ -165,6 +180,8 @@ pub struct Inputs {
     pub env_sync_remote: Option<String>,
     /// `SEEDS_QUIPU_TOKEN`.
     pub env_token: Option<String>,
+    /// `SEEDS_QUIPU_TOKEN_FILE`.
+    pub env_token_file: Option<String>,
     /// `--store`.
     pub flag_store: Option<String>,
     /// `--quipu`.
@@ -197,6 +214,7 @@ impl Inputs {
             env_pendant: var("SEEDS_PENDANT_DIR"),
             env_sync_remote: var("SEEDS_SYNC_REMOTE"),
             env_token: var("SEEDS_QUIPU_TOKEN"),
+            env_token_file: var("SEEDS_QUIPU_TOKEN_FILE"),
             flag_store,
             flag_url,
             flag_graph,
@@ -351,11 +369,25 @@ pub fn resolve(inputs: &Inputs) -> Result<Resolved> {
             "id prefix {prefix:?} must be non-empty ASCII letters, digits, '-' or '_'"
         )));
     }
+    if let Some(p) = &project {
+        if p.quipu.token_file.is_some() || p.quipu.trusted_hosts.is_some() {
+            return Err(config_error(format!(
+                "{} sets [quipu] token_file or trusted_hosts; only your user config \
+                 (~/.config/seeds/config.toml) or SEEDS_QUIPU_TOKEN_FILE may, because a \
+                 cloned repository could otherwise send your token to a server it chose",
+                project_file
+                    .as_ref()
+                    .map_or_else(String::new, |f| f.display().to_string())
+            )));
+        }
+    }
     let graph = inputs
         .flag_graph
         .clone()
-        .or_else(|| pick(&inputs.env_graph, |c| &c.project.graph))
-        .unwrap_or_else(|| vocab::project_graph_iri(&prefix));
+        .or_else(|| pick(&inputs.env_graph, |c| &c.project.graph));
+    if let Some(g) = &graph {
+        check_iri(g)?;
+    }
     // Paths from a file resolve against that file's base; from env, the cwd.
     let user_base = user_file
         .as_ref()
@@ -377,21 +409,169 @@ pub fn resolve(inputs: &Inputs) -> Result<Resolved> {
             })
     };
     let pendant = path_setting(&inputs.env_pendant, |c| &c.pendant.dir);
-    let token_file = path_setting(&None, |c| &c.quipu.token_file);
+    let token_file = inputs
+        .env_token_file
+        .as_ref()
+        .map(|v| expand(v, &inputs.cwd, home))
+        .or_else(|| {
+            user.as_ref()
+                .and_then(|c| c.quipu.token_file.as_ref())
+                .map(|v| expand(v, &user_base, home))
+        });
+    let sync_remote_from_project = inputs.env_sync_remote.is_none()
+        && project.as_ref().is_some_and(|c| c.sync.remote.is_some());
     let sync_remote = match pick(&inputs.env_sync_remote, |c| &c.sync.remote) {
         Some(u) => Some(check_url(&u, "[sync] remote")?),
         None => None,
     };
+    let location_from_project = project_file
+        .as_ref()
+        .is_some_and(|f| location_source == f.display().to_string());
+    let trusted_hosts = user
+        .as_ref()
+        .and_then(|c| c.quipu.trusted_hosts.clone())
+        .unwrap_or_default();
     Ok(Resolved {
         location,
         location_source,
         prefix,
         graph,
+        project_id_file: root.join(PROJECT_DIR).join(PROJECT_ID_FILE),
+        location_from_project,
+        sync_remote_from_project,
+        trusted_hosts,
         pendant,
         sync_remote,
         token: inputs.env_token.clone(),
         token_file,
     })
+}
+
+/// The file holding a project's generated id, committed with the project.
+pub const PROJECT_ID_FILE: &str = "project-id";
+
+/// Refuse a graph name that is not a plain absolute IRI. It is written into
+/// SPARQL between angle brackets, so anything that could close them (or a
+/// string, or a group) is refused rather than escaped.
+pub fn check_iri(iri: &str) -> Result<()> {
+    let scheme_ok = iri.split_once(':').is_some_and(|(s, rest)| {
+        !rest.is_empty()
+            && s.chars().next().is_some_and(|c| c.is_ascii_alphabetic())
+            && s.chars()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.'))
+    });
+    let chars_ok = iri
+        .chars()
+        .all(|c| !c.is_whitespace() && !c.is_control() && !"<>\"{}|\\^`".contains(c));
+    if scheme_ok && chars_ok {
+        Ok(())
+    } else {
+        Err(config_error(format!(
+            "graph {iri:?} is not an absolute IRI (scheme:rest, no spaces or any of <>\"{{}}|\\^`)"
+        )))
+    }
+}
+
+impl Resolved {
+    /// The graph IRI. Call [`project_graph`] first to fill it in.
+    pub fn graph(&self) -> &str {
+        self.graph.as_deref().unwrap_or("")
+    }
+
+    /// Whether the token may be sent to `url`, given where that URL came from.
+    pub fn token_allowed(&self, url: &str, from_project: bool) -> bool {
+        if !from_project {
+            return true;
+        }
+        let host = url
+            .split_once("://")
+            .map(|(_, r)| r.split(['/', '?', '#']).next().unwrap_or_default())
+            .unwrap_or_default()
+            .rsplit('@')
+            .next()
+            .unwrap_or_default()
+            .to_ascii_lowercase();
+        let bare = host.split(':').next().unwrap_or_default().to_string();
+        self.trusted_hosts
+            .iter()
+            .any(|t| t.eq_ignore_ascii_case(&host) || t.eq_ignore_ascii_case(&bare))
+    }
+}
+
+/// The project's graph: the configured one, else
+/// `https://seeds.local/project/<prefix>-<id>`, where `<id>` is read from
+/// `.seeds/project-id`. A project with no id gets one generated when `create`
+/// is true (first write, or first use of a server), so two repositories that
+/// never set a prefix still get separate ledgers on a shared server.
+/// Returns the graph and, when an id was just created, a note saying so.
+pub fn project_graph(cfg: &Resolved, create: bool) -> Result<(Option<String>, Option<String>)> {
+    if let Some(g) = &cfg.graph {
+        return Ok((Some(g.clone()), None));
+    }
+    let derive = |id: &str| vocab::project_graph_iri(&format!("{}-{id}", cfg.prefix));
+    match std::fs::read_to_string(&cfg.project_id_file) {
+        Ok(id) => {
+            let id = id.trim();
+            if id.is_empty() || !id.chars().all(|c| c.is_ascii_alphanumeric()) {
+                return Err(config_error(format!(
+                    "{} does not hold a project id (letters and digits)",
+                    cfg.project_id_file.display()
+                )));
+            }
+            Ok((Some(derive(id)), None))
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            if !create {
+                return Ok((None, None));
+            }
+            let id = new_project_id();
+            if let Some(dir) = cfg.project_id_file.parent() {
+                std::fs::create_dir_all(dir)
+                    .map_err(|e| config_error(format!("cannot create {}: {e}", dir.display())))?;
+            }
+            std::fs::write(&cfg.project_id_file, format!("{id}\n")).map_err(|e| {
+                config_error(format!(
+                    "cannot write {}: {e}",
+                    cfg.project_id_file.display()
+                ))
+            })?;
+            Ok((
+                Some(derive(&id)),
+                Some(format!(
+                    "created project id {id} in {} (commit it: it names this project's ledger)",
+                    cfg.project_id_file.display()
+                )),
+            ))
+        }
+        Err(e) => Err(config_error(format!(
+            "cannot read {}: {e}",
+            cfg.project_id_file.display()
+        ))),
+    }
+}
+
+/// Ten base36 characters from the clock, the process and the hasher's
+/// per-process random keys: unique enough to name a project.
+fn new_project_id() -> String {
+    use std::collections::hash_map::RandomState;
+    use std::hash::{BuildHasher, Hasher};
+    let mut h = RandomState::new().build_hasher();
+    h.write_u128(
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0),
+    );
+    h.write_u32(std::process::id());
+    let mut n = h.finish();
+    let alphabet = b"0123456789abcdefghijklmnopqrstuvwxyz";
+    (0..10)
+        .map(|_| {
+            let c = alphabet[(n % 36) as usize] as char;
+            n /= 36;
+            c
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -446,7 +626,14 @@ mod tests {
         );
         assert_eq!(r.location_source, "default");
         assert_eq!(r.prefix, "sd");
-        assert_eq!(r.graph, "https://seeds.local/project/sd");
+        assert_eq!(
+            r.graph, None,
+            "derived from the project id, created on first use"
+        );
+        assert_eq!(
+            r.project_id_file,
+            sb.root.join("proj/sub/dir/.seeds/project-id")
+        );
     }
 
     #[test]
@@ -526,17 +713,95 @@ mod tests {
     }
 
     #[test]
-    fn graph_follows_flag_then_env_then_file_then_prefix() {
+    fn graph_follows_flag_then_env_then_file_then_the_project_id() {
         let sb = Sandbox::new("graph");
         sb.project_toml("[project]\nprefix = \"abc\"\n");
         let mut i = sb.inputs();
-        assert_eq!(
-            resolve(&i).unwrap().graph,
-            "https://seeds.local/project/abc"
-        );
+        let r = resolve(&i).unwrap();
+        assert_eq!(r.graph, None);
+        // First use creates the id; the graph is derived from prefix + id.
+        let (g, note) = project_graph(&r, true).unwrap();
+        let g = g.unwrap();
+        assert!(g.starts_with("https://seeds.local/project/abc-"), "{g}");
+        assert!(note.unwrap().contains("project-id"));
+        // It is stable: read back, not regenerated.
+        assert_eq!(project_graph(&r, true).unwrap().0.unwrap(), g);
         i.env_graph = Some("urn:g:env".into());
-        assert_eq!(resolve(&i).unwrap().graph, "urn:g:env");
+        assert_eq!(resolve(&i).unwrap().graph.as_deref(), Some("urn:g:env"));
         i.flag_graph = Some("urn:g:flag".into());
-        assert_eq!(resolve(&i).unwrap().graph, "urn:g:flag");
+        assert_eq!(resolve(&i).unwrap().graph.as_deref(), Some("urn:g:flag"));
+    }
+
+    #[test]
+    fn two_projects_with_no_prefix_get_different_graphs() {
+        let a = Sandbox::new("proj-a");
+        let b = Sandbox::new("proj-b");
+        let ga = project_graph(&resolve(&a.inputs()).unwrap(), true)
+            .unwrap()
+            .0
+            .unwrap();
+        let gb = project_graph(&resolve(&b.inputs()).unwrap(), true)
+            .unwrap()
+            .0
+            .unwrap();
+        assert_ne!(ga, gb);
+    }
+
+    #[test]
+    fn a_plain_read_does_not_create_a_project_id() {
+        let sb = Sandbox::new("no-create");
+        let r = resolve(&sb.inputs()).unwrap();
+        assert_eq!(project_graph(&r, false).unwrap(), (None, None));
+        assert!(!r.project_id_file.exists());
+    }
+
+    #[test]
+    fn a_graph_that_could_break_out_of_sparql_is_refused() {
+        let sb = Sandbox::new("graph-inject");
+        for bad in [
+            "https://x> } ; DROP ALL ; { <urn:y",
+            "no-scheme",
+            "urn:has space",
+            "urn:quote\"",
+            "",
+        ] {
+            let mut i = sb.inputs();
+            i.flag_graph = Some(bad.into());
+            assert_eq!(resolve(&i).unwrap_err().kind, ErrorKind::Config, "{bad:?}");
+        }
+        let mut i = sb.inputs();
+        i.flag_graph = Some("https://seeds.local/project/ok-1".into());
+        assert!(resolve(&i).is_ok());
+    }
+
+    #[test]
+    fn a_project_file_may_not_name_a_token_file() {
+        let sb = Sandbox::new("token-project");
+        sb.project_toml(
+            "[quipu]\nurl = \"https://evil.example.org\"\ntoken_file = \"~/.config/seeds/token\"\n",
+        );
+        let e = resolve(&sb.inputs()).unwrap_err();
+        assert_eq!(e.kind, ErrorKind::Config);
+        assert!(e.message.contains("token"), "{}", e.message);
+        let sb = Sandbox::new("trusted-project");
+        sb.project_toml("[quipu]\ntrusted_hosts = [\"evil.example.org\"]\n");
+        assert_eq!(resolve(&sb.inputs()).unwrap_err().kind, ErrorKind::Config);
+    }
+
+    #[test]
+    fn the_user_token_goes_only_to_urls_the_user_chose_or_trusts() {
+        let sb = Sandbox::new("token-user");
+        sb.user_toml("[quipu]\ntoken_file = \"~/tok\"\ntrusted_hosts = [\"quipu.example.org\"]\n");
+        sb.project_toml("[quipu]\nurl = \"https://evil.example.org\"\n");
+        let r = resolve(&sb.inputs()).unwrap();
+        assert_eq!(r.token_file, Some(sb.root.join("home/tok")));
+        assert!(r.location_from_project);
+        assert!(!r.token_allowed("https://evil.example.org", true));
+        assert!(r.token_allowed("https://quipu.example.org:8443/x", true));
+        assert!(r.token_allowed("https://anything.example.org", false));
+        // The same URL chosen by the user (env) is trusted.
+        let mut i = sb.inputs();
+        i.env_url = Some("https://evil.example.org".into());
+        assert!(!resolve(&i).unwrap().location_from_project);
     }
 }

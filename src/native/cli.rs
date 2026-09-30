@@ -125,6 +125,11 @@ pub struct SyncArgs {
     /// The remote to sync with (default: [sync] remote)
     #[arg(long, value_name = "URL")]
     pub remote: Option<String>,
+    /// Apply removals: seeds the last sync with this remote saw that one side
+    /// no longer has. Refused by default, because it usually means the other
+    /// side was reset or is a different store.
+    #[arg(long)]
+    pub allow_remote_deletes: bool,
 }
 
 /// `sd create`.

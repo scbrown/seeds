@@ -54,8 +54,12 @@ pub struct Report {
     pub comments_added: usize,
     /// Disagreements. Non-empty means nothing was written.
     pub conflicts: Vec<Conflict>,
-    /// The target's transaction, when something was written.
+    /// The target's transaction, when something was written and the store
+    /// reports one (a local store does; a quipu server's `/update` does not).
     pub tx: u64,
+    /// Whether a write was committed to the target. Unlike `tx`, this is
+    /// true for every store, so "nothing changed" is checkable everywhere.
+    pub wrote: bool,
 }
 
 /// The error a report with conflicts turns into.
@@ -172,6 +176,7 @@ pub fn import(
     let (batch, mut report) = plan(&target, &merged, "seeds:import");
     if !batch.is_empty() {
         report.tx = b.commit(&batch, ctx)?;
+        report.wrote = true;
     }
     Ok(report)
 }
@@ -602,7 +607,17 @@ pub fn merge3_named(base: &Snapshot, local: &Snapshot, remote: &Snapshot, sides:
         let n = next.entry(c.seed.clone()).or_insert(0);
         *n = (*n).max(c.index);
     }
+    // The same comment can sit under a different number on the other side: a
+    // sync whose remote write landed but whose response was lost already
+    // renumbered and delivered it. Match on what the comment IS (seed,
+    // author, text, time), never on the number alone, or a retry duplicates it.
+    let same = |a: &Comment, b: &Comment| {
+        a.seed == b.seed && a.author == b.author && a.text == b.text && a.created_at == b.created_at
+    };
     for c in &local.comments {
+        if by_key.values().any(|r| same(r, c)) {
+            continue;
+        }
         match by_key.get(&key(c)) {
             None => {
                 by_key.insert(key(c), c.clone());
@@ -633,11 +648,18 @@ pub fn merge3_named(base: &Snapshot, local: &Snapshot, remote: &Snapshot, sides:
 /// compare-and-set on the revisions it read. Nothing is written when there
 /// are conflicts; if the remote write loses a race, the local store is left
 /// untouched and the sync can simply be run again.
+///
+/// **Removals are refused unless `allow_deletes`.** No verb deletes a seed,
+/// so a seed that is in the base and on one side but missing on the other
+/// almost always means the other side is a different, reset or restored
+/// store, not that someone deleted it. Sync names the count and writes
+/// nothing; pass `allow_deletes` (`--allow-remote-deletes`) to apply them.
 pub fn sync(
     base: &Snapshot,
     local: &mut dyn Backend,
     remote: &mut dyn Backend,
     ctx: &Ctx,
+    allow_deletes: bool,
 ) -> Result<(Snapshot, Report, Report)> {
     let l = local.snapshot(None)?;
     let r = remote.snapshot(None)?;
@@ -651,11 +673,25 @@ pub fn sync(
     }
     let (rb, mut rr) = plan(&r, &m.merged, "seeds:sync");
     let (lb, mut lr) = plan(&l, &m.merged, "seeds:sync");
+    if !allow_deletes && (!lr.removed.is_empty() || !rr.removed.is_empty()) {
+        return Err(SdError::refused(format!(
+            "sync would remove {} seed(s) from the local store ({}) and {} from the remote ({}) \
+             because the other side does not have them; nothing was written. That usually \
+             means the remote was reset or is a different store. If the removals are \
+             intended, run again with --allow-remote-deletes.",
+            lr.removed.len(),
+            lr.removed.join(", "),
+            rr.removed.len(),
+            rr.removed.join(", ")
+        )));
+    }
     if !rb.is_empty() {
         rr.tx = remote.commit(&rb, ctx)?;
+        rr.wrote = true;
     }
     if !lb.is_empty() {
         lr.tx = local.commit(&lb, ctx)?;
+        lr.wrote = true;
     }
     Ok((m.merged, lr, rr))
 }

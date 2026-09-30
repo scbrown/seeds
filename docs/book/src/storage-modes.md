@@ -153,6 +153,24 @@ Two things found while building this, which anyone running mode 2 should know:
 A configured server that cannot be reached is exit 7. seeds never falls back to
 a local store, because two stores would then hold two ledgers.
 
+**A lost response is looked into, never retried blindly.** When `/update`
+fails in a way that leaves the outcome open (a dropped connection, a timeout,
+a 5xx), seeds reads the store back. If the write is there, the command
+succeeds and says the response was lost; if not, it exits **8
+(INDETERMINATE)** and names the ids to check, because the write may still
+land and a retried `create` would mint a second seed.
+
+**Provenance.** quipu records every `/update` as the same anonymous
+"sparql-update", so seeds writes its own record of each write (actor, source,
+time, seeds touched) into a side graph, `<project graph>#seeds-provenance`,
+which exports and snapshots never read.
+
+**Tokens.** The bearer goes only where you chose to send it: a token (from
+`SEEDS_QUIPU_TOKEN`, `SEEDS_QUIPU_TOKEN_FILE` or your user config's
+`token_file`; a project file may not name one) is sent to a server URL from a
+project file only if your user config lists its host in `trusted_hosts`, and
+never over plain `http://` except to localhost.
+
 ## Mode 3: sync
 
 ```toml
@@ -163,8 +181,9 @@ remote = "https://quipu.example.org"
 ```
 
 `sd sync` merges the local store and the remote against the ledger as of the
-last sync (kept in `<store>.sync-base.nt`), writes the merge to the remote, then
-locally, then exports the pendant:
+last sync **with that remote and graph** (kept per pair under
+`<store>.sync/`), writes the merge to the remote, then locally, then exports
+the pendant:
 
 - a side that did not change a seed since the base yields to the side that did;
 - a seed both sides changed is merged field by field; labels and dependencies
@@ -173,7 +192,18 @@ locally, then exports the pendant:
   conflict is listed, and nothing is written on either side (exit 4);
 - a seed one side deleted and the other changed is a conflict;
 - comments are append-only: both sides' new comments are kept, and a local one
-  that took the same number as a remote one is renumbered after it.
+  that took the same number as a remote one is renumbered after it. A comment
+  the other side already holds under another number (same author, text and
+  time) is recognised as the same comment, so a sync retried after a lost
+  response never duplicates it;
+- **removals are refused** unless `--allow-remote-deletes`: no verb deletes a
+  seed, so a seed in the base that one side lacks almost always means that
+  side was reset or is a different store. Sync names the count and writes
+  nothing. Syncing a new remote (no base for that pair yet) pushes the local
+  ledger to it and removes nothing.
+
+An unreadable sync base is an error, never an empty base (an empty base would
+bring back seeds deleted since).
 
 The remote write is a compare-and-set on the revisions sync read, so a remote
 change that lands mid-sync fails the sync cleanly (nothing local is written)

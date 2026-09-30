@@ -267,8 +267,10 @@ fn an_unreachable_url_is_an_error_and_never_falls_back_to_local() {
         .unwrap();
     assert_eq!(code(&o), 7, "{}", String::from_utf8_lossy(&o.stderr));
     assert!(String::from_utf8_lossy(&o.stderr).contains("does not fall back"));
+    // The project id may be created (it names the remote graph), but no
+    // local store is: nothing fell back to local.
     assert!(
-        !sb.work().join(".seeds").exists(),
+        !sb.work().join(".seeds/seeds.db").exists(),
         "no local store was created"
     );
 }

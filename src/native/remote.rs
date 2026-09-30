@@ -77,6 +77,15 @@ fn status_error(what: &str, code: u16, body: &str) -> SdError {
 impl RemoteBackend {
     /// Connect to the quipu server at `base` (checked with `GET /health`).
     pub fn connect(base: &str, graph: &str, token: Option<String>) -> Result<Self> {
+        if token.is_some() && !secure_enough(base) {
+            return Err(SdError::new(
+                ErrorKind::Config,
+                format!(
+                    "refusing to send a bearer token to {base} over plain http; use https (or a \
+                     localhost server)"
+                ),
+            ));
+        }
         let agent = ureq::AgentBuilder::new()
             .timeout_connect(Duration::from_secs(5))
             .timeout(Duration::from_secs(120))
@@ -105,6 +114,21 @@ impl RemoteBackend {
     }
 
     fn post(&self, path: &str, content_type: &str, body: &str, auth: bool) -> Result<String> {
+        self.send(path, content_type, body, auth)
+            .map_err(|(_, e)| e)
+    }
+
+    /// POST, and say whether a failure leaves the outcome UNKNOWN: a
+    /// transport error (the request may have reached the server) or a 5xx
+    /// (the server or a proxy failed, possibly after the write). A 4xx is a
+    /// definite refusal.
+    fn send(
+        &self,
+        path: &str,
+        content_type: &str,
+        body: &str,
+        auth: bool,
+    ) -> std::result::Result<String, (bool, SdError)> {
         let url = format!("{}{path}", self.base);
         let mut req = self
             .agent
@@ -118,14 +142,16 @@ impl RemoteBackend {
             }
         }
         match req.send_string(body) {
-            Ok(r) => r
-                .into_string()
-                .map_err(|e| SdError::failed(format!("quipu {path}: reading the response: {e}"))),
-            Err(ureq::Error::Transport(t)) => Err(transport(&self.base, &t)),
-            Err(ureq::Error::Status(code, r)) => Err(status_error(
-                path,
-                code,
-                &r.into_string().unwrap_or_default(),
+            Ok(r) => r.into_string().map_err(|e| {
+                (
+                    true,
+                    SdError::failed(format!("quipu {path}: reading the response: {e}")),
+                )
+            }),
+            Err(ureq::Error::Transport(t)) => Err((true, transport(&self.base, &t))),
+            Err(ureq::Error::Status(code, r)) => Err((
+                code >= 500,
+                status_error(path, code, &r.into_string().unwrap_or_default()),
             )),
         }
     }
@@ -225,14 +251,49 @@ impl RemoteBackend {
         if self.graph_registered {
             return Ok(());
         }
-        self.post(
-            "/graph/create",
-            "application/json",
-            &json!({ "graph": self.graph }).to_string(),
-            true,
-        )?;
+        for g in [self.graph.clone(), provenance_graph(&self.graph)] {
+            self.post(
+                "/graph/create",
+                "application/json",
+                &json!({ "graph": g }).to_string(),
+                true,
+            )?;
+        }
         self.graph_registered = true;
         Ok(())
+    }
+}
+
+/// Whether a bearer may be sent to `url`: https anywhere, http only to this
+/// machine.
+pub fn secure_enough(url: &str) -> bool {
+    let u = url.trim().to_ascii_lowercase();
+    if u.starts_with("https://") {
+        return true;
+    }
+    let Some(rest) = u.strip_prefix("http://") else {
+        return false;
+    };
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or_default();
+    let authority = authority.rsplit('@').next().unwrap_or(authority);
+    let host = if authority.starts_with('[') {
+        authority
+            .split(']')
+            .next()
+            .map(|h| format!("{h}]"))
+            .unwrap_or_default()
+    } else {
+        authority.split(':').next().unwrap_or_default().to_string()
+    };
+    matches!(host.as_str(), "localhost" | "127.0.0.1" | "[::1]")
+}
+
+/// The named graph a project's write provenance goes to (never exported).
+pub fn provenance_graph(graph: &str) -> String {
+    if graph.contains('#') {
+        format!("{graph}-seeds-provenance")
+    } else {
+        format!("{graph}#seeds-provenance")
     }
 }
 
@@ -281,7 +342,7 @@ impl Backend for RemoteBackend {
         Ok(ids)
     }
 
-    fn commit(&mut self, batch: &WriteBatch, _ctx: &Ctx) -> Result<u64> {
+    fn commit(&mut self, batch: &WriteBatch, ctx: &Ctx) -> Result<u64> {
         if batch.is_empty() {
             return Ok(0);
         }
@@ -360,9 +421,45 @@ impl Backend for RemoteBackend {
         if !delete.is_empty() {
             update.push_str(&format!("DELETE {{ GRAPH <{g}> {{ {delete}}} }}\n"));
         }
-        if !insert.is_empty() {
-            update.push_str(&format!("INSERT {{ GRAPH <{g}> {{ {insert}}} }}\n"));
+        // Provenance: quipu's /update records every write as the same
+        // anonymous "sparql-update", so seeds says who and why itself, in a
+        // side graph that exports and snapshots never read.
+        let written: Vec<String> = batch
+            .seeds
+            .iter()
+            .map(|w| w.seed.id.clone())
+            .chain(batch.delete_seeds.iter().map(|(id, _)| id.clone()))
+            .chain(batch.comments.iter().map(|c| c.seed.clone()))
+            .collect();
+        let write_iri = format!(
+            "urn:seeds:write:{}",
+            &crate::pendant::sha256(
+                format!("{}\n{}\n{update}{insert}{delete}", ctx.now, ctx.actor).as_bytes()
+            )[7..31]
+        );
+        let mut prov = format!(
+            "<{write_iri}> <{}> <{}> ; <{}> \"{}\" ; <{}> \"{}\" ; <{}> \"{}\" ",
+            vocab::RDF_TYPE,
+            vocab::seeds("Write"),
+            vocab::seeds("actor"),
+            escape_literal(&ctx.actor),
+            vocab::seeds("source"),
+            escape_literal(&batch.source),
+            vocab::seeds("at"),
+            escape_literal(&ctx.now),
+        );
+        for id in &written {
+            prov.push_str(&format!(
+                "; <{}> <{}> ",
+                vocab::seeds("wrote"),
+                vocab::item_iri(id)
+            ));
         }
+        prov.push('.');
+        update.push_str(&format!(
+            "INSERT {{ GRAPH <{g}> {{ {insert}}} GRAPH <{}> {{ {prov} }} }}\n",
+            provenance_graph(g)
+        ));
         let guard_block = if guards.is_empty() {
             String::new()
         } else {
@@ -372,10 +469,69 @@ impl Backend for RemoteBackend {
             "WHERE {{ {guard_block}{absent}{} }}",
             unions.join(" UNION ")
         ));
-        self.post("/update", "application/sparql-update", &update, true)?;
+        if let Err((ambiguous, e)) =
+            self.send("/update", "application/sparql-update", &update, true)
+        {
+            if !ambiguous {
+                return Err(e);
+            }
+            // The request may have landed. Look before saying anything else,
+            // and never invite a blind retry: a retried create mints a
+            // second seed.
+            return match self.unconfirmed(batch) {
+                Ok(missing) if missing.is_empty() => {
+                    eprintln!(
+                        "sd: the server's response was lost ({}); a read-back shows the write \
+                         landed",
+                        e.message
+                    );
+                    Ok(0)
+                }
+                Ok(missing) => Err(SdError::new(
+                    ErrorKind::Indeterminate,
+                    format!(
+                        "the write's outcome is UNKNOWN: the server's response was lost ({}) and \
+                         a read-back does not yet show it for {}. It may still land. Check with \
+                         `sd show` / `sd comments list` on those ids before doing anything; do \
+                         not simply retry.",
+                        e.message,
+                        missing.join(", ")
+                    ),
+                )),
+                Err(read) => Err(SdError::new(
+                    ErrorKind::Indeterminate,
+                    format!(
+                        "the write's outcome is UNKNOWN: the server's response was lost ({}) and \
+                         the read-back failed too ({}). Check {} before doing anything; do not \
+                         simply retry.",
+                        e.message,
+                        read.message,
+                        written.join(", ")
+                    ),
+                )),
+            };
+        }
 
-        // Read back: /update reports no affected count, so the only proof
-        // that the precondition held is that the store now says what we sent.
+        let missing = self.unconfirmed(batch)?;
+        if !missing.is_empty() {
+            return Err(SdError::conflict(format!(
+                "the remote store does not show this write for {} (another writer changed it \
+                 first, or changed it again right after). Re-read and retry; nothing is assumed \
+                 to have landed.",
+                missing.join(", ")
+            )));
+        }
+        // quipu's /update returns no transaction id, so there is none to
+        // report; callers see that a write happened through `Report::wrote`.
+        Ok(0)
+    }
+}
+
+impl RemoteBackend {
+    /// What of `batch` the server does NOT show (empty when all of it landed).
+    /// /update reports no affected count, so this read-back is the only proof
+    /// that the precondition held.
+    fn unconfirmed(&self, batch: &WriteBatch) -> Result<Vec<String>> {
         let after = Snapshot::from_subjects(&self.facts(None)?);
         let mut missing = Vec::new();
         for w in &batch.seeds {
@@ -393,14 +549,26 @@ impl Backend for RemoteBackend {
                 missing.push(format!("{} comment {}", c.seed, c.index));
             }
         }
-        if !missing.is_empty() {
-            return Err(SdError::conflict(format!(
-                "the remote store does not show this write for {} (another writer changed it \
-                 first, or changed it again right after). Re-read and retry; nothing is assumed \
-                 to have landed.",
-                missing.join(", ")
-            )));
-        }
-        Ok(0)
+        Ok(missing)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_token_is_never_sent_over_plain_http_to_another_host() {
+        assert!(secure_enough("https://quipu.example.org"));
+        assert!(secure_enough("http://localhost:8080"));
+        assert!(secure_enough("http://127.0.0.1:9/x"));
+        assert!(secure_enough("http://[::1]:9"));
+        assert!(!secure_enough("http://quipu.example.org"));
+        assert!(!secure_enough("http://localhost.evil.example.org"));
+        assert!(!secure_enough("http://user@quipu.example.org"));
+        let e = RemoteBackend::connect("http://quipu.example.org", "urn:g", Some("t".into()))
+            .err()
+            .unwrap();
+        assert_eq!(e.kind, ErrorKind::Config);
     }
 }

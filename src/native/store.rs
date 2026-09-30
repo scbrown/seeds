@@ -158,9 +158,54 @@ pub fn marker_path(store: &Path) -> PathBuf {
     sidecar(store, ".pendant")
 }
 
-/// The file holding the ledger as of the last `sd sync` (the merge base).
-pub fn sync_base_path(store: &Path) -> PathBuf {
-    sidecar(store, ".sync-base.nt")
+/// The file holding the ledger as of the last `sd sync` with ONE remote and
+/// graph (the merge base). Keyed by the pair, because a base read against a
+/// different remote turns everything that remote lacks into deletions.
+pub fn sync_base_path(store: &Path, remote: &str, graph: &str) -> PathBuf {
+    let key = pendant::sha256(format!("{}\n{graph}", normalize_url(remote)).as_bytes());
+    let short = &key["sha256:".len().."sha256:".len() + 16];
+    let mut name = store.file_name().unwrap_or_default().to_os_string();
+    name.push(".sync");
+    store.with_file_name(name).join(format!("{short}.nt"))
+}
+
+/// A remote URL in the form used for keys: lower-case scheme and host, no
+/// trailing slash.
+pub fn normalize_url(url: &str) -> String {
+    let u = url.trim().trim_end_matches('/');
+    match u.split_once("://") {
+        Some((scheme, rest)) => {
+            let (host, path) = rest.split_once('/').map_or((rest, ""), |(h, p)| (h, p));
+            let mut out = format!(
+                "{}://{}",
+                scheme.to_ascii_lowercase(),
+                host.to_ascii_lowercase()
+            );
+            if !path.is_empty() {
+                out.push('/');
+                out.push_str(path);
+            }
+            out
+        }
+        None => u.to_string(),
+    }
+}
+
+/// Write a sync base, with a note of which remote and graph it belongs to.
+pub fn write_sync_base(path: &Path, remote: &str, graph: &str, nt: &str) -> Result<()> {
+    if let Some(dir) = path.parent() {
+        fs::create_dir_all(dir)
+            .map_err(|e| SdError::failed(format!("cannot create {}: {e}", dir.display())))?;
+    }
+    let tmp = path.with_extension("nt.tmp");
+    fs::write(&tmp, nt)
+        .and_then(|()| fs::rename(&tmp, path))
+        .map_err(|e| SdError::failed(format!("cannot write the sync base: {e}")))?;
+    let _ = fs::write(
+        path.with_extension("remote"),
+        format!("{}\n{graph}\n", normalize_url(remote)),
+    );
+    Ok(())
 }
 
 fn read_marker(store: &Path) -> Option<String> {

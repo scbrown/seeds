@@ -853,7 +853,7 @@ fn sync_merges_changes_from_both_sides_field_by_field() {
     engine::comment_add(&mut remote, &ctx(11), &a, "from the remote", None).unwrap();
     engine::comment_add(&mut local, &ctx(11), &a, "from local", None).unwrap();
 
-    let (merged, _lr, _rr) = sync::sync(&base, &mut local, &mut remote, &ctx(12)).unwrap();
+    let (merged, _lr, _rr) = sync::sync(&base, &mut local, &mut remote, &ctx(12), false).unwrap();
     let (l, r) = (
         local.snapshot(None).unwrap(),
         remote.snapshot(None).unwrap(),
@@ -870,8 +870,8 @@ fn sync_merges_changes_from_both_sides_field_by_field() {
 
     // A second sync with nothing new is a no-op.
     let new_base = local.snapshot(None).unwrap();
-    let (_, lr, rr) = sync::sync(&new_base, &mut local, &mut remote, &ctx(14)).unwrap();
-    assert_eq!((lr.tx, rr.tx), (0, 0));
+    let (_, lr, rr) = sync::sync(&new_base, &mut local, &mut remote, &ctx(14), false).unwrap();
+    assert!(!lr.wrote && !rr.wrote, "nothing written on either side");
 }
 
 #[test]
@@ -899,9 +899,89 @@ fn sync_reports_a_field_both_sides_changed_and_writes_nothing() {
         local.snapshot(None).unwrap(),
         remote.snapshot(None).unwrap(),
     );
-    let e = sync::sync(&base, &mut local, &mut remote, &ctx(11)).unwrap_err();
+    let e = sync::sync(&base, &mut local, &mut remote, &ctx(11), false).unwrap_err();
     assert_eq!(e.kind, ErrorKind::Conflict);
     assert!(e.message.contains("status"), "{}", e.message);
     assert_eq!(local.snapshot(None).unwrap().seeds, lb.seeds);
     assert_eq!(remote.snapshot(None).unwrap().seeds, rb.seeds);
+}
+
+// A backend whose commit LANDS and then reports an error: a lost response.
+struct LandsThenErrors<'a> {
+    inner: &'a mut QuipuBackend,
+    fail_next: bool,
+}
+
+impl Backend for LandsThenErrors<'_> {
+    fn snapshot(&self, at: Option<u64>) -> seeds::error::Result<seeds::model::Snapshot> {
+        self.inner.snapshot(at)
+    }
+    fn ready_ids(&self, at: Option<u64>) -> seeds::error::Result<Vec<String>> {
+        self.inner.ready_ids(at)
+    }
+    fn commit(&mut self, batch: &WriteBatch, ctx: &Ctx) -> seeds::error::Result<u64> {
+        let tx = self.inner.commit(batch, ctx)?;
+        if self.fail_next {
+            self.fail_next = false;
+            return Err(seeds::error::SdError::failed(
+                "connection reset (response lost)",
+            ));
+        }
+        Ok(tx)
+    }
+}
+
+#[test]
+fn a_sync_retried_after_a_lost_response_does_not_duplicate_comments() {
+    // wu's blocker-2 repro: both sides add a comment to the same seed; the
+    // remote write lands but its response is lost; the sync is retried.
+    let mut local = backend();
+    let (a, _) = board(&mut local);
+    let base = local.snapshot(None).unwrap();
+    let mut remote_store = backend();
+    sync::import(&mut remote_store, &ctx(9), &base, None, true).unwrap();
+    engine::comment_add(&mut remote_store, &ctx(10), &a, "from remote", None).unwrap();
+    engine::comment_add(&mut local, &ctx(10), &a, "from local", None).unwrap();
+
+    let mut flaky = LandsThenErrors {
+        inner: &mut remote_store,
+        fail_next: true,
+    };
+    assert!(sync::sync(&base, &mut local, &mut flaky, &ctx(11), false).is_err());
+    // Local and base are unchanged; retry.
+    sync::sync(&base, &mut local, &mut flaky, &ctx(12), false).unwrap();
+    for side in [
+        local.snapshot(None).unwrap(),
+        remote_store.snapshot(None).unwrap(),
+    ] {
+        let mut texts: Vec<&str> = side
+            .comments_on(&a)
+            .iter()
+            .map(|c| c.text.as_str())
+            .collect();
+        texts.sort();
+        assert_eq!(
+            texts,
+            vec!["from local", "from remote", "needs the grammar first"],
+            "exactly one copy each"
+        );
+    }
+}
+
+#[test]
+fn sync_refuses_removals_unless_allowed() {
+    let mut local = backend();
+    board(&mut local);
+    let base = local.snapshot(None).unwrap();
+    let mut remote = backend(); // empty: as if reset
+    let e = sync::sync(&base, &mut local, &mut remote, &ctx(9), false).unwrap_err();
+    assert_eq!(e.kind, ErrorKind::Refused);
+    assert!(
+        e.message.contains("remove 2 seed(s) from the local store"),
+        "{}",
+        e.message
+    );
+    assert_eq!(local.snapshot(None).unwrap().seeds.len(), 2);
+    sync::sync(&base, &mut local, &mut remote, &ctx(10), true).unwrap();
+    assert!(local.snapshot(None).unwrap().seeds.is_empty());
 }

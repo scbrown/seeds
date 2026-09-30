@@ -14,7 +14,7 @@ use serde_json::Value;
 
 struct Env {
     root: PathBuf,
-    server: Option<Child>,
+    servers: Vec<Child>,
 }
 
 impl Env {
@@ -22,7 +22,10 @@ impl Env {
         let root = std::env::temp_dir().join(format!("seeds-modes-{name}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(root.join("home/.config")).unwrap();
-        Self { root, server: None }
+        Self {
+            root,
+            servers: Vec::new(),
+        }
     }
 
     fn dir(&self, name: &str) -> PathBuf {
@@ -100,7 +103,7 @@ impl Env {
             .local_addr()
             .unwrap()
             .port();
-        let dir = self.dir("server");
+        let dir = self.dir(&format!("server{}", self.servers.len()));
         let child = Command::new(bin)
             .args(["--db", dir.join("q.db").to_str().unwrap()])
             .args(["--bind", &format!("127.0.0.1:{port}")])
@@ -110,7 +113,7 @@ impl Env {
             .stderr(Stdio::null())
             .spawn()
             .unwrap();
-        self.server = Some(child);
+        self.servers.push(child);
         for _ in 0..100 {
             if std::net::TcpStream::connect(("127.0.0.1", port)).is_ok() {
                 return Some(format!("http://127.0.0.1:{port}"));
@@ -123,7 +126,7 @@ impl Env {
 
 impl Drop for Env {
     fn drop(&mut self) {
-        if let Some(mut c) = self.server.take() {
+        for mut c in self.servers.drain(..) {
             let _ = c.kill();
             let _ = c.wait();
         }
@@ -229,6 +232,8 @@ fn when_store_and_pendant_both_changed_sd_refuses_and_says_how_to_choose() {
     // commit and the export would, or a run that bypassed the project config).
     let db = repo.join(".seeds/seeds.db");
     let elsewhere = env.dir("no-config");
+    let id = std::fs::read_to_string(repo.join(".seeds/project-id")).unwrap();
+    let graph = format!("https://seeds.local/project/sd-{}", id.trim());
     env.ok(
         &elsewhere,
         &[
@@ -238,6 +243,8 @@ fn when_store_and_pendant_both_changed_sd_refuses_and_says_how_to_choose() {
             "store-side",
             "--store",
             db.to_str().unwrap(),
+            "--graph",
+            &graph,
         ],
         &[],
     );
@@ -342,9 +349,10 @@ fn remote_mode_reads_and_writes_a_quipu_server() {
     env.ok(&work, &["comments", "add", &a, "over http"], &remote);
     env.ok(&work, &["close", &g, "--reason", "done"], &remote);
     assert_eq!(env.ready(&work, &remote), vec![a.clone()]);
+    // Only the project id (which names the remote graph); no local store.
     assert!(
-        !work.join(".seeds").exists(),
-        "remote mode writes nothing locally"
+        !work.join(".seeds/seeds.db").exists(),
+        "remote mode keeps no local store"
     );
 
     // Simultaneous claims through the server's compare-and-set: one winner.
@@ -404,7 +412,13 @@ fn sync_merges_a_repo_local_ledger_with_a_remote_both_ways() {
     let (a, g) = board(&env, &repo);
     let sync_env = [("SEEDS_SYNC_REMOTE", url.as_str())];
     env.ok(&repo, &["sync"], &sync_env);
-    let remote = [("SEEDS_QUIPU_URL", url.as_str())];
+    // Read the remote as the same project (its graph comes from repo's id).
+    let id = std::fs::read_to_string(repo.join(".seeds/project-id")).unwrap();
+    let graph = format!("https://seeds.local/project/sd-{}", id.trim());
+    let remote = [
+        ("SEEDS_QUIPU_URL", url.as_str()),
+        ("SEEDS_GRAPH", graph.as_str()),
+    ];
     let work = env.dir("work");
     assert_eq!(env.ready(&work, &remote), vec![g.clone()]);
 
@@ -427,4 +441,281 @@ fn sync_merges_a_repo_local_ledger_with_a_remote_both_ways() {
     let o = env.sd(&repo, &["sync"], &sync_env);
     assert_eq!(o.status.code(), Some(4));
     assert!(String::from_utf8_lossy(&o.stderr).contains("priority"));
+}
+
+// ---------------------------------------------------------------- review fixes (wu, seeds#2)
+
+fn count_remote(env: &Env, cwd: &Path, url: &str) -> usize {
+    let v: Value = serde_json::from_str(&env.ok(
+        cwd,
+        &["count", "--include-closed", "--json"],
+        &[("SEEDS_QUIPU_URL", url)],
+    ))
+    .unwrap();
+    v["count"].as_u64().unwrap() as usize
+}
+
+#[test]
+fn syncing_to_a_second_empty_remote_does_not_delete_the_local_ledger() {
+    // wu's blocker-1 repro, exactly: sync to A, then to an empty B.
+    let mut env = Env::new("two-remotes");
+    let (Some(a_url), Some(b_url)) = (env.start_server(), env.start_server()) else {
+        eprintln!("SKIPPED: set SEEDS_TEST_QUIPU_SERVER to a quipu-server binary to run this");
+        return;
+    };
+    let repo = env.pendant_project("repo");
+    board(&env, &repo);
+    let count_local = |env: &Env| -> u64 {
+        let v: Value =
+            serde_json::from_str(&env.ok(&repo, &["count", "--include-closed", "--json"], &[]))
+                .unwrap();
+        v["count"].as_u64().unwrap()
+    };
+    env.ok(&repo, &["sync", "--remote", &a_url], &[]);
+    assert_eq!(count_remote(&env, &repo, &a_url), 2);
+    let out = env.ok(&repo, &["sync", "--remote", &b_url, "--json"], &[]);
+    let v: Value = serde_json::from_str(&out).unwrap();
+    assert_eq!(v["local"]["removed"].as_array().unwrap().len(), 0, "{out}");
+    assert_eq!(count_local(&env), 2, "the local ledger survives");
+    assert_eq!(count_remote(&env, &repo, &b_url), 2, "B received it");
+
+    // A remote that was reset (its seeds gone) is refused, naming the count.
+    let empty = env.dir("empty-pendant");
+    std::fs::write(empty.join("export.nt"), "").unwrap();
+    env.ok(
+        &repo,
+        &["import", empty.to_str().unwrap(), "--replace"],
+        &[("SEEDS_QUIPU_URL", a_url.as_str())],
+    );
+    assert_eq!(count_remote(&env, &repo, &a_url), 0);
+    let o = env.sd(&repo, &["sync", "--remote", &a_url], &[]);
+    assert_eq!(o.status.code(), Some(5));
+    let err = String::from_utf8_lossy(&o.stderr);
+    assert!(
+        err.contains("remove 2 seed(s) from the local store"),
+        "{err}"
+    );
+    assert_eq!(count_local(&env), 2, "nothing was written");
+    // Asked for explicitly, the removal goes through.
+    env.ok(
+        &repo,
+        &["sync", "--remote", &a_url, "--allow-remote-deletes"],
+        &[],
+    );
+    assert_eq!(count_local(&env), 0);
+}
+
+#[test]
+fn a_corrupt_sync_base_is_an_error_not_an_empty_base() {
+    let mut env = Env::new("corrupt-base");
+    let Some(url) = env.start_server() else {
+        eprintln!("SKIPPED: set SEEDS_TEST_QUIPU_SERVER to a quipu-server binary to run this");
+        return;
+    };
+    let repo = env.pendant_project("repo");
+    board(&env, &repo);
+    env.ok(&repo, &["sync", "--remote", &url], &[]);
+    let dir = repo.join(".seeds/seeds.db.sync");
+    let base = std::fs::read_dir(&dir)
+        .unwrap()
+        .map(|e| e.unwrap().path())
+        .find(|p| p.extension().is_some_and(|x| x == "nt"))
+        .expect("a base keyed per remote");
+    std::fs::write(&base, "<<<<<<< not a ledger\n").unwrap();
+    let o = env.sd(&repo, &["sync", "--remote", &url], &[]);
+    assert_eq!(o.status.code(), Some(1));
+    assert!(String::from_utf8_lossy(&o.stderr).contains("unreadable"));
+}
+
+#[test]
+fn a_second_sync_with_nothing_new_writes_nothing_on_either_side() {
+    let mut env = Env::new("sync-noop");
+    let Some(url) = env.start_server() else {
+        eprintln!("SKIPPED: set SEEDS_TEST_QUIPU_SERVER to a quipu-server binary to run this");
+        return;
+    };
+    let repo = env.pendant_project("repo");
+    board(&env, &repo);
+    let first: Value =
+        serde_json::from_str(&env.ok(&repo, &["sync", "--remote", &url, "--json"], &[])).unwrap();
+    assert_eq!(
+        first["remote"]["wrote"], true,
+        "the first sync writes the remote"
+    );
+    let second: Value =
+        serde_json::from_str(&env.ok(&repo, &["sync", "--remote", &url, "--json"], &[])).unwrap();
+    assert_eq!(second["remote"]["wrote"], false);
+    assert_eq!(second["local"]["wrote"], false);
+}
+
+#[test]
+fn two_repos_with_no_prefix_keep_separate_ledgers_on_one_server() {
+    let mut env = Env::new("two-repos");
+    let Some(url) = env.start_server() else {
+        eprintln!("SKIPPED: set SEEDS_TEST_QUIPU_SERVER to a quipu-server binary to run this");
+        return;
+    };
+    let remote = [("SEEDS_QUIPU_URL", url.as_str())];
+    let one = env.dir("one");
+    let two = env.dir("two");
+    env.ok(&one, &["create", "only in one", "--silent"], &remote);
+    env.ok(&two, &["create", "only in two", "--silent"], &remote);
+    assert_eq!(env.ready(&one, &remote).len(), 1);
+    assert_eq!(env.ready(&two, &remote).len(), 1);
+    assert!(one.join(".seeds/project-id").is_file());
+}
+
+#[test]
+fn remote_writes_record_who_made_them() {
+    let mut env = Env::new("provenance");
+    let Some(url) = env.start_server() else {
+        eprintln!("SKIPPED: set SEEDS_TEST_QUIPU_SERVER to a quipu-server binary to run this");
+        return;
+    };
+    let work = env.dir("work");
+    let id = env
+        .ok(
+            &work,
+            &["create", "attributed", "--silent", "--actor", "alice"],
+            &[("SEEDS_QUIPU_URL", url.as_str())],
+        )
+        .trim()
+        .to_string();
+    let q = format!(
+        "SELECT ?actor ?source WHERE {{ GRAPH ?g {{ ?w <https://seeds.local/ontology/wrote> \
+         <https://seeds.local/item/{id}> ; <https://seeds.local/ontology/actor> ?actor ; \
+         <https://seeds.local/ontology/source> ?source }} }}"
+    );
+    let body = serde_json::json!({ "query": q }).to_string();
+    let text = ureq::post(&format!("{url}/query"))
+        .set("Content-Type", "application/json")
+        .send_string(&body)
+        .unwrap()
+        .into_string()
+        .unwrap();
+    assert!(
+        text.contains("alice") && text.contains("seeds:create"),
+        "{text}"
+    );
+}
+
+// A proxy in front of the server that can lose the response to /update.
+#[derive(Clone, Copy, PartialEq)]
+enum Fault {
+    /// Forward /update, then drop the connection without answering.
+    LoseResponse,
+    /// Answer /update with 502 without forwarding it.
+    BadGateway,
+}
+
+fn faulty_proxy(upstream: &str, fault: Fault) -> String {
+    use std::io::{Read, Write};
+    let upstream = upstream.trim_start_matches("http://").to_string();
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    std::thread::spawn(move || {
+        for stream in listener.incoming() {
+            let Ok(mut client) = stream else { continue };
+            let upstream = upstream.clone();
+            std::thread::spawn(move || {
+                let mut buf = Vec::new();
+                let mut chunk = [0u8; 8192];
+                let (head_end, len) = loop {
+                    let n = client.read(&mut chunk).unwrap_or(0);
+                    if n == 0 {
+                        return;
+                    }
+                    buf.extend_from_slice(&chunk[..n]);
+                    if let Some(i) = buf.windows(4).position(|w| w == b"\r\n\r\n") {
+                        let head = String::from_utf8_lossy(&buf[..i]).to_ascii_lowercase();
+                        let len = head
+                            .lines()
+                            .find_map(|l| l.strip_prefix("content-length:"))
+                            .and_then(|v| v.trim().parse::<usize>().ok())
+                            .unwrap_or(0);
+                        break (i + 4, len);
+                    }
+                };
+                while buf.len() < head_end + len {
+                    let n = client.read(&mut chunk).unwrap_or(0);
+                    if n == 0 {
+                        break;
+                    }
+                    buf.extend_from_slice(&chunk[..n]);
+                }
+                let head = String::from_utf8_lossy(&buf[..head_end]).to_string();
+                let is_update = head.starts_with("POST /update");
+                if is_update && fault == Fault::BadGateway {
+                    let _ = client.write_all(
+                        b"HTTP/1.1 502 Bad Gateway\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+                    );
+                    return;
+                }
+                let head: String = head
+                    .split("\r\n")
+                    .filter(|l| !l.to_ascii_lowercase().starts_with("connection:"))
+                    .collect::<Vec<_>>()
+                    .join("\r\n");
+                let head = head.trim_end().to_string() + "\r\nConnection: close\r\n\r\n";
+                let Ok(mut up) = std::net::TcpStream::connect(&upstream) else {
+                    return;
+                };
+                let _ = up.write_all(head.as_bytes());
+                let _ = up.write_all(&buf[head_end..]);
+                let mut resp = Vec::new();
+                let _ = up.read_to_end(&mut resp);
+                if is_update && fault == Fault::LoseResponse {
+                    return; // the write landed; the answer never arrives
+                }
+                let _ = client.write_all(&resp);
+            });
+        }
+    });
+    format!("http://{addr}")
+}
+
+#[test]
+fn a_lost_response_is_read_back_and_never_duplicates_a_create() {
+    let mut env = Env::new("lost-response");
+    let Some(url) = env.start_server() else {
+        eprintln!("SKIPPED: set SEEDS_TEST_QUIPU_SERVER to a quipu-server binary to run this");
+        return;
+    };
+    let work = env.dir("work");
+    // The write lands, the response is lost: the read-back sees it landed.
+    let lossy = faulty_proxy(&url, Fault::LoseResponse);
+    let o = env.sd(
+        &work,
+        &["create", "exactly once", "--silent"],
+        &[("SEEDS_QUIPU_URL", lossy.as_str())],
+    );
+    assert_eq!(
+        o.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&o.stderr)
+    );
+    assert!(String::from_utf8_lossy(&o.stderr).contains("landed"));
+    assert_eq!(count_remote(&env, &work, &url), 1);
+
+    // The gateway fails and nothing landed: INDETERMINATE (exit 8), not a
+    // retry invitation, and nothing was written.
+    let failing = faulty_proxy(&url, Fault::BadGateway);
+    let o = env.sd(
+        &work,
+        &["create", "maybe", "--silent"],
+        &[("SEEDS_QUIPU_URL", failing.as_str())],
+    );
+    assert_eq!(
+        o.status.code(),
+        Some(8),
+        "{}",
+        String::from_utf8_lossy(&o.stderr)
+    );
+    let err = String::from_utf8_lossy(&o.stderr);
+    assert!(
+        err.contains("UNKNOWN") && err.contains("do not simply retry"),
+        "{err}"
+    );
+    assert_eq!(count_remote(&env, &work, &url), 1);
 }

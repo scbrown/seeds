@@ -103,13 +103,61 @@ pub fn run_with(cli: &Cli, cfg: &Resolved) -> Result<Outcome> {
             "--at pins a read; a write always applies to the current state",
         ));
     }
-    match &cfg.location {
+    // The graph: configured, or derived from the project id, which is created
+    // on first write or first use of a server (never by a plain local read).
+    let create = match &cfg.location {
+        Location::Url(_) => true,
+        Location::Store(_) => {
+            cli.command.writes()
+                || cfg.pendant.is_some()
+                || matches!(cli.command, Command::Export(_))
+        }
+    };
+    let (graph, note) = config::project_graph(cfg, create)?;
+    let graph = match graph {
+        Some(g) => g,
+        None => {
+            if let Location::Store(p) = &cfg.location {
+                if p.exists() {
+                    return Err(SdError::new(
+                        ErrorKind::Config,
+                        format!(
+                            "{} exists but {} is missing, so seeds cannot tell which ledger in \
+                             it is this project's; restore that file or set [project] graph",
+                            p.display(),
+                            cfg.project_id_file.display()
+                        ),
+                    ));
+                }
+            }
+            // Nothing has been written from here: an empty graph answers.
+            crate::vocab::project_graph_iri(&format!("{}-none", cfg.prefix))
+        }
+    };
+    let cfg = &Resolved {
+        graph: Some(graph),
+        ..cfg.clone()
+    };
+    let o = match &cfg.location {
         Location::Url(url) => run_remote(cli, cfg, &ctx, url),
         Location::Store(path) => run_local(cli, cfg, &ctx, path),
-    }
+    }?;
+    Ok(with_notes(o, note.into_iter().collect()))
 }
 
-fn token(cfg: &Resolved) -> Result<Option<String>> {
+/// The bearer for writes to `url`, if one is configured AND may go there: a
+/// token is never sent to a server URL that came from a project file unless
+/// the user's own config lists its host in `trusted_hosts`.
+fn token(cfg: &Resolved, url: &str, from_project: bool) -> Result<Option<String>> {
+    if !cfg.token_allowed(url, from_project) {
+        if cfg.token.is_some() || cfg.token_file.is_some() {
+            eprintln!(
+                "sd: not sending your quipu token to {url}: that URL comes from the project's \
+                 config. Add its host to trusted_hosts in ~/.config/seeds/config.toml to allow it."
+            );
+        }
+        return Ok(None);
+    }
     if let Some(t) = &cfg.token {
         return Ok(Some(t.trim().to_string()));
     }
@@ -140,7 +188,11 @@ fn with_notes(mut o: Outcome, notes: Vec<String>) -> Outcome {
 }
 
 fn run_remote(cli: &Cli, cfg: &Resolved, ctx: &Ctx, url: &str) -> Result<Outcome> {
-    let mut remote = remote::RemoteBackend::connect(url, &cfg.graph, token(cfg)?)?;
+    let mut remote = remote::RemoteBackend::connect(
+        url,
+        cfg.graph(),
+        token(cfg, url, cfg.location_from_project)?,
+    )?;
     match &cli.command {
         Command::Export(a) => {
             let dir = export_dir(a.to.as_deref(), cfg)?;
@@ -260,6 +312,7 @@ fn report_json(r: &sync::Report) -> serde_json::Value {
         "unchanged": r.unchanged,
         "comments_added": r.comments_added,
         "tx": r.tx,
+        "wrote": r.wrote,
     })
 }
 
@@ -283,7 +336,7 @@ fn run_local(cli: &Cli, cfg: &Resolved, ctx: &Ctx, path: &std::path::Path) -> Re
     match &cli.command {
         Command::Export(a) => {
             let dir = export_dir(a.to.as_deref(), cfg)?;
-            let h = store::open_for_write(path, &cfg.graph)?;
+            let h = store::open_for_write(path, cfg.graph())?;
             let is_configured = cfg.pendant.as_deref() == Some(dir.as_path());
             let p = pendant::export(&h.backend)?;
             let changed = if is_configured {
@@ -294,7 +347,7 @@ fn run_local(cli: &Cli, cfg: &Resolved, ctx: &Ctx, path: &std::path::Path) -> Re
             return Ok(export_outcome(cli.json, &dir, &p, changed));
         }
         Command::Import(a) => {
-            let mut h = store::open_for_write(path, &cfg.graph)?;
+            let mut h = store::open_for_write(path, cfg.graph())?;
             let o = import_into(cli, ctx, &mut h.backend, a)?;
             if let Some(dir) = &cfg.pendant {
                 store::export_to_pendant(&h.backend, path, dir)?;
@@ -306,7 +359,7 @@ fn run_local(cli: &Cli, cfg: &Resolved, ctx: &Ctx, path: &std::path::Path) -> Re
     }
     if let Some(dir) = &cfg.pendant {
         // Mode 1: reconcile with the pendant, run, export.
-        let mut h = store::open_for_write(path, &cfg.graph)?;
+        let mut h = store::open_for_write(path, cfg.graph())?;
         let notes = store::hydrate(&mut h.backend, path, dir, ctx)?;
         let o = dispatch(cli, ctx, &mut h.backend)?;
         if cli.command.writes() {
@@ -315,15 +368,15 @@ fn run_local(cli: &Cli, cfg: &Resolved, ctx: &Ctx, path: &std::path::Path) -> Re
         return Ok(with_notes(o, notes));
     }
     if cli.command.writes() {
-        let mut h = store::open_for_write(path, &cfg.graph)?;
+        let mut h = store::open_for_write(path, cfg.graph())?;
         return dispatch(cli, ctx, &mut h.backend);
     }
-    match store::open_for_read(path, &cfg.graph)? {
+    match store::open_for_read(path, cfg.graph())? {
         Some(mut b) => dispatch(cli, ctx, &mut b),
         None => {
             // Nothing written yet: answer from an empty graph, and say so,
             // so an empty answer is never mistaken for "nothing matched".
-            let mut empty = QuipuBackend::in_memory(&cfg.graph)?;
+            let mut empty = QuipuBackend::in_memory(cfg.graph())?;
             let o = dispatch(cli, ctx, &mut empty)?;
             Ok(with_notes(
                 o,
@@ -352,27 +405,55 @@ fn run_sync(
                 "sd sync needs a remote: set [sync] remote, SEEDS_SYNC_REMOTE, or --remote",
             )
         })?;
-    let mut h = store::open_for_write(path, &cfg.graph)?;
+    let mut h = store::open_for_write(path, cfg.graph())?;
     let mut notes = Vec::new();
     if let Some(dir) = &cfg.pendant {
         notes.extend(store::hydrate(&mut h.backend, path, dir, ctx)?);
     }
-    let mut remote = remote::RemoteBackend::connect(&url, &cfg.graph, token(cfg)?)?;
-    let base_path = store::sync_base_path(path);
+    let from_project = a.remote.is_none() && cfg.sync_remote_from_project;
+    let mut remote =
+        remote::RemoteBackend::connect(&url, cfg.graph(), token(cfg, &url, from_project)?)?;
+    let base_path = store::sync_base_path(path, &url, cfg.graph());
     let base = match std::fs::read_to_string(&base_path) {
         Ok(nt) => {
             let p = pendant::Pendant {
                 files: [(pendant::EXPORT_NT.to_string(), nt)].into(),
             };
-            pendant::read(&p)?.snapshot
+            pendant::read(&p)
+                .map_err(|e| {
+                    SdError::failed(format!(
+                        "the sync base {} is unreadable ({}); nothing was written. Remove it \
+                         only if you want the next sync to treat this remote as new.",
+                        base_path.display(),
+                        e.message
+                    ))
+                })?
+                .snapshot
         }
-        Err(_) => crate::model::Snapshot::default(),
+        // Only a missing file means "never synced with this remote".
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => crate::model::Snapshot::default(),
+        Err(e) => {
+            return Err(SdError::failed(format!(
+                "cannot read the sync base {}: {e}; nothing was written",
+                base_path.display()
+            )))
+        }
     };
-    let (_, local_r, remote_r) = sync::sync(&base, &mut h.backend, &mut remote, ctx)?;
+    let (_, local_r, remote_r) = sync::sync(
+        &base,
+        &mut h.backend,
+        &mut remote,
+        ctx,
+        a.allow_remote_deletes,
+    )?;
     // The new base is what both sides now hold.
     let merged = pendant::export(&h.backend)?;
-    std::fs::write(&base_path, merged.export_nt().unwrap_or_default())
-        .map_err(|e| SdError::failed(format!("cannot write the sync base: {e}")))?;
+    store::write_sync_base(
+        &base_path,
+        &url,
+        cfg.graph(),
+        merged.export_nt().unwrap_or_default(),
+    )?;
     if let Some(dir) = &cfg.pendant {
         store::export_to_pendant(&h.backend, path, dir)?;
     }
@@ -445,6 +526,15 @@ fn merge_driver(a: &cli::MergeDriverArgs) -> Result<Outcome> {
     Ok(Outcome::default())
 }
 
+/// " (tx N)" when the store reported a transaction (a quipu server does not).
+fn tx_note(tx: u64) -> String {
+    if tx > 0 {
+        format!(" (tx {tx})")
+    } else {
+        String::new()
+    }
+}
+
 fn read_text(path: &str) -> Result<String> {
     std::fs::read_to_string(path).map_err(|e| SdError::usage(format!("cannot read {path}: {e}")))
 }
@@ -513,7 +603,7 @@ fn dispatch(cli: &Cli, ctx: &Ctx, b: &mut dyn Backend) -> Result<Outcome> {
             } else if a.dry_run {
                 format!("would create {}", output::seed_line(&seed))
             } else {
-                format!("created {} (tx {tx})", output::seed_line(&seed))
+                format!("created {}{}", output::seed_line(&seed), tx_note(tx))
             };
             Ok(ok(json, seed.to_json(), text, vec![]))
         }
@@ -626,7 +716,7 @@ fn dispatch(cli: &Cli, ctx: &Ctx, b: &mut dyn Backend) -> Result<Outcome> {
             let (seeds, tx) = engine::update(b, ctx, &a.ids, &req)?;
             let text = seeds
                 .iter()
-                .map(|s| format!("updated {} (tx {tx})", output::seed_line(s)))
+                .map(|s| format!("updated {}{}", output::seed_line(s), tx_note(tx)))
                 .collect::<Vec<_>>()
                 .join("\n");
             Ok(ok(json, output::seeds_json(&seeds), text, vec![]))
@@ -636,7 +726,7 @@ fn dispatch(cli: &Cli, ctx: &Ctx, b: &mut dyn Backend) -> Result<Outcome> {
                 engine::close(b, ctx, &a.ids, a.reason.as_deref(), a.force)?;
             let text = seeds
                 .iter()
-                .map(|s| format!("closed {} (tx {tx})", output::seed_line(s)))
+                .map(|s| format!("closed {}{}", output::seed_line(s), tx_note(tx)))
                 .collect::<Vec<_>>()
                 .join("\n");
             Ok(ok(json, output::seeds_json(&seeds), text, warnings))
@@ -649,8 +739,12 @@ fn dispatch(cli: &Cli, ctx: &Ctx, b: &mut dyn Backend) -> Result<Outcome> {
             } => {
                 let d = engine::dep_add(b, ctx, issue, depends_on, dep_type)?;
                 let text = format!(
-                    "{} {} depends on {} ({}) (tx {})",
-                    d.action, d.issue_id, d.depends_on_id, d.dep_type, d.tx
+                    "{} {} depends on {} ({}){}",
+                    d.action,
+                    d.issue_id,
+                    d.depends_on_id,
+                    d.dep_type,
+                    tx_note(d.tx)
                 );
                 Ok(ok(json, output::dep_change_json(&d), text, vec![]))
             }
@@ -661,8 +755,11 @@ fn dispatch(cli: &Cli, ctx: &Ctx, b: &mut dyn Backend) -> Result<Outcome> {
             } => {
                 let d = engine::dep_remove(b, ctx, issue, depends_on, dep_type)?;
                 let text = format!(
-                    "removed: {} no longer depends on {} ({}) (tx {})",
-                    d.issue_id, d.depends_on_id, d.dep_type, d.tx
+                    "removed: {} no longer depends on {} ({}){}",
+                    d.issue_id,
+                    d.depends_on_id,
+                    d.dep_type,
+                    tx_note(d.tx)
                 );
                 Ok(ok(json, output::dep_change_json(&d), text, vec![]))
             }
@@ -719,7 +816,7 @@ fn dispatch(cli: &Cli, ctx: &Ctx, b: &mut dyn Backend) -> Result<Outcome> {
                     (None, None) => text.join(" "),
                 };
                 let (c, tx) = engine::comment_add(b, ctx, id, &body, author.as_deref())?;
-                let text = format!("added comment {} to {} (tx {tx})", c.index, c.seed);
+                let text = format!("added comment {} to {}{}", c.index, c.seed, tx_note(tx));
                 Ok(ok(json, c.to_json(), text, vec![]))
             }
             CommentsCommand::List { id } => {

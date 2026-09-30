@@ -12,7 +12,8 @@ Two keys, and a store uses exactly one of them:
 [quipu]
 store = ".seeds/seeds.db"            # a local quipu store file (the default)
 # url = "https://quipu.example.org"  # OR a shared quipu server
-# token_file = "~/.config/seeds/quipu-token"   # bearer for server writes
+# token_file = "~/.config/seeds/quipu-token"   # bearer for writes: USER config only
+# trusted_hosts = ["quipu.example.org"]       # USER config only: see below
 
 [project]
 prefix = "sd"                        # id prefix for new seeds (default sd)
@@ -34,6 +35,8 @@ Which combination gives which arrangement is in
 - `url` is an `http://` or `https://` quipu server.
 - A file (or the environment) that sets **both** is refused with exit 6.
   Choose one.
+- `graph`, when set, must be a plain absolute IRI; anything that could break
+  out of the SPARQL it is written into is refused (exit 6).
 - Unknown keys are refused too, so a typo such as `stroe` fails loudly instead
   of being ignored.
 
@@ -68,6 +71,29 @@ or `[quipu] token_file`); reads send none.
 A configured URL that cannot be reached is **exit 7**, "cannot reach quipu at
 …". seeds **never** falls back to a local store when a configured server is
 down, because the two would then hold different ledgers.
+
+### Where the token may go
+
+A cloned repository's `.seeds/config.toml` is not yours, so it is not trusted
+with your token:
+
+- `token_file` and `trusted_hosts` are honoured only in your **user** config
+  (or `SEEDS_QUIPU_TOKEN_FILE` / `SEEDS_QUIPU_TOKEN`); a project file that
+  sets either is refused.
+- A server URL that came from a **project** file gets your token only if its
+  host is in your `trusted_hosts`. A URL you chose (flag, environment, user
+  file) always does.
+- A token is never sent over plain `http://`, except to localhost.
+
+## The project id
+
+With no `graph` configured, a project's graph is
+`https://seeds.local/project/<prefix>-<id>`, where `<id>` is a random id kept
+in `.seeds/project-id`. It is created on the first write (or first use of a
+server) and should be **committed**: it is what keeps two repositories that
+never set a prefix from sharing one ledger on a shared server. A plain read in
+a directory that never wrote creates nothing. A local store that exists
+without its project id is refused rather than read as empty.
 
 ## CI
 
