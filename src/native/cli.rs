@@ -137,6 +137,8 @@ pub enum Command {
     Where,
     /// Show the ledger's location, mode and size
     Info,
+    /// Check the ledger and configuration (read-only; exit 1 if any check fails)
+    Doctor,
     /// JSON Schemas for sd's --json output, generated from the same tables the
     /// contract tests pin
     Schema {
@@ -863,6 +865,7 @@ impl Command {
             | Command::Completions(_)
             | Command::Version(_)
             | Command::Where
+            | Command::Doctor
             | Command::Schema { .. }
             | Command::Info
             | Command::Config { .. }
@@ -940,6 +943,7 @@ impl Command {
             Command::Version(_) => "version",
             Command::Where => "where",
             Command::Info => "info",
+            Command::Doctor => "doctor",
             Command::Schema { .. } => "schema",
             Command::Config { command } => match command {
                 ConfigCommand::List => "config list",
@@ -1047,6 +1051,7 @@ mod tests {
         (&["completions", "bash"], "completions", false),
         (&["where"], "where", false),
         (&["info"], "info", false),
+        (&["doctor"], "doctor", false),
         (&["schema", "issue"], "schema", false),
         (&["config", "list"], "config list", false),
         (&["config", "get", "project.prefix"], "config get", false),

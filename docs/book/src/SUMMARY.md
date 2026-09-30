@@ -40,6 +40,7 @@
   - [version, where, info](verbs/about.md)
   - [config](verbs/config.md)
   - [schema](verbs/schema.md)
+  - [doctor](verbs/doctor.md)
   - [completions](verbs/completions.md)
 - [Formulas: shuttle](formulas.md)
 - [Reference](reference.md)

@@ -803,3 +803,14 @@ fn config_lists_and_gets_resolved_values_and_never_prints_a_token() {
     assert_eq!(code(&o), 20);
     assert!(String::from_utf8_lossy(&o.stderr).contains("config.toml"));
 }
+
+#[test]
+fn doctor_passes_a_fresh_ledger_with_exit_0() {
+    let sb = Sandbox::new("doctor");
+    sb.ok(&["create", "a"]);
+    let v = sb.json(&["doctor"]);
+    assert_eq!(v["ok"], true, "{v}");
+    for c in v["checks"].as_array().unwrap() {
+        assert_ne!(c["status"], "error", "{c}");
+    }
+}
