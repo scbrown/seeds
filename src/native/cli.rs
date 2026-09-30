@@ -137,6 +137,13 @@ pub enum Command {
     Where,
     /// Show the ledger's location, mode and size
     Info,
+    /// sd's machine-readable contract: commands (read or write), global flags,
+    /// exit codes, environment, safety guarantees
+    Capabilities {
+        /// Detail for one command path, e.g. "create" or "comments add"
+        #[arg(long = "command", alias = "for", value_name = "COMMAND_PATH")]
+        command_path: Option<String>,
+    },
     /// Show the resolved configuration (list, get, path)
     Config {
         #[command(subcommand)]
@@ -855,6 +862,7 @@ impl Command {
             | Command::Completions(_)
             | Command::Version(_)
             | Command::Where
+            | Command::Capabilities { .. }
             | Command::Info
             | Command::Config { .. }
             | Command::Show(_)
@@ -931,6 +939,7 @@ impl Command {
             Command::Version(_) => "version",
             Command::Where => "where",
             Command::Info => "info",
+            Command::Capabilities { .. } => "capabilities",
             Command::Config { command } => match command {
                 ConfigCommand::List => "config list",
                 ConfigCommand::Get { .. } => "config get",
@@ -1037,6 +1046,11 @@ mod tests {
         (&["completions", "bash"], "completions", false),
         (&["where"], "where", false),
         (&["info"], "info", false),
+        (
+            &["capabilities", "--for", "comments add"],
+            "capabilities",
+            false,
+        ),
         (&["config", "list"], "config list", false),
         (&["config", "get", "project.prefix"], "config get", false),
         (&["config", "unset", "x"], "config delete", false),

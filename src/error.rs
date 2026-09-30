@@ -39,6 +39,20 @@ pub enum ErrorKind {
 }
 
 impl ErrorKind {
+    /// Every kind, for the published error schema.
+    pub const ALL: [ErrorKind; 10] = [
+        ErrorKind::Failed,
+        ErrorKind::Usage,
+        ErrorKind::NotFound,
+        ErrorKind::Conflict,
+        ErrorKind::Refused,
+        ErrorKind::Config,
+        ErrorKind::Unreachable,
+        ErrorKind::Indeterminate,
+        ErrorKind::NotBuilt,
+        ErrorKind::Elsewhere,
+    ];
+
     /// The process exit code for this kind.
     pub fn exit_code(self) -> i32 {
         match self {
@@ -52,6 +66,22 @@ impl ErrorKind {
             ErrorKind::Indeterminate => 8,
             ErrorKind::NotBuilt => 20,
             ErrorKind::Elsewhere => 21,
+        }
+    }
+
+    /// What the exit code means, for `sd capabilities`.
+    pub fn description(self) -> &'static str {
+        match self {
+            ErrorKind::Failed => "anything without a more specific code: store I/O, a corrupt store",
+            ErrorKind::Usage => "a malformed request: a bad flag value, --at on a write; clap usage errors too",
+            ErrorKind::NotFound => "a seed, dependency or comment that does not exist",
+            ErrorKind::Conflict => "a compare-and-set lost or a claim was taken; nothing was written, re-read and retry",
+            ErrorKind::Refused => "well-formed but refused: shapes, a dependency cycle, closing with open blockers",
+            ErrorKind::Config => "the configuration is contradictory or unreadable",
+            ErrorKind::Unreachable => "the configured quipu server could not be reached; sd never falls back to a local store",
+            ErrorKind::Indeterminate => "a write's outcome is unknown (response lost, read-back unconfirmed); check before anything else",
+            ErrorKind::NotBuilt => "a capability that exists in the design but not in this build",
+            ErrorKind::Elsewhere => "a br verb whose capability lives in another tool of the stack; the message says where",
         }
     }
 

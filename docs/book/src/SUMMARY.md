@@ -39,6 +39,7 @@
   - [export, import, sync](verbs/sync.md)
   - [version, where, info](verbs/about.md)
   - [config](verbs/config.md)
+  - [capabilities](verbs/capabilities.md)
   - [completions](verbs/completions.md)
 - [Formulas: shuttle](formulas.md)
 - [Reference](reference.md)
