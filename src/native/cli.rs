@@ -22,6 +22,10 @@ pub struct Cli {
     #[arg(long, global = true, visible_alias = "robot")]
     pub json: bool,
 
+    /// Output format: text or json (json is --json). br's toon is not supported.
+    #[arg(long, global = true, value_name = "FORMAT")]
+    pub format: Option<String>,
+
     /// Actor name recorded on writes and used by --claim (default: $USER)
     #[arg(long, global = true, env = "SEEDS_ACTOR")]
     pub actor: Option<String>,
@@ -982,6 +986,7 @@ impl Cli {
     /// a trailing `--json`; it still counts.
     pub fn wants_json(&self) -> bool {
         self.json
+            || self.format.as_deref() == Some("json")
             || match &self.command {
                 Command::Query(a)
                 | Command::Upgrade(a)

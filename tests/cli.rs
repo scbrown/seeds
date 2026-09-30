@@ -952,3 +952,15 @@ fn create_takes_an_initial_status_or_a_defer_date() {
         2
     );
 }
+
+#[test]
+fn format_json_is_json_text_is_text_and_toon_is_refused() {
+    let sb = Sandbox::new("format");
+    let id = sb.ok(&["create", "a", "--silent"]).trim().to_string();
+    let as_json: Value = serde_json::from_str(&sb.ok(&["show", &id, "--format", "json"])).unwrap();
+    assert_eq!(as_json[0]["id"], id.as_str());
+    assert!(sb.ok(&["show", &id, "--format", "text"]).contains(&id));
+    let o = sb.run(&["show", &id, "--format", "toon"]);
+    assert_eq!(code(&o), 2);
+    assert!(String::from_utf8_lossy(&o.stderr).contains("toon"));
+}
