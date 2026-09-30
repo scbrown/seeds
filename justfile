@@ -32,6 +32,7 @@ check:
     cargo fmt --check
     cargo clippy --all-targets -- -D warnings
     cargo test
+    bash scripts/ci/crates-publish-guard.sh --selftest
     mdbook build docs/book
 
 # Alias for check: the local CI equivalent

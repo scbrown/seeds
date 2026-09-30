@@ -1,0 +1,367 @@
+name: Release
+
+# Versioning is release-please, as in the rest of the stack. Every push to main
+# opens or refreshes a release PR from the conventional-commit history; merging
+# that PR creates the tag and a DRAFT release, and this same run then builds the
+# `sd` binaries, attaches them with checksums, publishes the release, and
+# publishes seeds-ai to crates.io through Trusted Publishing.
+#
+# workflow_dispatch has a dry_run mode (the default) that builds and packages
+# every target and runs the crates.io publish rehearsal, but creates no release
+# and publishes nothing. Use it to prove the matrix without releasing.
+
+on:
+  push:
+    tags:
+      - 'v*'
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version tag (e.g., v0.1.0)'
+        required: true
+        type: string
+      dry_run:
+        description: 'Build and package only: no GitHub release, no crates.io publish'
+        default: true
+        type: boolean
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+# NOTE: VERSION is deliberately NOT set at workflow level. Workflow-level `env`
+# cannot read the `needs` context, and on the release-merge path the version
+# comes from the release-please job's tag_name output (github.ref_name is `main`
+# there). It is set per job instead.
+
+jobs:
+  # Open/refresh the release PR on every main push; merging it tags + releases.
+  release-please:
+    name: Release Please
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/heads/')
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write
+      contents: write
+    # Exported so `build` can run IN THIS SAME RUN when the release PR merge
+    # creates a release. release-please pushes the tag with GITHUB_TOKEN, and
+    # GitHub does not start workflows from token-authored pushes, so the tag arm
+    # above would never fire for it.
+    outputs:
+      releases_created: ${{ steps.release.outputs.releases_created }}
+      tag_name: ${{ steps.release.outputs.tag_name }}
+    steps:
+      - uses: googleapis/release-please-action@5c625bfb5d1ff62eadeeb3772007f7f66fdcf071 # v4
+        id: release
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+  build:
+    name: Build ${{ matrix.target }}
+    needs: release-please
+    # `always()` because release-please is SKIPPED on the tag-push and
+    # workflow_dispatch arms, which would otherwise skip this job with it.
+    if: >-
+      always() &&
+      (startsWith(github.ref, 'refs/tags/') ||
+       github.event_name == 'workflow_dispatch' ||
+       needs.release-please.outputs.releases_created == 'true')
+    runs-on: ${{ matrix.os }}
+    env:
+      VERSION: ${{ inputs.version || (startsWith(github.ref, 'refs/tags/') && github.ref_name) || needs.release-please.outputs.tag_name }}
+      DRY_RUN: ${{ inputs.dry_run == true }}
+    permissions:
+      # Each matrix leg uploads its own archive to the draft release. Only
+      # build and the finalizer mutate release assets.
+      contents: write
+      id-token: write
+      attestations: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-22.04
+          - target: aarch64-unknown-linux-gnu
+            os: ubuntu-22.04
+          - target: aarch64-apple-darwin
+            os: macos-14
+          - target: x86_64-apple-darwin
+            os: macos-15-intel
+
+    steps:
+      # ref: the resolved VERSION tag, not the trigger ref, so a binary labelled
+      # vX.Y.Z is built from vX.Y.Z. A dry run has no tag yet and builds the
+      # commit it was dispatched on.
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: ${{ inputs.dry_run == true && github.sha || env.VERSION }}
+          fetch-depth: 0
+
+      - name: Verify publishing guard
+        run: bash scripts/ci/crates-publish-guard.sh --selftest
+
+      - name: Install Rust
+        # EXACT toolchain, not `stable`, so the compiler that built a release is
+        # recorded here. Bump deliberately.
+        uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # master 2026-09-12
+        with:
+          toolchain: "1.98.1"
+          targets: ${{ matrix.target }}
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@779680da715d629ac1d338a641029a2f4372abb5 # v2
+        with:
+          key: ${{ matrix.target }}-${{ matrix.os }}
+
+      - name: Install aarch64 cross-compilation toolchain
+        if: matrix.target == 'aarch64-unknown-linux-gnu'
+        run: sudo apt-get update && sudo apt-get install -y gcc-aarch64-linux-gnu
+
+      - name: Build
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "${{ matrix.target }}" = "aarch64-unknown-linux-gnu" ]; then
+            export CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc
+          fi
+          # --locked: build exactly the committed Cargo.lock.
+          cargo build --release --locked --target "${{ matrix.target }}"
+
+      - name: Smoke-test the native binary
+        if: matrix.target == 'x86_64-unknown-linux-gnu' || matrix.target == 'aarch64-apple-darwin'
+        shell: bash
+        run: |
+          set -euo pipefail
+          "target/${{ matrix.target }}/release/sd" --version
+
+      - name: Package
+        shell: bash
+        run: |
+          set -euo pipefail
+          STAGING="sd-${{ env.VERSION }}-${{ matrix.target }}"
+          mkdir -p "$STAGING"
+          cp "target/${{ matrix.target }}/release/sd" "$STAGING/"
+          cp README.md LICENSE "$STAGING/"
+          tar czvf "${STAGING}.tar.gz" "$STAGING"
+
+      - name: Attest build provenance
+        if: env.DRY_RUN != 'true'
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: |
+            sd-${{ env.VERSION }}-${{ matrix.target }}.tar.gz
+            target/${{ matrix.target }}/release/sd
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: sd-${{ matrix.target }}
+          path: sd-${{ env.VERSION }}-${{ matrix.target }}.tar.gz
+          if-no-files-found: error
+
+      # Upload to the DRAFT release as soon as this leg is ready. The first
+      # attempt may fail transiently; the retry is not continue-on-error, so a
+      # sustained failure still fails the job. softprops/action-gh-release finds
+      # the release by tag (drafts included) and replaces same-named assets, so
+      # a retry converges the same draft.
+      - name: Publish target archive to the draft release
+        id: publish_target
+        if: env.DRY_RUN != 'true'
+        continue-on-error: true
+        uses: softprops/action-gh-release@a06a81a03ee405af7f2048a818ed3f03bbf83c7b # v2
+        with:
+          tag_name: ${{ env.VERSION }}
+          # Load-bearing: omitting this publishes the draft on the first upload.
+          draft: true
+          files: sd-${{ env.VERSION }}-${{ matrix.target }}.tar.gz
+          fail_on_unmatched_files: true
+
+      - name: Back off before retrying the upload
+        if: steps.publish_target.outcome == 'failure'
+        run: sleep 30
+
+      - name: Retry publish target archive after a transient failure
+        if: steps.publish_target.outcome == 'failure'
+        uses: softprops/action-gh-release@a06a81a03ee405af7f2048a818ed3f03bbf83c7b # v2
+        with:
+          tag_name: ${{ env.VERSION }}
+          draft: true
+          files: sd-${{ env.VERSION }}-${{ matrix.target }}.tar.gz
+          fail_on_unmatched_files: true
+
+  checksums:
+    name: Generate checksums
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          path: artifacts
+
+      - name: Generate SHA256 checksums
+        run: |
+          set -euo pipefail
+          cd artifacts
+          find . -type f -name "*.tar.gz" -exec mv {} . \;
+          find . -mindepth 1 -type d -exec rm -rf {} +
+          count=$(ls -1 *.tar.gz | wc -l)
+          test "$count" -eq 4 || { echo "expected 4 archives, found $count" >&2; exit 1; }
+          sha256sum *.tar.gz > SHA256SUMS.txt
+          sha256sum -c SHA256SUMS.txt
+          cat SHA256SUMS.txt
+
+      - name: Upload checksums
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: checksums
+          path: artifacts/SHA256SUMS.txt
+
+  release:
+    name: Create release
+    needs: [release-please, build, checksums]
+    # `always()` because release-please is SKIPPED on the tag-push and
+    # workflow_dispatch arms. The result checks keep an ordinary main push
+    # (where build is skipped) and a dry run from finalizing anything.
+    if: >-
+      always() &&
+      inputs.dry_run != true &&
+      needs.build.result == 'success' &&
+      needs.checksums.result == 'success'
+    runs-on: ubuntu-latest
+    env:
+      VERSION: ${{ inputs.version || (startsWith(github.ref, 'refs/tags/') && github.ref_name) || needs.release-please.outputs.tag_name }}
+    permissions:
+      contents: write
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          path: artifacts
+
+      - name: Prepare release assets
+        run: |
+          set -euo pipefail
+          cd artifacts
+          find . -type f -name "*.tar.gz" -exec mv {} . \;
+          find . -mindepth 1 -type d -exec rm -rf {} +
+          # One manifest over every published asset, generated after they all
+          # exist in one place.
+          sha256sum *.tar.gz > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+          ls -la
+
+      - name: Finalize GitHub Release assets and checksums
+        id: finalize_assets
+        continue-on-error: true
+        uses: softprops/action-gh-release@a06a81a03ee405af7f2048a818ed3f03bbf83c7b # v2
+        with:
+          tag_name: ${{ env.VERSION }}
+          draft: true
+          files: artifacts/*
+          generate_release_notes: true
+          fail_on_unmatched_files: true
+
+      - name: Back off before retrying finalize
+        if: steps.finalize_assets.outcome == 'failure'
+        run: sleep 30
+
+      - name: Retry finalize GitHub Release assets after a transient failure
+        if: steps.finalize_assets.outcome == 'failure'
+        uses: softprops/action-gh-release@a06a81a03ee405af7f2048a818ed3f03bbf83c7b # v2
+        with:
+          tag_name: ${{ env.VERSION }}
+          draft: true
+          files: artifacts/*
+          generate_release_notes: true
+          fail_on_unmatched_files: true
+
+      # Publish, and claim `latest` only if this really IS the latest: a slower,
+      # older release run finishing second must not demote a newer one, and a
+      # prerelease never claims `latest`.
+      - name: Publish complete GitHub Release
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${{ env.VERSION }}"
+
+          retry() {
+            local attempt
+            for attempt in 1 2 3; do
+              "$@" && return 0
+              [ "$attempt" -lt 3 ] || break
+              echo "attempt $attempt failed: $*; retrying in $((attempt * 15))s" >&2
+              sleep $((attempt * 15))
+            done
+            return 1
+          }
+
+          highest="$(retry gh release list --repo "${{ github.repository }}" \
+                       --exclude-drafts --exclude-pre-releases --limit 200 \
+                       --json tagName --jq '.[].tagName' \
+                     | sed 's/^v//' | sort -V | tail -1)"
+          mine="${version#v}"
+
+          case "$mine" in
+            *-*)
+              echo "publishing $version WITHOUT --latest: it is a PRERELEASE."
+              retry gh release edit "$version" --repo "${{ github.repository }}" --draft=false --latest=false
+              exit 0
+              ;;
+          esac
+
+          if [ -z "$highest" ] || [ "$(printf '%s\n%s\n' "$highest" "$mine" | sort -V | tail -1)" = "$mine" ]; then
+            echo "publishing $version as latest (highest published: ${highest:-none})"
+            retry gh release edit "$version" --repo "${{ github.repository }}" --draft=false --latest
+          else
+            echo "publishing $version WITHOUT --latest: $highest is already published and is newer."
+            retry gh release edit "$version" --repo "${{ github.repository }}" --draft=false --latest=false
+          fi
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  crates:
+    name: Publish to crates.io
+    needs: [release-please, build, checksums, release]
+    # On a real release this runs after the GitHub release is published. On a
+    # dry run it runs the rehearsal (guard, registry check, cargo publish
+    # --dry-run) and publishes nothing.
+    if: >-
+      always() &&
+      needs.build.result == 'success' &&
+      needs.checksums.result == 'success' &&
+      (needs.release.result == 'success' || inputs.dry_run == true)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      # crates.io Trusted Publishing: the OIDC token is exchanged for a
+      # short-lived registry token. No registry secret exists in this repo.
+      id-token: write
+    env:
+      VERSION: ${{ inputs.version || (startsWith(github.ref, 'refs/tags/') && github.ref_name) || needs.release-please.outputs.tag_name }}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: ${{ inputs.dry_run == true && github.sha || env.VERSION }}
+          fetch-depth: 0
+      - name: Verify publishing guard
+        run: bash scripts/ci/crates-publish-guard.sh --selftest
+      - name: Resolve independently declared release version
+        id: want
+        run: |
+          set -euo pipefail
+          echo "version=${VERSION#v}" >> "$GITHUB_OUTPUT"
+      - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # master 2026-09-12
+        with:
+          toolchain: "1.98.1"
+      - uses: Swatinem/rust-cache@779680da715d629ac1d338a641029a2f4372abb5 # v2
+      - uses: ./.github/actions/crates-publish
+        with:
+          expected-version: ${{ steps.want.outputs.version }}
+          dry-run: ${{ inputs.dry_run == true && 'true' || 'false' }}

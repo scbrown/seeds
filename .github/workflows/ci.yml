@@ -22,13 +22,15 @@ jobs:
       - run: cargo fmt --check
       - run: cargo clippy --all-targets -- -D warnings
       - run: cargo test
+      - name: Publishing guard refuses what it must
+        run: bash scripts/ci/crates-publish-guard.sh --selftest
       - name: Prove the built binary starts and refuses with its not-yet code
         run: |
           set -euo pipefail
           cargo build
-          ./target/debug/seeds --version
+          ./target/debug/sd --version
           rc=0
-          ./target/debug/seeds ready --json 2> ready.err || rc=$?
+          ./target/debug/sd ready --json 2> ready.err || rc=$?
           test "$rc" -eq 13 || { echo "expected exit 13, got $rc" >&2; exit 1; }
           grep -qx 'seeds: ready not yet implemented (see docs/book)' ready.err
 

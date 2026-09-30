@@ -1,0 +1,45 @@
+name: Publish to crates.io
+
+# Manual recovery lane. Automatic publishing is in release.yml because
+# GITHUB_TOKEN-authored release events do not trigger another workflow.
+#
+# Authentication is crates.io Trusted Publishing (OIDC, id-token: write). There
+# is no registry token secret in this repository, and none should be added.
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Stable version to publish, without a leading v.
+        required: true
+        type: string
+      dry_run:
+        description: Dry run (publish nothing)
+        default: true
+        type: boolean
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  publish:
+    name: Publish to crates.io
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - name: Verify publishing guard
+        run: bash scripts/ci/crates-publish-guard.sh --selftest
+      - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # master 2026-09-12
+        with:
+          toolchain: "1.98.1"
+      - uses: Swatinem/rust-cache@779680da715d629ac1d338a641029a2f4372abb5 # v2
+      - uses: ./.github/actions/crates-publish
+        with:
+          expected-version: ${{ inputs.version }}
+          dry-run: ${{ inputs.dry_run }}
