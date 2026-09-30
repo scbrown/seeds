@@ -2193,3 +2193,47 @@ fn transition_comments_land_in_the_same_tx_and_only_on_changed_seeds() {
     assert_eq!(last(&b, &z, None).as_deref(), Some("escalated"));
     assert_eq!(engine::comment_list(&b, &z, None).unwrap().len(), 3);
 }
+
+#[test]
+fn reparent_onto_an_existing_parent_loop_is_refused_not_an_infinite_walk() {
+    use seeds::backend::{Backend as _, SeedWrite, WriteBatch};
+    let mut b = backend();
+    let (x, y, z) = (mk(&mut b, "x", 1), mk(&mut b, "y", 2), mk(&mut b, "z", 3));
+    // Write a parent loop x -> y -> x below the verbs (a raw write or bad merge).
+    let snap = b.snapshot(None).unwrap();
+    let mut xs = snap.get(&x).unwrap().clone();
+    let mut ys = snap.get(&y).unwrap().clone();
+    xs.parent = Some(y.clone());
+    ys.parent = Some(x.clone());
+    let w = |s: seeds::model::Seed| {
+        let r = s.revision;
+        let mut s = s;
+        s.revision += 1;
+        SeedWrite {
+            seed: s,
+            expected_revision: Some(r),
+        }
+    };
+    b.commit(
+        &WriteBatch {
+            seeds: vec![w(xs), w(ys)],
+            source: "test".into(),
+            ..WriteBatch::default()
+        },
+        &ctx(4),
+    )
+    .unwrap();
+    // Reparenting z under x must terminate with a refusal, not hang.
+    let err = engine::update(
+        &mut b,
+        &ctx(5),
+        std::slice::from_ref(&z),
+        &UpdateReq {
+            parent: Some(x.clone()),
+            ..UpdateReq::default()
+        },
+    )
+    .unwrap_err();
+    assert_eq!(err.kind, ErrorKind::Refused);
+    assert!(err.message.contains("loop"), "{}", err.message);
+}

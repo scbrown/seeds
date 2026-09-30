@@ -2169,11 +2169,21 @@ fn reparent(snap: &Snapshot, id: &str, parent: &str) -> Result<Option<String>> {
         return Ok(None);
     }
     snap.get(parent)?;
+    // A visited set, so a parent loop ALREADY in the ledger (a raw write or a
+    // bad merge; the verbs cannot make one) is reported instead of spinning
+    // forever (wu, seeds#45 review).
+    let mut seen = BTreeSet::new();
     let mut cur = Some(parent.to_string());
     while let Some(p) = cur {
         if p == id {
             return Err(SdError::refused(format!(
                 "{parent} is {id} or one of its descendants; a seed cannot be its own ancestor"
+            )));
+        }
+        if !seen.insert(p.clone()) {
+            return Err(SdError::refused(format!(
+                "the ancestors of {parent} already loop through {p}; fix that parent chain \
+                 (sd doctor lists it) before reparenting"
             )));
         }
         cur = snap.seeds.get(&p).and_then(|s| s.parent.clone());
