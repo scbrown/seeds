@@ -28,6 +28,19 @@ pub fn mint(prefix: &str, title: &str, now: &str, taken: impl Fn(&str) -> bool) 
     }
 }
 
+/// The id of the seed a workflow step creates: `<prefix>-w<8 base36>` from a
+/// SHA-256 over (run, step, visit). Deterministic, so a retry, or a second
+/// reconcile racing the first, names the SAME seed, and the write's
+/// compare-and-set refuses the duplicate atomically. `visit` counts entries
+/// into the step, so a step the run revisits gets a new seed rather than the
+/// first, already-closed one.
+pub fn keyed(prefix: &str, run: &str, step: &str, visit: u32) -> String {
+    format!(
+        "{prefix}-w{}",
+        short(&format!("{run}\n{step}"), &visit.to_string(), 0, 8)
+    )
+}
+
 /// The next child id under `parent`: `parent.1`, `parent.2`, ...
 pub fn child(parent: &str, taken: impl Fn(&str) -> bool) -> String {
     let mut n: u64 = 1;
@@ -55,6 +68,18 @@ fn short(title: &str, now: &str, attempt: u64, len: usize) -> String {
 mod tests {
     use super::*;
     use std::collections::HashSet;
+
+    #[test]
+    fn a_keyed_id_depends_on_run_step_and_visit_only() {
+        let a = keyed("sd", "urn:shuttle:run:r1", "triage", 1);
+        assert_eq!(a, keyed("sd", "urn:shuttle:run:r1", "triage", 1));
+        assert!(a.starts_with("sd-w") && a.len() == "sd-w".len() + 8, "{a}");
+        assert_ne!(a, keyed("sd", "urn:shuttle:run:r1", "triage", 2));
+        assert_ne!(a, keyed("sd", "urn:shuttle:run:r1", "review", 1));
+        assert_ne!(a, keyed("sd", "urn:shuttle:run:r2", "triage", 1));
+        // The separator keeps (run, step) pairs from aliasing.
+        assert_ne!(keyed("sd", "a", "bc", 1), keyed("sd", "ab", "c", 1));
+    }
 
     #[test]
     fn ids_have_the_prefix_and_a_short_base36_tail() {
