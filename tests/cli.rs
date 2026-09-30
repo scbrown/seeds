@@ -435,3 +435,26 @@ fn label_verbs_take_br_argument_shapes_and_emit_br_json() {
     let o = sb.run(&["label", "add", "sd-nope", "x"]);
     assert_eq!(code(&o), 3);
 }
+
+#[test]
+fn every_write_reports_its_tx_and_at_reads_that_state_back() {
+    // sd-non.2: the tx was only in the human line, so a script could not pin.
+    let sb = Sandbox::new("write-tx");
+    let created = sb.json(&["create", "first title"]);
+    let id = created["id"].as_str().unwrap().to_string();
+    let t0 = created["tx"].as_u64().unwrap();
+    let up = sb.json(&["update", &id, "--title", "second title"]);
+    let t1 = up[0]["tx"].as_u64().unwrap();
+    assert!(t1 > t0);
+    let c = sb.json(&["comments", "add", &id, "note"]);
+    assert!(c["tx"].as_u64().unwrap() > t1);
+    let closed = sb.json(&["close", &id, "--reason", "done"]);
+    let t3 = closed[0]["tx"].as_u64().unwrap();
+    let at = |tx: u64| sb.json(&["show", &id, "--at", &tx.to_string()])[0].clone();
+    assert_eq!(at(t0)["title"], "first title");
+    assert_eq!(at(t1)["title"], "second title");
+    assert_eq!(at(t3)["status"], "closed");
+    assert_eq!(at(t1)["status"], "open");
+    // A dry run writes nothing, so it has no tx.
+    assert!(sb.json(&["create", "x", "--dry-run"])["tx"].is_null());
+}

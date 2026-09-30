@@ -19,4 +19,4 @@ sd close sd-a3f sd-b7c -r "superseded by sd-c9d"
 - A seed that is already closed is left unchanged, with a warning.
 - Closing records `closed_at`, the reason, and camayoc's `outcome: done`.
 
-**`--json`**: an array of the closed seed objects.
+**`--json`**: an array of the closed seed objects, each with the `tx`.
