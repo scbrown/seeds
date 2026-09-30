@@ -30,6 +30,7 @@
   - [blocked](verbs/blocked.md)
   - [label](verbs/label.md)
   - [epic](verbs/epic.md)
+  - [graph](verbs/graph.md)
   - [dep](verbs/dep.md)
   - [comments](verbs/comments.md)
   - [export, import, sync](verbs/sync.md)

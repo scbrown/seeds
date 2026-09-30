@@ -949,6 +949,72 @@ fn dispatch(cli: &Cli, cfg: &Resolved, ctx: &Ctx, b: &mut dyn Backend) -> Result
                 vec![],
             ))
         }
+        Command::Graph(a) => {
+            let graphs = match &a.issue {
+                Some(id) if !a.all => vec![engine::graph(b, id, a.dependencies, at)?],
+                _ => engine::graph_all(b, at)?,
+            };
+            let node = |n: &engine::GraphNode| {
+                serde_json::json!({"id": n.seed.id, "title": n.seed.title, "status": n.seed.status,
+                                   "priority": n.seed.priority, "depth": n.depth})
+            };
+            let one = |g: &engine::Graph| {
+                serde_json::json!({"nodes": g.nodes.iter().map(node).collect::<Vec<_>>(),
+                                   "edges": g.edges.iter().map(|(f, t)| [f, t]).collect::<Vec<_>>()})
+            };
+            let value = if a.all {
+                serde_json::json!({"total_components": graphs.len(),
+                                   "total_nodes": graphs.iter().map(|g| g.nodes.len()).sum::<usize>(),
+                                   "components": graphs.iter().map(|g| {
+                    let mut o = one(g);
+                    o["roots"] = serde_json::json!(g.roots);
+                    o
+                }).collect::<Vec<_>>()})
+            } else {
+                let g = &graphs[0];
+                let mut o = one(g);
+                o["root"] = serde_json::json!(g.roots[0]);
+                o["count"] = serde_json::json!(g.nodes.len());
+                o
+            };
+            if a.dot {
+                let mut lines = vec!["digraph dependencies {".to_string(),
+                    "    node [shape=box, style=\"rounded,filled\", fontname=\"sans-serif\"];".into()];
+                for g in &graphs {
+                    for n in &g.nodes {
+                        lines.push(format!(
+                            "    {:?} [label={:?}];",
+                            n.seed.id,
+                            format!("{}\n{} [P{}]", n.seed.id, n.seed.title, n.seed.priority)
+                        ));
+                    }
+                    for (f, t) in &g.edges {
+                        lines.push(format!("    {f:?} -> {t:?};"));
+                    }
+                }
+                lines.push("}".into());
+                return Ok(ok(false, Json::Null, lines.join("\n"), vec![]));
+            }
+            let mut lines = Vec::new();
+            for g in &graphs {
+                if !a.all && g.nodes.len() <= 1 {
+                    let what = if a.dependencies { "dependencies" } else { "dependents" };
+                    lines.push(format!("no {what} for {}", g.roots[0]));
+                    continue;
+                }
+                for n in &g.nodes {
+                    lines.push(if a.compact {
+                        format!("{} {} [{}] depth {}", n.seed.id, n.seed.title, n.seed.status, n.depth)
+                    } else {
+                        format!("{}{}", "  ".repeat(n.depth), output::seed_line(&n.seed))
+                    });
+                }
+                if a.all {
+                    lines.push(String::new());
+                }
+            }
+            Ok(ok(json, value, lines.join("\n").trim_end().to_string(), vec![]))
+        }
         Command::Stale(a) => {
             let seeds = engine::stale(b, ctx, a.days, &a.status, at)?;
             let text = if seeds.is_empty() {

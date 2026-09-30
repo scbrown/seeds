@@ -19,6 +19,7 @@
 | `delete` | yes (tombstone) | [delete](delete.md) |
 | `blocked` | no | [blocked](blocked.md) |
 | `label add`, `label remove`, `label rename`, `label list`, `label list-all` | add/remove/rename | [label](label.md) |
+| `graph` | no | [graph](graph.md) |
 | `epic status`, `epic close-eligible` | close-eligible | [epic](epic.md) |
 | `dep add`, `dep remove`, `dep list` | add/remove | [dep](dep.md) |
 | `comments add`, `comments list` | add | [comments](comments.md) |

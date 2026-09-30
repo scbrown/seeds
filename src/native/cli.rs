@@ -83,6 +83,8 @@ pub enum Command {
     Audit(MappedArgs),
     /// The automation docs are the book and `sd <verb> --help`
     RobotDocs(MappedArgs),
+    /// What a seed unblocks (or, with --dependencies, what it waits on)
+    Graph(GraphArgs),
     /// Count seeds (open ones by default)
     Count(CountArgs),
     /// Update fields on one or more seeds
@@ -449,6 +451,26 @@ pub struct MappedArgs {
     pub rest: Vec<String>,
 }
 
+/// `sd graph`.
+#[derive(Debug, Args)]
+pub struct GraphArgs {
+    /// The root seed (required unless --all)
+    #[arg(required_unless_present = "all")]
+    pub issue: Option<String>,
+    /// Every open, in-progress or blocked seed, as connected components
+    #[arg(long, conflicts_with = "issue")]
+    pub all: bool,
+    /// Walk what the seed waits on instead of what waits on it
+    #[arg(long)]
+    pub dependencies: bool,
+    /// One line per seed
+    #[arg(long)]
+    pub compact: bool,
+    /// Graphviz DOT (pipe to `dot -Tsvg`); overrides text and --json
+    #[arg(long)]
+    pub dot: bool,
+}
+
 /// `sd count`.
 #[derive(Debug, Args)]
 pub struct CountArgs {
@@ -768,6 +790,7 @@ impl Command {
             | Command::Ready(_)
             | Command::Blocked(_)
             | Command::Stale(_)
+            | Command::Graph(_)
             | Command::Stats(_)
             | Command::Query(_)
             | Command::Upgrade(_)
@@ -789,6 +812,7 @@ impl Command {
             Command::Ready(_) => "ready",
             Command::Blocked(_) => "blocked",
             Command::Stale(_) => "stale",
+            Command::Graph(_) => "graph",
             Command::Stats(_) => "stats",
             Command::Q(_) => "q",
             Command::Query(_) => "query",
@@ -849,6 +873,12 @@ mod tests {
         (&["list", "--status", "open", "--limit", "0"], "list", false),
         (&["ready", "--json", "--limit", "5"], "ready", false),
         (&["count", "--by", "status"], "count", false),
+        (
+            &["graph", "s-1", "--dependencies", "--compact"],
+            "graph",
+            false,
+        ),
+        (&["graph", "--all", "--dot"], "graph", false),
         (&["stats", "--by-type", "--by-label"], "stats", false),
         (&["status"], "stats", false),
         (&["q", "a", "quick", "one", "-p", "1"], "q", true),
