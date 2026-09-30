@@ -290,6 +290,11 @@ pub fn diff_fields(a: &Seed, b: &Seed, a_name: &str, b_name: &str) -> Vec<String
         format!("{:?}", b.close_reason),
     );
     f(
+        "outcome",
+        format!("{:?}", a.outcome),
+        format!("{:?}", b.outcome),
+    );
+    f(
         "defer_until",
         format!("{:?}", a.defer_until),
         format!("{:?}", b.defer_until),
@@ -379,16 +384,17 @@ fn merge_seed(base: Option<&Seed>, l: &Seed, r: &Seed, sides: Sides) -> (Seed, V
             s.status.clone(),
             s.closed_at.clone(),
             s.close_reason.clone(),
+            s.outcome.clone(),
         )
     };
-    let (status, closed_at, close_reason) = pick(
+    let (status, closed_at, close_reason, outcome) = pick(
         "status",
         base.map(status_group).as_ref(),
         &status_group(l),
         &status_group(r),
         &mut c,
         sides,
-        |(st, _, reason)| match reason {
+        |(st, _, reason, _)| match reason {
             Some(r) => format!("{st:?} (reason {r:?})"),
             None => format!("{st:?}"),
         },
@@ -472,6 +478,7 @@ fn merge_seed(base: Option<&Seed>, l: &Seed, r: &Seed, sides: Sides) -> (Seed, V
         updated_at: l.updated_at.clone().max(r.updated_at.clone()),
         closed_at,
         close_reason,
+        outcome,
         defer_until: pick(
             "defer_until",
             base.map(|b| &b.defer_until),

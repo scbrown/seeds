@@ -268,6 +268,39 @@ fn concurrent_creates_of_one_workflow_step_make_one_seed() {
 }
 
 #[test]
+fn close_records_how_a_seed_ended() {
+    let sb = Sandbox::new("outcome");
+    let a = sb.ok(&["create", "a", "--silent"]).trim().to_string();
+    let b = sb.ok(&["create", "b", "--silent"]).trim().to_string();
+    assert_eq!(
+        sb.json(&["show", &a])[0]["outcome"],
+        Value::Null,
+        "open: no outcome"
+    );
+    sb.ok(&["close", &a, "--reason", "shipped"]);
+    assert_eq!(sb.json(&["show", &a])[0]["outcome"], "done", "the default");
+    sb.ok(&[
+        "close",
+        &b,
+        "--reason",
+        "not needed",
+        "--outcome",
+        "abandoned",
+    ]);
+    assert_eq!(sb.json(&["show", &b])[0]["outcome"], "abandoned");
+    // An unknown outcome is a usage error and writes nothing.
+    let c = sb.ok(&["create", "c", "--silent"]).trim().to_string();
+    let bad = sb.run(&["close", &c, "--outcome", "wontdo"]);
+    assert_eq!(bad.status.code(), Some(2));
+    assert_eq!(sb.json(&["show", &c])[0]["status"], "open");
+    // Reopening clears it; closing again without --outcome is done again.
+    sb.ok(&["update", &b, "--status", "open"]);
+    assert_eq!(sb.json(&["show", &b])[0]["outcome"], Value::Null);
+    sb.ok(&["close", &b, "--reason", "after all"]);
+    assert_eq!(sb.json(&["show", &b])[0]["outcome"], "done");
+}
+
+#[test]
 fn concurrent_label_writes_from_separate_processes_lose_nothing() {
     let sb = Sandbox::new("concurrent-labels");
     let id = sb
