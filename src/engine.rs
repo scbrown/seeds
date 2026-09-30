@@ -1342,26 +1342,100 @@ pub struct ReadyReq {
     pub filter: Filter,
     /// `None` = every ready seed (the default: never silently short).
     pub limit: Option<usize>,
+    /// `hybrid` (P0/P1 first, then by age), `priority` or `oldest`; `None` is
+    /// `priority`, sd's order before `--sort` existed.
+    pub sort: Option<String>,
+    /// Also list deferred seeds: status `deferred`, or a defer date not yet reached.
+    pub include_deferred: bool,
+    /// With `filter.parent`: every descendant, not only direct children.
+    pub recursive: bool,
 }
+
+/// The `sd ready --sort` policies (br's).
+pub const READY_SORTS: &[&str] = &["hybrid", "priority", "oldest"];
 
 /// `sd ready`: open seeds with no open `blocks` dependency and no future defer
 /// date, as of `at`. Unlimited unless `limit` is given; the page says when it
 /// was cut.
 pub fn ready(b: &dyn Backend, ctx: &Ctx, req: &ReadyReq, at: Option<u64>) -> Result<Page> {
+    let sort = req.sort.as_deref().unwrap_or("priority");
+    if !READY_SORTS.contains(&sort) {
+        return Err(SdError::usage(format!(
+            "unknown sort {sort:?}; expected one of {}",
+            READY_SORTS.join(", ")
+        )));
+    }
     let mut filter = req.filter.clone();
     filter.status = None;
+    // --recursive widens --parent to a descendant set; without a parent it
+    // would do nothing, so it is refused rather than ignored.
+    let scope = match (&filter.parent, req.recursive) {
+        (None, true) => {
+            return Err(SdError::usage(
+                "--recursive needs --parent (or use --epic <id>)",
+            ))
+        }
+        (Some(_), true) => filter.parent.take(),
+        _ => None,
+    };
     let f = filter.compile()?;
     let snap = b.snapshot(at)?;
-    let ids = b.ready_ids(at)?;
+    let under = match &scope {
+        Some(p) => {
+            snap.get(p)?;
+            Some(descendants(&snap, p))
+        }
+        None => None,
+    };
+    let mut ids = b.ready_ids(at)?;
+    if req.include_deferred {
+        // Status `deferred` is not open, so the backend's ready query never
+        // returns it; the unblocked ones are added here.
+        ids.extend(
+            snap.seeds
+                .values()
+                .filter(|s| s.status == "deferred" && snap.open_blockers(s).is_empty())
+                .map(|s| s.id.clone()),
+        );
+    }
     let mut seeds: Vec<Seed> = ids
         .iter()
         .filter_map(|id| snap.seeds.get(id))
-        .filter(|s| !is_deferred(s, &ctx.now))
+        .filter(|s| req.include_deferred || !is_deferred(s, &ctx.now))
+        .filter(|s| under.as_ref().is_none_or(|u| u.contains(&s.id)))
         .filter(|s| f.matches(s))
         .cloned()
         .collect();
-    sort_seeds(&mut seeds, Some("priority"))?;
+    match sort {
+        "hybrid" => seeds.sort_by(|a, b| {
+            (a.priority > 1, &a.created_at, &a.id).cmp(&(b.priority > 1, &b.created_at, &b.id))
+        }),
+        "oldest" => sort_seeds(&mut seeds, Some("created"))?,
+        _ => sort_seeds(&mut seeds, Some("priority"))?,
+    }
     Ok(page(seeds, req.limit.unwrap_or(0), &snap))
+}
+
+/// Every seed below `root` in the parent chain, not `root` itself. A visited
+/// set keeps a parent loop already in the ledger from repeating (br's
+/// `--epic` is cycle-safe too).
+fn descendants(snap: &Snapshot, root: &str) -> BTreeSet<String> {
+    let mut children: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
+    for s in snap.seeds.values() {
+        if let Some(p) = &s.parent {
+            children.entry(p.as_str()).or_default().push(s.id.as_str());
+        }
+    }
+    let mut seen = BTreeSet::new();
+    let mut todo = vec![root];
+    while let Some(p) = todo.pop() {
+        for &c in children.get(p).into_iter().flatten() {
+            if c != root && seen.insert(c.to_string()) {
+                todo.push(c);
+            }
+        }
+    }
+    seen
 }
 
 /// The ready definition computed directly over a snapshot, independent of the
