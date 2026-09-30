@@ -736,6 +736,7 @@ pub fn run_with(cli: &Cli, cfg: &Resolved) -> Result<Outcome> {
         now: now(),
         actor: actor(cli),
         prefix: cfg.prefix.clone(),
+        claims: claims(cli)?,
     };
     if cli.command.writes() && cli.at.is_some() {
         return Err(SdError::usage(
@@ -1002,6 +1003,7 @@ fn pendant_of(b: &dyn Backend) -> Result<pendant::Pendant> {
         now: now(),
         actor: "seeds".into(),
         prefix: String::new(),
+        claims: Default::default(),
     };
     sync::import(&mut scratch, &ctx, &snap, None, true)?;
     pendant::export(&scratch)
@@ -1305,6 +1307,7 @@ fn merge_driver(a: &cli::MergeDriverArgs) -> Result<Outcome> {
         now: now(),
         actor: "seeds".into(),
         prefix: String::new(),
+        claims: Default::default(),
     };
     sync::import(&mut scratch, &ctx, &m.merged, None, true)?;
     let merged = pendant::export(&scratch)?;
@@ -1367,6 +1370,33 @@ fn split_csv(s: &Option<String>) -> Vec<String> {
                 .collect()
         })
         .unwrap_or_default()
+}
+
+/// The writer's self-asserted attribution: `--agent-name`/`--harness`/`--model`,
+/// else `SEEDS_AGENT_NAME`/`SEEDS_HARNESS`/`SEEDS_MODEL`, else br's
+/// `BR_AGENT_NAME`/`BR_HARNESS`/`BR_MODEL` (so a harness that already exports
+/// them for br attributes sd writes too). A flag on a verb that writes nothing
+/// would record nothing, so it is refused; the environment is ambient and is
+/// simply unused by reads.
+fn claims(cli: &Cli) -> Result<crate::backend::Claims> {
+    let flags = [&cli.agent_name, &cli.harness, &cli.model];
+    if !cli.command.writes() && flags.iter().any(|f| f.is_some()) {
+        return Err(SdError::usage(
+            "--agent-name/--harness/--model attribute a write; this verb writes nothing",
+        ));
+    }
+    let pick = |flag: &Option<String>, ours: &str, br: &str| {
+        flag.clone()
+            .or_else(|| std::env::var(ours).ok())
+            .or_else(|| std::env::var(br).ok())
+            .map(|v| v.trim().to_string())
+            .filter(|v| !v.is_empty())
+    };
+    Ok(crate::backend::Claims {
+        agent_name: pick(&cli.agent_name, "SEEDS_AGENT_NAME", "BR_AGENT_NAME"),
+        harness: pick(&cli.harness, "SEEDS_HARNESS", "BR_HARNESS"),
+        model: pick(&cli.model, "SEEDS_MODEL", "BR_MODEL"),
+    })
 }
 
 /// `--format csv` is list's and search's, `--fields` shapes only it, and it
@@ -1706,6 +1736,14 @@ fn dispatch(cli: &Cli, cfg: &Resolved, ctx: &Ctx, b: &mut dyn Backend) -> Result
                     let mut o = e.seed.to_json();
                     o["tx"] = serde_json::json!(e.tx);
                     o["changes"] = serde_json::json!(e.changes);
+                    if let Some(c) = &e.claims {
+                        o["claimed"] = serde_json::json!({
+                            "agent_name": c.agent_name,
+                            "harness": c.harness,
+                            "model": c.model,
+                            "source_kind": "declared",
+                        });
+                    }
                     o
                 }).collect::<Vec<_>>(),
             });
@@ -1719,6 +1757,17 @@ fn dispatch(cli: &Cli, cfg: &Resolved, ctx: &Ctx, b: &mut dyn Backend) -> Result
                     lines.push("  created".into());
                 }
                 lines.extend(e.changes.iter().map(|c| format!("  {c}")));
+                if let Some(c) = &e.claims {
+                    let parts: Vec<String> = [
+                        ("agent", &c.agent_name),
+                        ("harness", &c.harness),
+                        ("model", &c.model),
+                    ]
+                    .iter()
+                    .filter_map(|(k, v)| v.as_ref().map(|v| format!("{k}={v}")))
+                    .collect();
+                    lines.push(format!("  claimed (self-asserted, unverified): {}", parts.join(" ")));
+                }
             }
             Ok(ok(json, value, lines.join("\n"), vec![]))
         }
@@ -2506,6 +2555,7 @@ mod doctor_tests {
             now: "2026-09-30T00:00:00Z".into(),
             actor: "t".into(),
             prefix: "sd".into(),
+            claims: Default::default(),
         };
         let mut b = QuipuBackend::in_memory("https://seeds.local/project/doctor").unwrap();
         b.commit(

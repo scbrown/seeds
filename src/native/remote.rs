@@ -442,13 +442,7 @@ pub fn secure_enough(url: &str) -> bool {
 }
 
 /// The named graph a project's write provenance goes to (never exported).
-pub fn provenance_graph(graph: &str) -> String {
-    if graph.contains('#') {
-        format!("{graph}-seeds-provenance")
-    } else {
-        format!("{graph}#seeds-provenance")
-    }
-}
+pub use crate::vocab::provenance_graph;
 
 fn term(t: &Json) -> Option<Obj> {
     let value = t["value"].as_str()?.to_string();
@@ -493,6 +487,11 @@ impl Backend for RemoteBackend {
         ids.sort();
         ids.dedup();
         Ok(ids)
+    }
+
+    fn claims_of(&self, id: &str) -> Result<Vec<(u64, crate::backend::Claims)>> {
+        let rows = self.select(&vocab::claims_query(&self.graph, id), None)?;
+        Ok(crate::backend::claims_rows(id, rows))
     }
 
     fn commit(&mut self, batch: &WriteBatch, ctx: &Ctx) -> Result<u64> {
@@ -590,25 +589,12 @@ impl Backend for RemoteBackend {
                 format!("{}\n{}\n{update}{insert}{delete}", ctx.now, ctx.actor).as_bytes()
             )[7..31]
         );
-        let mut prov = format!(
-            "<{write_iri}> <{}> <{}> ; <{}> \"{}\" ; <{}> \"{}\" ; <{}> \"{}\" ",
-            vocab::RDF_TYPE,
-            vocab::seeds("Write"),
-            vocab::seeds("actor"),
-            escape_literal(&ctx.actor),
-            vocab::seeds("source"),
-            escape_literal(&batch.source),
-            vocab::seeds("at"),
-            escape_literal(&ctx.now),
-        );
-        for id in &written {
-            prov.push_str(&format!(
-                "; <{}> <{}> ",
-                vocab::seeds("wrote"),
-                vocab::item_iri(id)
-            ));
+        let mut prov = String::new();
+        for (iri, facts) in crate::backend::write_record(&write_iri, batch, ctx) {
+            for (p, o) in facts {
+                prov.push_str(&format!("<{iri}> <{p}> {} . ", sparql_obj(&o)));
+            }
         }
-        prov.push('.');
         update.push_str(&format!(
             "INSERT {{ GRAPH <{g}> {{ {insert}}} GRAPH <{}> {{ {prov} }} }}\n",
             provenance_graph(g)

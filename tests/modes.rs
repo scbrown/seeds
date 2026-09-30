@@ -63,6 +63,12 @@ impl Env {
             "SEEDS_PENDANT_DIR",
             "SEEDS_SYNC_REMOTE",
             "SEEDS_QUIPU_TOKEN",
+            "SEEDS_AGENT_NAME",
+            "SEEDS_HARNESS",
+            "SEEDS_MODEL",
+            "BR_AGENT_NAME",
+            "BR_HARNESS",
+            "BR_MODEL",
         ] {
             c.env_remove(k);
         }
@@ -96,32 +102,70 @@ impl Env {
     }
 
     /// Start a quipu server on a free port, if the test may.
+    ///
+    /// Ready means an HTTP 200 from `/health`, not a TCP connect: a loopback
+    /// connect to a port nobody listens on yet can pick that same port as its
+    /// source and connect to ITSELF, so "connected" happened while our server
+    /// was still starting, and the test's first request was refused. A
+    /// self-connected socket only echoes the request back, never a status line.
+    /// And the probe port was released before the server bound it, so if our
+    /// child exits (the port was taken), try again on a fresh one.
     fn start_server(&mut self) -> Option<String> {
         let bin = std::env::var("SEEDS_TEST_QUIPU_SERVER").ok()?;
-        let port = std::net::TcpListener::bind("127.0.0.1:0")
-            .unwrap()
-            .local_addr()
-            .unwrap()
-            .port();
-        let dir = self.dir(&format!("server{}", self.servers.len()));
-        let child = Command::new(bin)
-            .args(["--db", dir.join("q.db").to_str().unwrap()])
-            .args(["--bind", &format!("127.0.0.1:{port}")])
-            .current_dir(&dir)
-            .env("HOME", &dir)
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .spawn()
-            .unwrap();
-        self.servers.push(child);
-        for _ in 0..100 {
-            if std::net::TcpStream::connect(("127.0.0.1", port)).is_ok() {
+        for attempt in 0..5 {
+            let port = std::net::TcpListener::bind("127.0.0.1:0")
+                .unwrap()
+                .local_addr()
+                .unwrap()
+                .port();
+            let dir = self.dir(&format!("server{}-{attempt}", self.servers.len()));
+            let mut child = Command::new(&bin)
+                .args(["--db", dir.join("q.db").to_str().unwrap()])
+                .args(["--bind", &format!("127.0.0.1:{port}")])
+                .current_dir(&dir)
+                .env("HOME", &dir)
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .spawn()
+                .unwrap();
+            let mut up = false;
+            for _ in 0..100 {
+                if !matches!(child.try_wait(), Ok(None)) {
+                    break; // ours exited: the port was taken
+                }
+                if health_ok(port) && matches!(child.try_wait(), Ok(None)) {
+                    up = true;
+                    break;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(100));
+            }
+            if up {
+                self.servers.push(child);
                 return Some(format!("http://127.0.0.1:{port}"));
             }
-            std::thread::sleep(std::time::Duration::from_millis(100));
+            let _ = child.kill();
+            let _ = child.wait();
         }
         panic!("quipu-server did not start");
     }
+}
+
+/// Whether `GET /health` on the port returns an HTTP 200 status line.
+fn health_ok(port: u16) -> bool {
+    use std::io::{Read, Write};
+    let Ok(mut c) = std::net::TcpStream::connect(("127.0.0.1", port)) else {
+        return false;
+    };
+    let _ = c.set_read_timeout(Some(std::time::Duration::from_millis(500)));
+    if c.write_all(b"GET /health HTTP/1.0\r\nHost: 127.0.0.1\r\n\r\n")
+        .is_err()
+    {
+        return false;
+    }
+    let mut buf = [0u8; 64];
+    let n = c.read(&mut buf).unwrap_or(0);
+    let head = String::from_utf8_lossy(&buf[..n]);
+    head.starts_with("HTTP/1.") && head.contains(" 200")
 }
 
 impl Drop for Env {
@@ -880,4 +924,65 @@ fn a_remote_create_says_created_not_exists() {
     let keyed = ["create", "step", "--workflow-run", "r1", "--step", "build"];
     assert!(env.ok(&work, &keyed, &remote).starts_with("created "));
     assert!(env.ok(&work, &keyed, &remote).starts_with("exists "));
+}
+
+// wu's conditions on attribution (aegis-w3k75d.13): the claims are identical in
+// local and remote modes, flags beat SEEDS_* beats br's BR_* environment, a
+// claim is recorded as `declared`, and a read verb refuses the flags.
+#[test]
+fn attribution_claims_read_back_identically_in_local_and_remote_modes() {
+    let mut env = Env::new("claims");
+    let run = |env: &Env, dir: &Path, extra: &[(&str, &str)]| -> Value {
+        let e = |more: &[(&'static str, &'static str)]| -> Vec<(&str, &str)> {
+            extra.iter().chain(more.iter()).copied().collect()
+        };
+        let id = env
+            .ok(
+                dir,
+                &[
+                    "create",
+                    "x",
+                    "--silent",
+                    "--agent-name",
+                    "gennaro",
+                    "--harness",
+                    "claude-code",
+                ],
+                &e(&[]),
+            )
+            .trim()
+            .to_string();
+        env.ok(dir, &["update", &id, "-p", "1"], &e(&[]));
+        env.ok(
+            dir,
+            &["update", &id, "-p", "2"],
+            &e(&[("BR_MODEL", "br-model"), ("SEEDS_MODEL", "seeds-model")]),
+        );
+        let h: Value =
+            serde_json::from_str(&env.ok(dir, &["history", &id, "--json"], &e(&[]))).unwrap();
+        Value::Array(
+            h["versions"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|v| v["claimed"].clone())
+                .collect(),
+        )
+    };
+    let want = serde_json::json!([
+        {"agent_name": "gennaro", "harness": "claude-code", "model": null, "source_kind": "declared"},
+        null,
+        {"agent_name": null, "harness": null, "model": "seeds-model", "source_kind": "declared"},
+    ]);
+    let local = env.dir("local");
+    assert_eq!(run(&env, &local, &[]), want);
+    let o = env.sd(&local, &["list", "--model", "m"], &[]);
+    assert_eq!(o.status.code(), Some(2), "a read verb refuses --model");
+
+    let Some(url) = env.start_server() else {
+        eprintln!("SKIPPED (remote half): set SEEDS_TEST_QUIPU_SERVER to a quipu-server binary");
+        return;
+    };
+    let work = env.dir("remote-work");
+    assert_eq!(run(&env, &work, &[("SEEDS_QUIPU_URL", url.as_str())]), want);
 }

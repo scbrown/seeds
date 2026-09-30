@@ -7,7 +7,7 @@
 //! reads a clock or the filesystem on its own behalf; time arrives in [`Ctx`].
 
 use crate::error::Result;
-use crate::model::{Comment, Seed, Snapshot};
+use crate::model::{Comment, Fact, Obj, Seed, Snapshot};
 
 /// Who is acting, and when. Injected by the caller: the core never reads a
 /// clock, so it runs unchanged on wasm32.
@@ -19,6 +19,87 @@ pub struct Ctx {
     pub actor: String,
     /// The id prefix for new seeds.
     pub prefix: String,
+    /// What the writer SAYS it is (br's tier-1 attribution). Self-asserted and
+    /// unverified: recorded as `declared`, never as the actor.
+    pub claims: Claims,
+}
+
+/// Self-asserted attribution for a write: `--agent-name`, `--harness`,
+/// `--model`. Nothing checks it, so it is stored as a claim beside the write's
+/// actor and never stands in for it (or for a signed principal).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Claims {
+    /// The agent's name, as it gives it.
+    pub agent_name: Option<String>,
+    /// The harness it says it runs in.
+    pub harness: Option<String>,
+    /// The model it says it is.
+    pub model: Option<String>,
+}
+
+impl Claims {
+    /// Whether no claim was made.
+    pub fn is_empty(&self) -> bool {
+        self.agent_name.is_none() && self.harness.is_none() && self.model.is_none()
+    }
+}
+
+/// The provenance record for one write, identical in every storage mode: a
+/// `seeds:Write` node (the actor, source, time and every seed written) and,
+/// when the writer made claims, a `seeds:AttributionClaim` node tagged
+/// `aegis:sourceKind "declared"`. Written to [`crate::vocab::provenance_graph`],
+/// which snapshots and exports never read.
+pub fn write_record(write_iri: &str, batch: &WriteBatch, ctx: &Ctx) -> Vec<(String, Vec<Fact>)> {
+    use crate::vocab::{self, AEGIS, RDF_TYPE};
+    let s = |t: &str| Obj::Str(t.to_string());
+    let mut w: Vec<Fact> = vec![
+        (RDF_TYPE.into(), Obj::Iri(vocab::seeds("Write"))),
+        (vocab::seeds("actor"), s(&ctx.actor)),
+        (vocab::seeds("source"), s(&batch.source)),
+        (vocab::seeds("at"), s(&ctx.now)),
+    ];
+    let written = batch
+        .seeds
+        .iter()
+        .map(|x| x.seed.id.clone())
+        .chain(batch.delete_seeds.iter().map(|(id, _)| id.clone()))
+        .chain(batch.comments.iter().map(|c| c.seed.clone()));
+    for id in written {
+        let f = (vocab::seeds("wrote"), Obj::Iri(vocab::item_iri(&id)));
+        if !w.contains(&f) {
+            w.push(f);
+        }
+    }
+    // Each seed version this write produced, as `<id>@<revision>`, so a claim
+    // is matched to exactly the version it wrote (a timestamp is not unique:
+    // several writes land in one second).
+    for x in &batch.seeds {
+        w.push((
+            vocab::seeds("version"),
+            s(&format!("{}@{}", x.seed.id, x.seed.revision)),
+        ));
+    }
+    let mut out = Vec::new();
+    if !ctx.claims.is_empty() {
+        let claim_iri = format!("{write_iri}-claim");
+        w.push((vocab::seeds("claimed"), Obj::Iri(claim_iri.clone())));
+        let mut c: Vec<Fact> = vec![
+            (RDF_TYPE.into(), Obj::Iri(vocab::seeds("AttributionClaim"))),
+            (format!("{AEGIS}sourceKind"), s("declared")),
+        ];
+        for (p, v) in [
+            ("agentName", &ctx.claims.agent_name),
+            ("harness", &ctx.claims.harness),
+            ("model", &ctx.claims.model),
+        ] {
+            if let Some(v) = v {
+                c.push((vocab::seeds(p), s(v)));
+            }
+        }
+        out.push((claim_iri, c));
+    }
+    out.insert(0, (write_iri.to_string(), w));
+    out
 }
 
 /// One seed to write, with the revision the writer read it at.
@@ -76,4 +157,40 @@ pub trait Backend {
     /// first. Returns the transaction id, or the current head when the batch
     /// changed nothing.
     fn commit(&mut self, batch: &WriteBatch, ctx: &Ctx) -> Result<u64>;
+
+    /// The attribution claims recorded on writes that produced a version of
+    /// seed `id`, as `(revision, claims)` ([`crate::vocab::claims_query`]).
+    fn claims_of(&self, id: &str) -> Result<Vec<(u64, Claims)>>;
+}
+
+/// Rows of [`crate::vocab::claims_query`] for seed `id` as `(revision,
+/// claims)`, by revision.
+pub fn claims_rows(
+    id: &str,
+    rows: Vec<std::collections::BTreeMap<String, Obj>>,
+) -> Vec<(u64, Claims)> {
+    let get = |r: &std::collections::BTreeMap<String, Obj>, k: &str| match r.get(k) {
+        Some(Obj::Str(v)) => Some(v.clone()),
+        _ => None,
+    };
+    let mut out: Vec<(u64, Claims)> = rows
+        .iter()
+        .filter_map(|r| {
+            let rev = get(r, "version")?
+                .strip_prefix(&format!("{id}@"))?
+                .parse()
+                .ok()?;
+            Some((
+                rev,
+                Claims {
+                    agent_name: get(r, "agent"),
+                    harness: get(r, "harness"),
+                    model: get(r, "model"),
+                },
+            ))
+        })
+        .collect();
+    out.sort_by_key(|a| a.0);
+    out.dedup();
+    out
 }

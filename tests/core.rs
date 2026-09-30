@@ -22,6 +22,7 @@ fn ctx(n: u32) -> Ctx {
         now: format!("2026-09-30T00:00:{:02}Z", n % 60),
         actor: "tester".into(),
         prefix: "sd".into(),
+        claims: Default::default(),
     }
 }
 
@@ -919,6 +920,9 @@ impl Backend for LandsThenErrors<'_> {
     fn ready_ids(&self, at: Option<u64>) -> seeds::error::Result<Vec<String>> {
         self.inner.ready_ids(at)
     }
+    fn claims_of(&self, id: &str) -> seeds::error::Result<Vec<(u64, seeds::backend::Claims)>> {
+        self.inner.claims_of(id)
+    }
     fn commit(&mut self, batch: &WriteBatch, ctx: &Ctx) -> seeds::error::Result<u64> {
         let tx = self.inner.commit(batch, ctx)?;
         if self.fail_next {
@@ -1272,6 +1276,9 @@ impl Backend for RacedBackend {
     }
     fn ready_ids(&self, at: Option<u64>) -> seeds::error::Result<Vec<String>> {
         self.inner.ready_ids(at)
+    }
+    fn claims_of(&self, id: &str) -> seeds::error::Result<Vec<(u64, seeds::backend::Claims)>> {
+        self.inner.claims_of(id)
     }
     fn commit(&mut self, batch: &WriteBatch, ctx: &Ctx) -> seeds::error::Result<u64> {
         if !self.raced {
@@ -2341,4 +2348,69 @@ fn ready_sorts_includes_deferred_and_scopes_to_descendants_like_br() {
     })
     .unwrap_err();
     assert_eq!(lone.kind, ErrorKind::Usage);
+}
+
+// wu's conditions on attribution (aegis-w3k75d.13): a claim is self-asserted
+// and recorded beside the actor, never as it; it attaches to exactly the
+// version its write produced, even when several writes share one second; and
+// it never enters the ledger.
+#[test]
+fn attribution_claims_attach_to_their_own_version_and_never_to_the_ledger() {
+    use seeds::backend::Claims;
+    let claimed = |m: &str| Ctx {
+        claims: Claims {
+            agent_name: Some("gennaro".into()),
+            model: Some(m.into()),
+            ..Claims::default()
+        },
+        ..ctx(1)
+    };
+    let mut b = backend();
+    let id = engine::create(
+        &mut b,
+        &claimed("m1"),
+        &CreateReq {
+            title: "x".into(),
+            ..CreateReq::default()
+        },
+    )
+    .unwrap()
+    .0
+    .id;
+    // Same instant as the create: a timestamp cannot tell these apart.
+    let bump = |b: &mut QuipuBackend, c: &Ctx, p: &str| {
+        engine::update(
+            b,
+            c,
+            std::slice::from_ref(&id),
+            &UpdateReq {
+                priority: Some(p.into()),
+                ..UpdateReq::default()
+            },
+        )
+        .unwrap();
+    };
+    bump(&mut b, &ctx(1), "1");
+    bump(&mut b, &claimed("m3"), "2");
+    let h = engine::history(&b, &id).unwrap();
+    let got: Vec<Option<String>> = h
+        .iter()
+        .map(|e| e.claims.as_ref().and_then(|c| c.model.clone()))
+        .collect();
+    assert_eq!(got, [Some("m1".into()), None, Some("m3".into())]);
+    assert_eq!(
+        h[0].claims.as_ref().unwrap().agent_name.as_deref(),
+        Some("gennaro")
+    );
+    // The actor is untouched by a claim.
+    assert_eq!(h[0].seed.created_by.as_deref(), Some("tester"));
+    // The ledger (every exported file) holds no claim.
+    let files = pendant::export(&b).unwrap().files;
+    assert!(
+        files.values().any(|f| f.contains(&id)),
+        "control: export has the seed"
+    );
+    assert!(files
+        .values()
+        .all(|f| !f.contains("m1") && !f.contains("m3") && !f.contains("gennaro")));
 }

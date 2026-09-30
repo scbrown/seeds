@@ -46,6 +46,18 @@ pub struct Cli {
     #[arg(long, global = true, value_name = "TX")]
     pub at: Option<u64>,
 
+    /// Claimed agent name for this write (self-asserted, recorded as declared) [env: SEEDS_AGENT_NAME, BR_AGENT_NAME]
+    #[arg(long, global = true, value_name = "NAME")]
+    pub agent_name: Option<String>,
+
+    /// Claimed harness for this write (self-asserted, recorded as declared) [env: SEEDS_HARNESS, BR_HARNESS]
+    #[arg(long, global = true)]
+    pub harness: Option<String>,
+
+    /// Claimed model for this write (self-asserted, recorded as declared) [env: SEEDS_MODEL, BR_MODEL]
+    #[arg(long, global = true)]
+    pub model: Option<String>,
+
     /// Quiet: print nothing on success (the exit code is the answer); errors still print
     #[arg(short, long, global = true)]
     pub quiet: bool,
