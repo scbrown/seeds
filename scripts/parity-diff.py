@@ -63,6 +63,7 @@ NOT_APPLICABLE = {
     "--wrap": "sd never truncates text output, so lines are already whole",
     "--no-wrap": "sd never truncates or wraps text output",
     "--verbose": "sd writes no log output for a level to raise",
+    "--hard": "prunes tombstones from br's JSONL; sd keeps tombstones in quipu history by design",
 }
 
 
