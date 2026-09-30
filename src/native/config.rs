@@ -30,6 +30,12 @@
 //! [project]
 //! prefix = "sd"                      # id prefix for new seeds
 //! # graph = "https://seeds.local/project/sd"  # the project's named graph
+//!
+//! [pendant]
+//! # dir = ".seeds/pendant"           # mode 1: keep the ledger in the repo
+//!
+//! [sync]
+//! # remote = "https://quipu.example.org"  # mode 3: what `sd sync` exchanges with
 //! ```
 
 use std::path::{Path, PathBuf};
@@ -58,6 +64,29 @@ pub struct FileConfig {
     /// `[project]`: ids and the named graph.
     #[serde(default)]
     pub project: ProjectSection,
+    /// `[pendant]`: a repo-local copy of the ledger (mode 1).
+    #[serde(default)]
+    pub pendant: PendantSection,
+    /// `[sync]`: the remote `sd sync` exchanges with (mode 3).
+    #[serde(default)]
+    pub sync: SyncSection,
+}
+
+/// `[pendant]`.
+#[derive(Debug, Default, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct PendantSection {
+    /// The pendant directory, e.g. `.seeds/pendant`. Relative paths resolve
+    /// like `[quipu] store`.
+    pub dir: Option<String>,
+}
+
+/// `[sync]`.
+#[derive(Debug, Default, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct SyncSection {
+    /// The quipu server `sd sync` exchanges the ledger with.
+    pub remote: Option<String>,
 }
 
 /// `[quipu]`.
@@ -69,6 +98,8 @@ pub struct QuipuSection {
     pub store: Option<String>,
     /// A shared quipu server, `http://` or `https://`.
     pub url: Option<String>,
+    /// A file holding the bearer token quipu wants for writes.
+    pub token_file: Option<String>,
 }
 
 /// `[project]`.
@@ -101,6 +132,14 @@ pub struct Resolved {
     pub prefix: String,
     /// The project's named graph IRI.
     pub graph: String,
+    /// The repo-local pendant directory, when one is configured (mode 1).
+    pub pendant: Option<PathBuf>,
+    /// The remote `sd sync` exchanges with (mode 3).
+    pub sync_remote: Option<String>,
+    /// The bearer token for writes to a quipu server, if configured.
+    pub token: Option<String>,
+    /// A file to read the bearer token from, if configured.
+    pub token_file: Option<PathBuf>,
 }
 
 /// Everything resolution reads, passed in so tests control all of it.
@@ -120,6 +159,12 @@ pub struct Inputs {
     pub env_graph: Option<String>,
     /// `SEEDS_PREFIX`.
     pub env_prefix: Option<String>,
+    /// `SEEDS_PENDANT_DIR`.
+    pub env_pendant: Option<String>,
+    /// `SEEDS_SYNC_REMOTE`.
+    pub env_sync_remote: Option<String>,
+    /// `SEEDS_QUIPU_TOKEN`.
+    pub env_token: Option<String>,
     /// `--store`.
     pub flag_store: Option<String>,
     /// `--quipu`.
@@ -149,6 +194,9 @@ impl Inputs {
             env_url: var("SEEDS_QUIPU_URL"),
             env_graph: var("SEEDS_GRAPH"),
             env_prefix: var("SEEDS_PREFIX"),
+            env_pendant: var("SEEDS_PENDANT_DIR"),
+            env_sync_remote: var("SEEDS_SYNC_REMOTE"),
+            env_token: var("SEEDS_QUIPU_TOKEN"),
             flag_store,
             flag_url,
             flag_graph,
@@ -308,11 +356,41 @@ pub fn resolve(inputs: &Inputs) -> Result<Resolved> {
         .clone()
         .or_else(|| pick(&inputs.env_graph, |c| &c.project.graph))
         .unwrap_or_else(|| vocab::project_graph_iri(&prefix));
+    // Paths from a file resolve against that file's base; from env, the cwd.
+    let user_base = user_file
+        .as_ref()
+        .and_then(|p| p.parent().map(Path::to_path_buf))
+        .unwrap_or_default();
+    let path_setting = |env: &Option<String>, f: fn(&FileConfig) -> &Option<String>| {
+        env.as_ref()
+            .map(|v| expand(v, &inputs.cwd, home))
+            .or_else(|| {
+                project
+                    .as_ref()
+                    .and_then(|c| f(c).as_ref())
+                    .map(|v| expand(v, &root, home))
+            })
+            .or_else(|| {
+                user.as_ref()
+                    .and_then(|c| f(c).as_ref())
+                    .map(|v| expand(v, &user_base, home))
+            })
+    };
+    let pendant = path_setting(&inputs.env_pendant, |c| &c.pendant.dir);
+    let token_file = path_setting(&None, |c| &c.quipu.token_file);
+    let sync_remote = match pick(&inputs.env_sync_remote, |c| &c.sync.remote) {
+        Some(u) => Some(check_url(&u, "[sync] remote")?),
+        None => None,
+    };
     Ok(Resolved {
         location,
         location_source,
         prefix,
         graph,
+        pendant,
+        sync_remote,
+        token: inputs.env_token.clone(),
+        token_file,
     })
 }
 

@@ -8,9 +8,10 @@ graph. It answers the verbs agents already type against `bd` and `br`
 have to learn anything new.
 
 > **Status: the v0.1 core runs.** Every verb works against a local quipu
-> store, the core builds for WebAssembly, and `--at` pins work. A shared quipu
-> server, beads sync and qpack sharing are not built yet. See
-> [What is built](status.md) for exactly what runs today.
+> store, a repo-local pendant or a quipu server, `sd sync` merges them, the
+> core builds for WebAssembly, and `--at` pins work. beads sync and formulas
+> (through shuttle) are not built yet. See [What is built](status.md) for
+> exactly what runs today.
 
 ## The name
 

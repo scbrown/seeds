@@ -41,8 +41,25 @@ pub struct WriteBatch {
     pub seeds: Vec<SeedWrite>,
     /// New comments (a comment is never edited).
     pub comments: Vec<Comment>,
+    /// Seeds to remove entirely, each with the revision the writer read. Only
+    /// import and sync remove seeds (to match a ledger that no longer holds
+    /// them); no verb deletes.
+    pub delete_seeds: Vec<(String, u64)>,
+    /// Comments to remove, as (seed id, index). Only sync uses this, to
+    /// renumber a comment that collided with one written elsewhere.
+    pub delete_comments: Vec<(String, u64)>,
     /// The transaction source tag, e.g. `seeds:update`.
     pub source: String,
+}
+
+impl WriteBatch {
+    /// A batch that changes nothing.
+    pub fn is_empty(&self) -> bool {
+        self.seeds.is_empty()
+            && self.comments.is_empty()
+            && self.delete_seeds.is_empty()
+            && self.delete_comments.is_empty()
+    }
 }
 
 /// Storage for one project.

@@ -3,14 +3,15 @@
 //! The crate is two layers:
 //!
 //! - **the core** (everything except [`native`]): the work-item model, the
-//!   verbs ([`engine`]), the ready computation, JSON output, and the storage
-//!   seam ([`backend::Backend`]) with its quipu implementation
-//!   ([`quipu_backend::QuipuBackend`]). It reads no clock, file, environment,
+//!   verbs ([`engine`]), the ready computation, JSON output, the storage seam
+//!   ([`backend::Backend`]) with its quipu implementation
+//!   ([`quipu_backend::QuipuBackend`]), the ledger as a quipu pendant
+//!   ([`pendant`]), and import and three-way sync between stores ([`sync`]). It reads no clock, file, environment,
 //!   process or network, so it builds for `wasm32-unknown-unknown` with
 //!   `--no-default-features` (`just wasm`). `clippy.toml` enforces that.
 //! - **`native`** (the default feature): the `sd` CLI on top: argument
 //!   parsing, TOML configuration, the local store file and its write lock,
-//!   and the system clock.
+//!   pendant files on disk, the quipu server client, and the system clock.
 //!
 //! ```
 //! use seeds::backend::Ctx;
@@ -32,7 +33,10 @@ pub mod error;
 pub mod ids;
 pub mod model;
 pub mod output;
+pub mod pendant;
 pub mod quipu_backend;
+pub mod sync;
+pub mod validate;
 pub mod vocab;
 
 #[cfg(feature = "native")]

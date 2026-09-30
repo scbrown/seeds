@@ -73,39 +73,233 @@ pub fn open_for_read(path: &Path, graph: &str) -> Result<Option<QuipuBackend>> {
     Ok(Some(QuipuBackend::read_only(store, graph)))
 }
 
-/// Try to reach a quipu server, so a configured URL that is down is reported
-/// as down. Returns the error text when it cannot be reached.
-pub fn probe(url: &str) -> std::result::Result<(), String> {
-    use std::net::{TcpStream, ToSocketAddrs};
-    use std::time::Duration;
-    let (default_port, rest) = if let Some(r) = url.strip_prefix("https://") {
-        (443, r)
-    } else if let Some(r) = url.strip_prefix("http://") {
-        (80, r)
-    } else {
-        return Err(format!("not an http(s) URL: {url}"));
-    };
-    let authority = rest.split(['/', '?', '#']).next().unwrap_or_default();
-    let authority = authority.rsplit('@').next().unwrap_or(authority);
-    let host_port = if authority
-        .rsplit_once(':')
-        .is_some_and(|(_, p)| p.parse::<u16>().is_ok())
-        && !authority.ends_with(']')
-    {
-        authority.to_string()
-    } else {
-        format!("{authority}:{default_port}")
-    };
-    let addrs: Vec<_> = host_port
-        .to_socket_addrs()
-        .map_err(|e| format!("cannot resolve {host_port}: {e}"))?
-        .collect();
-    let mut last = format!("no addresses for {host_port}");
-    for a in addrs {
-        match TcpStream::connect_timeout(&a, Duration::from_secs(3)) {
-            Ok(_) => return Ok(()),
-            Err(e) => last = format!("{a}: {e}"),
+// ---------------------------------------------------------------- pendants on disk
+
+use crate::backend::Ctx;
+use crate::pendant::{self, Pendant, Seal};
+use crate::sync;
+
+/// Read a pendant directory. `Ok(None)` when it (or its `export.nt`) does
+/// not exist yet.
+pub fn read_pendant_dir(dir: &Path) -> Result<Option<Pendant>> {
+    if !dir.join(pendant::EXPORT_NT).is_file() {
+        return Ok(None);
+    }
+    let mut p = Pendant::default();
+    for name in pendant::FILES {
+        match fs::read_to_string(dir.join(name)) {
+            Ok(text) => {
+                p.files.insert(name.to_string(), text);
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => {
+                return Err(SdError::failed(format!(
+                    "cannot read {}: {e}",
+                    dir.join(name).display()
+                )))
+            }
         }
     }
-    Err(last)
+    Ok(Some(p))
+}
+
+/// The `.gitattributes` a pendant directory carries. The manifests change on
+/// every export and record the producing store, so two branches always touch
+/// them; `merge=union` lets git merge them without a conflict. The result is
+/// not a valid manifest, which is fine: seeds validates `export.nt` on its
+/// own terms, then rewrites the manifest.
+pub const PENDANT_GITATTRIBUTES: &str =
+    "# written by sd: see https://github.com/scbrown/seeds (docs/book/src/storage-modes.md)\n\
+     # export.nt merges field by field once the driver is registered:\n\
+     #   git config merge.seeds.driver \"sd merge-driver %O %A %B\"\n\
+     # Without it, git falls back to a line merge and sd validates the result.\n\
+     export.nt merge=seeds\n\
+     manifest.json merge=union\n\
+     manifest.ttl merge=union\n";
+
+/// Write a pendant into `dir`, file by file, each atomically (write, then
+/// rename). Returns whether any file changed.
+pub fn write_pendant_dir(dir: &Path, p: &Pendant) -> Result<bool> {
+    fs::create_dir_all(dir)
+        .map_err(|e| SdError::failed(format!("cannot create {}: {e}", dir.display())))?;
+    let mut changed = false;
+    let mut files: Vec<(&str, &str)> = p
+        .files
+        .iter()
+        .filter(|(n, _)| pendant::FILES.contains(&n.as_str()))
+        .map(|(n, t)| (n.as_str(), t.as_str()))
+        .collect();
+    let attrs = dir.join(".gitattributes");
+    if !attrs.exists() {
+        files.push((".gitattributes", PENDANT_GITATTRIBUTES));
+    }
+    for (name, text) in files {
+        let path = dir.join(name);
+        if fs::read_to_string(&path).ok().as_deref() == Some(text) {
+            continue;
+        }
+        let tmp = dir.join(format!(".{name}.tmp"));
+        fs::write(&tmp, text)
+            .and_then(|()| fs::rename(&tmp, &path))
+            .map_err(|e| SdError::failed(format!("cannot write {}: {e}", path.display())))?;
+        changed = true;
+    }
+    Ok(changed)
+}
+
+fn sidecar(store: &Path, suffix: &str) -> PathBuf {
+    let mut name = store.file_name().unwrap_or_default().to_os_string();
+    name.push(suffix);
+    store.with_file_name(name)
+}
+
+/// The file recording which `export.nt` the working store last matched.
+pub fn marker_path(store: &Path) -> PathBuf {
+    sidecar(store, ".pendant")
+}
+
+/// The file holding the ledger as of the last `sd sync` (the merge base).
+pub fn sync_base_path(store: &Path) -> PathBuf {
+    sidecar(store, ".sync-base.nt")
+}
+
+fn read_marker(store: &Path) -> Option<String> {
+    fs::read_to_string(marker_path(store))
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+}
+
+fn write_marker(store: &Path, hash: &str) -> Result<()> {
+    fs::write(marker_path(store), format!("{hash}\n"))
+        .map_err(|e| SdError::failed(format!("cannot write the pendant marker: {e}")))
+}
+
+/// When the store lives in a `.seeds/` directory, keep its working files out
+/// of git (the pendant is what gets committed). Never overwrites.
+pub fn ensure_gitignore(store: &Path) {
+    let Some(dir) = store.parent() else { return };
+    if dir.file_name().and_then(|n| n.to_str()) != Some(crate::native::config::PROJECT_DIR) {
+        return;
+    }
+    let gi = dir.join(".gitignore");
+    if gi.exists() {
+        return;
+    }
+    let name = store
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("seeds.db");
+    let _ = fs::write(
+        gi,
+        format!(
+            "# written by sd: the working store and its sidecars stay local;\n\
+             # the pendant directory is the part to commit.\n\
+             {name}\n{name}-*\n{name}.*\n"
+        ),
+    );
+}
+
+/// Export the working store to the pendant directory and record the match.
+/// Returns whether the pendant files changed.
+///
+/// When the pendant on disk already holds this exact ledger under an intact
+/// seal, it is left alone: the manifest names the producing store, so
+/// rewriting it would dirty a fresh clone's working tree for no change in data.
+pub fn export_to_pendant(b: &QuipuBackend, store: &Path, dir: &Path) -> Result<bool> {
+    let p = pendant::export(b)?;
+    let same_data = |d: &Pendant| {
+        d.export_nt() == p.export_nt()
+            && d.files.get(pendant::SHAPES_TTL) == p.files.get(pendant::SHAPES_TTL)
+    };
+    let changed = match read_pendant_dir(dir)? {
+        Some(d) if same_data(&d) && pendant::seal(&d)? == Seal::Intact => false,
+        _ => write_pendant_dir(dir, &p)?,
+    };
+    if let Some(h) = p.export_hash() {
+        write_marker(store, &h)?;
+    }
+    ensure_gitignore(store);
+    Ok(changed)
+}
+
+/// Bring the working store and the repo-local pendant into agreement before a
+/// command runs (mode 1). The marker file names the `export.nt` both last
+/// agreed on, which makes this a three-way decision:
+///
+/// | working store | pendant | action |
+/// |---|---|---|
+/// | = pendant | | nothing (re-seal the manifest if it was edited) |
+/// | unchanged since the marker (or empty) | changed (a pull, a checkout, a merge) | load the pendant into the store |
+/// | changed | unchanged since the marker | export the store to the pendant |
+/// | changed | changed | refuse, and say how to choose |
+///
+/// Returns notes for stderr.
+pub fn hydrate(b: &mut QuipuBackend, store: &Path, dir: &Path, ctx: &Ctx) -> Result<Vec<String>> {
+    use crate::backend::Backend;
+    let mut notes = Vec::new();
+    let mine = pendant::export(b)?;
+    let mine_hash = mine.export_hash().unwrap_or_default();
+    let Some(disk) = read_pendant_dir(dir)? else {
+        let snap = b.snapshot(None)?;
+        if !snap.seeds.is_empty() || !snap.comments.is_empty() {
+            export_to_pendant(b, store, dir)?;
+            notes.push(format!("wrote the pendant at {}", dir.display()));
+        }
+        return Ok(notes);
+    };
+    let disk_hash = disk.export_hash().unwrap_or_default();
+    let marker = read_marker(store);
+    if disk_hash == mine_hash {
+        if pendant::seal(&disk)? != Seal::Intact {
+            write_pendant_dir(dir, &mine)?;
+            notes.push(format!(
+                "resealed the pendant manifest at {}",
+                dir.display()
+            ));
+        }
+        if marker.as_deref() != Some(mine_hash.as_str()) {
+            write_marker(store, &mine_hash)?;
+        }
+        return Ok(notes);
+    }
+    let snap = b.snapshot(None)?;
+    let store_empty = snap.seeds.is_empty() && snap.comments.is_empty();
+    let store_clean = store_empty || marker.as_deref() == Some(mine_hash.as_str());
+    let disk_clean = marker.as_deref() == Some(disk_hash.as_str());
+    if store_clean {
+        let ledger = pendant::read(&disk)?;
+        let r = sync::import(b, ctx, &ledger.snapshot, None, true)?;
+        export_to_pendant(b, store, dir)?;
+        notes.push(format!(
+            "loaded the pendant at {} ({} created, {} updated, {} removed{})",
+            dir.display(),
+            r.created.len(),
+            r.updated.len(),
+            r.removed.len(),
+            match ledger.seal {
+                Seal::Intact => String::new(),
+                Seal::Broken(why) =>
+                    format!("; it had been edited outside sd ({why}), and was resealed"),
+            }
+        ));
+        return Ok(notes);
+    }
+    if disk_clean {
+        export_to_pendant(b, store, dir)?;
+        notes.push(format!(
+            "the pendant at {} was behind the working store; re-exported",
+            dir.display()
+        ));
+        return Ok(notes);
+    }
+    Err(SdError::conflict(format!(
+        "both the working store ({}) and the pendant ({}) changed since they last matched; \
+         nothing was changed. Choose one: `sd import {} --prefer pendant` (or --prefer store, \
+         or --replace) merges the pendant into the store, or `sd export` overwrites the \
+         pendant with the store.",
+        store.display(),
+        dir.display(),
+        dir.display()
+    )))
 }

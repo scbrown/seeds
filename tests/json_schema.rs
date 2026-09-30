@@ -30,6 +30,7 @@ const SEED_KEYS: &[&str] = &[
     "status",
     "title",
     "updated_at",
+    "workflow_run",
 ];
 const EDGE_KEYS: &[&str] = &["dependency_type", "id", "priority", "status", "title"];
 const COMMENT_KEYS: &[&str] = &["author", "created_at", "id", "issue_id", "text"];

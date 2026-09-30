@@ -74,6 +74,57 @@ pub enum Command {
         #[command(subcommand)]
         command: CommentsCommand,
     },
+    /// Write the ledger as a pendant (quipu's share files) to a directory
+    Export(ExportArgs),
+    /// Read a pendant into the configured store; conflicts are reported, never
+    /// resolved silently
+    Import(ImportArgs),
+    /// Three-way sync between the local store and the [sync] remote
+    Sync(SyncArgs),
+    /// Git merge driver for a pendant's export.nt: a field-level three-way
+    /// merge of the ledgers. Register it with
+    /// `git config merge.seeds.driver "sd merge-driver %O %A %B"`
+    MergeDriver(MergeDriverArgs),
+}
+
+/// `sd merge-driver`.
+#[derive(Debug, Args)]
+pub struct MergeDriverArgs {
+    /// The common ancestor's export.nt (git's %O)
+    pub base: String,
+    /// Ours (git's %A); the merge result is written here
+    pub ours: String,
+    /// Theirs (git's %B)
+    pub theirs: String,
+}
+
+/// `sd export`.
+#[derive(Debug, Args)]
+pub struct ExportArgs {
+    /// Directory to write (default: the configured [pendant] dir)
+    #[arg(long, value_name = "DIR")]
+    pub to: Option<String>,
+}
+
+/// `sd import`.
+#[derive(Debug, Args)]
+pub struct ImportArgs {
+    /// The pendant directory to read
+    pub dir: String,
+    /// Where the two disagree, take this side: pendant or store
+    #[arg(long, value_parser = ["pendant", "store"])]
+    pub prefer: Option<String>,
+    /// Make the store exactly the pendant (removes seeds the pendant lacks)
+    #[arg(long, conflicts_with = "prefer")]
+    pub replace: bool,
+}
+
+/// `sd sync`.
+#[derive(Debug, Args)]
+pub struct SyncArgs {
+    /// The remote to sync with (default: [sync] remote)
+    #[arg(long, value_name = "URL")]
+    pub remote: Option<String>,
 }
 
 /// `sd create`.
@@ -108,6 +159,10 @@ pub struct CreateArgs {
     /// Comma-separated dependencies: <id> (blocks) or <type>:<id>
     #[arg(long)]
     pub deps: Option<String>,
+    /// The shuttle workflow run that creates or drives this seed: a run IRI or
+    /// a bare run id (becomes urn:shuttle:run:<id>)
+    #[arg(long = "workflow-run", value_name = "RUN")]
+    pub workflow_run: Option<String>,
     /// Print what would be created without writing it
     #[arg(long)]
     pub dry_run: bool,
@@ -240,6 +295,9 @@ pub struct UpdateArgs {
     /// Hide from ready until this date or instant ("" clears it)
     #[arg(long)]
     pub defer: Option<String>,
+    /// The shuttle workflow run driving the seed ("" clears it)
+    #[arg(long = "workflow-run", value_name = "RUN")]
+    pub workflow_run: Option<String>,
 }
 
 /// `sd close`.
@@ -322,7 +380,12 @@ impl Command {
             Command::Create(_) | Command::Update(_) | Command::Close(_) => true,
             Command::Dep { command } => !matches!(command, DepCommand::List { .. }),
             Command::Comments { command } => matches!(command, CommentsCommand::Add { .. }),
-            Command::Show(_) | Command::List(_) | Command::Ready(_) | Command::Count(_) => false,
+            Command::Import(_) | Command::Sync(_) | Command::MergeDriver(_) => true,
+            Command::Export(_)
+            | Command::Show(_)
+            | Command::List(_)
+            | Command::Ready(_)
+            | Command::Count(_) => false,
         }
     }
 
@@ -345,6 +408,10 @@ impl Command {
                 CommentsCommand::Add { .. } => "comments add",
                 CommentsCommand::List { .. } => "comments list",
             },
+            Command::Export(_) => "export",
+            Command::Import(_) => "import",
+            Command::Sync(_) => "sync",
+            Command::MergeDriver(_) => "merge-driver",
         }
     }
 }
@@ -379,6 +446,10 @@ mod tests {
             true,
         ),
         (&["comments", "list", "s-1"], "comments list", false),
+        (&["export", "--to", "p"], "export", false),
+        (&["import", "p", "--prefer", "store"], "import", true),
+        (&["sync"], "sync", true),
+        (&["merge-driver", "o", "a", "b"], "merge-driver", true),
     ];
 
     fn parse(args: &[&str]) -> Cli {
@@ -427,7 +498,7 @@ mod tests {
 
     #[test]
     fn unknown_verb_is_a_usage_error() {
-        let err = Cli::try_parse_from(["sd", "sync"]).unwrap_err();
+        let err = Cli::try_parse_from(["sd", "frobnicate"]).unwrap_err();
         assert_eq!(err.exit_code(), 2);
     }
 

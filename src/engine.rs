@@ -17,6 +17,7 @@ use crate::backend::{Backend, Ctx, SeedWrite, WriteBatch};
 use crate::error::{Result, SdError};
 use crate::ids;
 use crate::model::{self, Comment, Seed, Snapshot};
+use crate::vocab;
 
 /// The default `list` page size, as in br. `--limit 0` lists everything.
 pub const DEFAULT_LIST_LIMIT: usize = 50;
@@ -46,6 +47,8 @@ pub struct CreateReq {
     pub parent: Option<String>,
     /// Dependencies, br's form: `id` (blocks) or `type:id`.
     pub deps: Vec<String>,
+    /// The shuttle run that creates or drives this seed (an IRI or a bare run id).
+    pub workflow_run: Option<String>,
     /// Compute and return the seed without writing it.
     pub dry_run: bool,
 }
@@ -83,6 +86,7 @@ pub fn create(b: &mut dyn Backend, ctx: &Ctx, req: &CreateReq) -> Result<(Seed, 
         created_by: non_empty(Some(&ctx.actor)),
         updated_at: ctx.now.clone(),
         parent: req.parent.clone(),
+        workflow_run: non_empty(req.workflow_run.as_deref()).map(|r| vocab::run_iri(&r)),
         revision: 1,
         ..Seed::default()
     };
@@ -102,6 +106,7 @@ pub fn create(b: &mut dyn Backend, ctx: &Ctx, req: &CreateReq) -> Result<(Seed, 
             }],
             comments: vec![],
             source: "seeds:create".into(),
+            ..WriteBatch::default()
         },
         ctx,
     )?;
@@ -454,6 +459,8 @@ pub struct UpdateReq {
     pub remove_labels: Vec<String>,
     /// Defer until this date or instant; empty clears it.
     pub defer: Option<String>,
+    /// The shuttle run driving the seed (an IRI or a bare run id); empty clears it.
+    pub workflow_run: Option<String>,
 }
 
 /// `sd update`: all named seeds change in one transaction, or none do.
@@ -504,6 +511,9 @@ pub fn update(
         }
         if let Some(d) = &req.defer {
             s.defer_until = non_empty(Some(d.trim()));
+        }
+        if let Some(r) = &req.workflow_run {
+            s.workflow_run = non_empty(Some(r.trim())).map(|r| vocab::run_iri(&r));
         }
         for l in clean_labels(&req.add_labels) {
             s.labels.insert(l);
@@ -644,6 +654,7 @@ fn finish(
                 seeds: writes,
                 comments: vec![],
                 source: source.into(),
+                ..WriteBatch::default()
             },
             ctx,
         )?
@@ -726,6 +737,7 @@ pub fn dep_add(
             }],
             comments: vec![],
             source: "seeds:dep-add".into(),
+            ..WriteBatch::default()
         },
         ctx,
     )?;
@@ -790,6 +802,7 @@ pub fn dep_remove(
             }],
             comments: vec![],
             source: "seeds:dep-remove".into(),
+            ..WriteBatch::default()
         },
         ctx,
     )?;
@@ -881,6 +894,7 @@ pub fn comment_add(
             seeds: vec![],
             comments: vec![comment.clone()],
             source: "seeds:comment".into(),
+            ..WriteBatch::default()
         },
         ctx,
     )?;

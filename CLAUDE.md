@@ -37,6 +37,13 @@ structure), scbrown/bobbin (retrieval).
   Read `docs/book/src/storage.md` before changing the model.
 - **Configuration lives in `src/native/config.rs`.** Flags, then env, then
   `.seeds/config.toml` (walking up), then the user file, then a local default.
+- **No file format of our own.** A ledger on disk is a quipu pendant (share):
+  `export.nt` + `shapes.ttl` + manifests (`src/pendant.rs`). Storage modes are
+  in `docs/book/src/storage-modes.md`.
+- **Conflicts are reported, never resolved by picking a side.** Import, sync,
+  the merge driver and pendant loading all list what disagrees and write nothing.
+- **Formulas are shuttle's.** Do not build a workflow engine here; a seed links
+  to its shuttle run (`seeds:workflowRun`). See `docs/book/src/formulas.md`.
 - **Definitions belong in camayoc.** "ready" is a SPARQL query
   (`vocab::ready_query`) written to move into camayoc as a stored query; the
   WorkItem vocabulary and shape are camayoc's.

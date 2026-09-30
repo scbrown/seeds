@@ -29,6 +29,7 @@ issue is a seed object with these keys:
 
 `id`, `title`, `description`, `notes`, `status`, `priority`, `issue_type`,
 `assignee`, `labels`, `created_at`, `created_by`, `updated_at`, `closed_at`,
-`close_reason`, `defer_until`, `parent`, `dependency_count`, `revision`.
+`close_reason`, `defer_until`, `parent`, `dependency_count`, `workflow_run`,
+`revision`.
 
 `revision` is the compare-and-set token (1 at create, +1 per write).

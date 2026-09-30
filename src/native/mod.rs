@@ -8,6 +8,7 @@
 
 pub mod cli;
 pub mod config;
+pub mod remote;
 pub mod store;
 
 use serde_json::Value as Json;
@@ -16,7 +17,9 @@ use crate::backend::{Backend, Ctx};
 use crate::engine::{self, Filter};
 use crate::error::{ErrorKind, Result, SdError};
 use crate::output;
+use crate::pendant;
 use crate::quipu_backend::QuipuBackend;
+use crate::sync;
 use cli::{Cli, Command, CommentsCommand, DepCommand};
 use config::{Location, Resolved};
 
@@ -33,6 +36,13 @@ pub struct Outcome {
 
 /// Run a parsed command against the configuration in the environment.
 pub fn run(cli: &Cli) -> Outcome {
+    if let Command::MergeDriver(a) = &cli.command {
+        // Needs no store and no configuration: git runs it mid-merge.
+        return match merge_driver(a) {
+            Ok(o) => o,
+            Err(e) => error_outcome(cli.json, &e, Vec::new()),
+        };
+    }
     let result = config::Inputs::from_env(cli.store.clone(), cli.quipu.clone(), cli.graph.clone())
         .and_then(|i| config::resolve(&i))
         .and_then(|cfg| run_with(cli, &cfg));
@@ -72,64 +82,367 @@ fn actor(cli: &Cli) -> String {
 }
 
 /// Run against an already-resolved configuration.
+///
+/// Four arrangements (see `docs/book/src/storage-modes.md`):
+///
+/// - **local** (the default): a quipu store file;
+/// - **repo-local pendant** (`[pendant] dir`): a local working store plus a
+///   pendant in the repository that every write is exported to and every
+///   command first reconciles with;
+/// - **remote** (`[quipu] url`): a quipu server over HTTP;
+/// - **sync** (`[sync] remote`): a local store (with or without a pendant)
+///   that `sd sync` merges with a remote.
 pub fn run_with(cli: &Cli, cfg: &Resolved) -> Result<Outcome> {
-    let path = match &cfg.location {
-        Location::Store(p) => p.clone(),
-        Location::Url(url) => {
-            return Err(match store::probe(url) {
-                Err(why) => SdError::new(
-                    ErrorKind::Unreachable,
-                    format!(
-                        "cannot reach quipu at {url} (from {}): {why}. seeds does not fall back \
-                         to a local store, because that would fork the ledger.",
-                        cfg.location_source
-                    ),
-                ),
-                Ok(()) => SdError::new(
-                    ErrorKind::NotBuilt,
-                    format!(
-                        "quipu at {url} (from {}) is reachable, but the shared-server backend \
-                         is not built yet; use a local store ([quipu] store) for now.",
-                        cfg.location_source
-                    ),
-                ),
-            });
-        }
-    };
     let ctx = Ctx {
         now: now(),
         actor: actor(cli),
         prefix: cfg.prefix.clone(),
     };
-    if cli.command.writes() {
-        if cli.at.is_some() {
-            return Err(SdError::usage(
-                "--at pins a read; a write always applies to the current state",
-            ));
-        }
-        let mut h = store::open_for_write(&path, &cfg.graph)?;
-        dispatch(cli, &ctx, &mut h.backend)
+    if cli.command.writes() && cli.at.is_some() {
+        return Err(SdError::usage(
+            "--at pins a read; a write always applies to the current state",
+        ));
+    }
+    match &cfg.location {
+        Location::Url(url) => run_remote(cli, cfg, &ctx, url),
+        Location::Store(path) => run_local(cli, cfg, &ctx, path),
+    }
+}
+
+fn token(cfg: &Resolved) -> Result<Option<String>> {
+    if let Some(t) = &cfg.token {
+        return Ok(Some(t.trim().to_string()));
+    }
+    match &cfg.token_file {
+        Some(f) => std::fs::read_to_string(f)
+            .map(|t| Some(t.trim().to_string()))
+            .map_err(|e| {
+                SdError::new(
+                    ErrorKind::Config,
+                    format!("cannot read the quipu token file {}: {e}", f.display()),
+                )
+            }),
+        None => Ok(None),
+    }
+}
+
+fn with_notes(mut o: Outcome, notes: Vec<String>) -> Outcome {
+    if notes.is_empty() {
+        return o;
+    }
+    let notes: Vec<String> = notes.into_iter().map(|n| format!("sd: {n}")).collect();
+    o.stderr = if o.stderr.is_empty() {
+        notes.join("\n")
     } else {
-        match store::open_for_read(&path, &cfg.graph)? {
-            Some(mut b) => dispatch(cli, &ctx, &mut b),
-            None => {
-                // Nothing written yet: answer from an empty graph, and say so,
-                // so an empty answer is never mistaken for "nothing matched".
-                let mut empty = QuipuBackend::in_memory(&cfg.graph)?;
-                let mut o = dispatch(cli, &ctx, &mut empty)?;
-                let note = format!(
-                    "sd: no seeds store at {} yet (it is created on first write)",
-                    path.display()
-                );
-                o.stderr = if o.stderr.is_empty() {
-                    note
-                } else {
-                    format!("{note}\n{}", o.stderr)
-                };
-                Ok(o)
+        format!("{}\n{}", notes.join("\n"), o.stderr)
+    };
+    o
+}
+
+fn run_remote(cli: &Cli, cfg: &Resolved, ctx: &Ctx, url: &str) -> Result<Outcome> {
+    let mut remote = remote::RemoteBackend::connect(url, &cfg.graph, token(cfg)?)?;
+    match &cli.command {
+        Command::Export(a) => {
+            let dir = export_dir(a.to.as_deref(), cfg)?;
+            let p = pendant_of(&remote)?;
+            let changed = store::write_pendant_dir(&dir, &p)?;
+            Ok(export_outcome(cli.json, &dir, &p, changed))
+        }
+        Command::Import(a) => import_into(cli, ctx, &mut remote, a),
+        Command::Sync(_) => Err(SdError::usage(
+            "sd sync runs from a local store ([quipu] store) to a [sync] remote; this \
+             configuration's primary store is already the remote",
+        )),
+        _ => dispatch(cli, ctx, &mut remote),
+    }
+}
+
+/// A pendant of any backend: load its snapshot into a scratch in-memory store
+/// and export that. `export.nt` depends only on the ledger, so this is
+/// byte-identical to exporting the store itself.
+fn pendant_of(b: &dyn Backend) -> Result<pendant::Pendant> {
+    let snap = b.snapshot(None)?;
+    // The scratch store's graph name does not appear in export.nt.
+    let mut scratch = QuipuBackend::in_memory("https://seeds.local/project/scratch")?;
+    let ctx = Ctx {
+        now: now(),
+        actor: "seeds".into(),
+        prefix: String::new(),
+    };
+    sync::import(&mut scratch, &ctx, &snap, None, true)?;
+    pendant::export(&scratch)
+}
+
+fn export_dir(to: Option<&str>, cfg: &Resolved) -> Result<std::path::PathBuf> {
+    match (to, &cfg.pendant) {
+        (Some(t), _) => Ok(std::path::PathBuf::from(t)),
+        (None, Some(p)) => Ok(p.clone()),
+        (None, None) => Err(SdError::usage(
+            "no pendant directory configured ([pendant] dir); pass --to <dir>",
+        )),
+    }
+}
+
+fn export_outcome(
+    json: bool,
+    dir: &std::path::Path,
+    p: &pendant::Pendant,
+    changed: bool,
+) -> Outcome {
+    let seeds = p
+        .export_nt()
+        .map(|t| {
+            t.lines()
+                .filter(|l| l.contains("/ontology/identifier>"))
+                .count()
+        })
+        .unwrap_or(0);
+    let hash = p.export_hash().unwrap_or_default();
+    let text = format!(
+        "{} pendant at {} ({seeds} seeds, export.nt {hash})",
+        if changed { "wrote" } else { "unchanged:" },
+        dir.display()
+    );
+    ok(
+        json,
+        serde_json::json!({
+            "status": "ok",
+            "dir": dir.display().to_string(),
+            "changed": changed,
+            "seeds": seeds,
+            "export_hash": hash,
+            "files": p.files.keys().collect::<Vec<_>>(),
+        }),
+        text,
+        vec![],
+    )
+}
+
+fn import_into(cli: &Cli, ctx: &Ctx, b: &mut dyn Backend, a: &cli::ImportArgs) -> Result<Outcome> {
+    let dir = std::path::Path::new(&a.dir);
+    let p = store::read_pendant_dir(dir)?.ok_or_else(|| {
+        SdError::new(
+            ErrorKind::NotFound,
+            format!(
+                "no pendant at {} (no {})",
+                dir.display(),
+                pendant::EXPORT_NT
+            ),
+        )
+    })?;
+    let ledger = pendant::read(&p)?;
+    let prefer = match a.prefer.as_deref() {
+        Some("pendant") => Some(sync::Prefer::Incoming),
+        Some("store") => Some(sync::Prefer::Existing),
+        _ => None,
+    };
+    let r = sync::import(b, ctx, &ledger.snapshot, prefer, a.replace)?;
+    let mut warnings = Vec::new();
+    if let pendant::Seal::Broken(why) = &ledger.seal {
+        warnings.push(format!(
+            "the pendant's manifest does not match its data ({why}); its data validated and was used"
+        ));
+    }
+    Ok(ok(
+        cli.json,
+        report_json(&r),
+        report_text("imported", &r),
+        warnings,
+    ))
+}
+
+fn report_json(r: &sync::Report) -> serde_json::Value {
+    serde_json::json!({
+        "status": "ok",
+        "created": r.created,
+        "updated": r.updated,
+        "removed": r.removed,
+        "unchanged": r.unchanged,
+        "comments_added": r.comments_added,
+        "tx": r.tx,
+    })
+}
+
+fn report_text(verb: &str, r: &sync::Report) -> String {
+    format!(
+        "{verb}: {} created, {} updated, {} removed, {} unchanged, {} comments added{}",
+        r.created.len(),
+        r.updated.len(),
+        r.removed.len(),
+        r.unchanged,
+        r.comments_added,
+        if r.tx > 0 {
+            format!(" (tx {})", r.tx)
+        } else {
+            String::new()
+        }
+    )
+}
+
+fn run_local(cli: &Cli, cfg: &Resolved, ctx: &Ctx, path: &std::path::Path) -> Result<Outcome> {
+    match &cli.command {
+        Command::Export(a) => {
+            let dir = export_dir(a.to.as_deref(), cfg)?;
+            let h = store::open_for_write(path, &cfg.graph)?;
+            let is_configured = cfg.pendant.as_deref() == Some(dir.as_path());
+            let p = pendant::export(&h.backend)?;
+            let changed = if is_configured {
+                store::export_to_pendant(&h.backend, path, &dir)?
+            } else {
+                store::write_pendant_dir(&dir, &p)?
+            };
+            return Ok(export_outcome(cli.json, &dir, &p, changed));
+        }
+        Command::Import(a) => {
+            let mut h = store::open_for_write(path, &cfg.graph)?;
+            let o = import_into(cli, ctx, &mut h.backend, a)?;
+            if let Some(dir) = &cfg.pendant {
+                store::export_to_pendant(&h.backend, path, dir)?;
             }
+            return Ok(o);
+        }
+        Command::Sync(a) => return run_sync(cli, cfg, ctx, path, a),
+        _ => {}
+    }
+    if let Some(dir) = &cfg.pendant {
+        // Mode 1: reconcile with the pendant, run, export.
+        let mut h = store::open_for_write(path, &cfg.graph)?;
+        let notes = store::hydrate(&mut h.backend, path, dir, ctx)?;
+        let o = dispatch(cli, ctx, &mut h.backend)?;
+        if cli.command.writes() {
+            store::export_to_pendant(&h.backend, path, dir)?;
+        }
+        return Ok(with_notes(o, notes));
+    }
+    if cli.command.writes() {
+        let mut h = store::open_for_write(path, &cfg.graph)?;
+        return dispatch(cli, ctx, &mut h.backend);
+    }
+    match store::open_for_read(path, &cfg.graph)? {
+        Some(mut b) => dispatch(cli, ctx, &mut b),
+        None => {
+            // Nothing written yet: answer from an empty graph, and say so,
+            // so an empty answer is never mistaken for "nothing matched".
+            let mut empty = QuipuBackend::in_memory(&cfg.graph)?;
+            let o = dispatch(cli, ctx, &mut empty)?;
+            Ok(with_notes(
+                o,
+                vec![format!(
+                    "no seeds store at {} yet (it is created on first write)",
+                    path.display()
+                )],
+            ))
         }
     }
+}
+
+fn run_sync(
+    cli: &Cli,
+    cfg: &Resolved,
+    ctx: &Ctx,
+    path: &std::path::Path,
+    a: &cli::SyncArgs,
+) -> Result<Outcome> {
+    let url = a
+        .remote
+        .clone()
+        .or_else(|| cfg.sync_remote.clone())
+        .ok_or_else(|| {
+            SdError::usage(
+                "sd sync needs a remote: set [sync] remote, SEEDS_SYNC_REMOTE, or --remote",
+            )
+        })?;
+    let mut h = store::open_for_write(path, &cfg.graph)?;
+    let mut notes = Vec::new();
+    if let Some(dir) = &cfg.pendant {
+        notes.extend(store::hydrate(&mut h.backend, path, dir, ctx)?);
+    }
+    let mut remote = remote::RemoteBackend::connect(&url, &cfg.graph, token(cfg)?)?;
+    let base_path = store::sync_base_path(path);
+    let base = match std::fs::read_to_string(&base_path) {
+        Ok(nt) => {
+            let p = pendant::Pendant {
+                files: [(pendant::EXPORT_NT.to_string(), nt)].into(),
+            };
+            pendant::read(&p)?.snapshot
+        }
+        Err(_) => crate::model::Snapshot::default(),
+    };
+    let (_, local_r, remote_r) = sync::sync(&base, &mut h.backend, &mut remote, ctx)?;
+    // The new base is what both sides now hold.
+    let merged = pendant::export(&h.backend)?;
+    std::fs::write(&base_path, merged.export_nt().unwrap_or_default())
+        .map_err(|e| SdError::failed(format!("cannot write the sync base: {e}")))?;
+    if let Some(dir) = &cfg.pendant {
+        store::export_to_pendant(&h.backend, path, dir)?;
+    }
+    let text = format!(
+        "{}\n{}",
+        report_text("local", &local_r),
+        report_text(&format!("remote {url}"), &remote_r)
+    );
+    let json = serde_json::json!({
+        "status": "ok",
+        "local": report_json(&local_r),
+        "remote": report_json(&remote_r),
+    });
+    Ok(with_notes(ok(cli.json, json, text, vec![]), notes))
+}
+
+/// `sd merge-driver %O %A %B`: merge three versions of a pendant's
+/// `export.nt` with [`sync::merge3`] and write the result over `%A`.
+///
+/// On a conflict it exits 1 (so git marks the file conflicted) and writes a
+/// first line that does not parse, followed by the conflicts and our side, so
+/// the file cannot be committed and loaded by accident: sd refuses it until a
+/// person resolves it.
+fn merge_driver(a: &cli::MergeDriverArgs) -> Result<Outcome> {
+    let read = |p: &str| {
+        std::fs::read_to_string(p).map_err(|e| SdError::failed(format!("cannot read {p}: {e}")))
+    };
+    let snap = |text: &str| -> Result<crate::model::Snapshot> {
+        Ok(crate::model::Snapshot::from_subjects(
+            &pendant::parse_ntriples(text)?,
+        ))
+    };
+    let (base_t, ours_t, theirs_t) = (read(&a.base)?, read(&a.ours)?, read(&a.theirs)?);
+    let m = sync::merge3_named(
+        &snap(&base_t)?,
+        &snap(&ours_t)?,
+        &snap(&theirs_t)?,
+        sync::Sides {
+            a: "ours",
+            b: "theirs",
+        },
+    );
+    if !m.conflicts.is_empty() {
+        let mut out = format!(
+            "<<<<<<< sd merge-driver: {} conflicting seed(s). Resolve with sd on either branch and merge again, or edit this file to one valid ledger.\n",
+            m.conflicts.len()
+        );
+        for c in &m.conflicts {
+            out.push_str(&format!("# {}: {}\n", c.id, c.fields.join("; ")));
+        }
+        out.push_str(&ours_t);
+        std::fs::write(&a.ours, out)
+            .map_err(|e| SdError::failed(format!("cannot write {}: {e}", a.ours)))?;
+        return Err(sync::conflict_error(
+            "merge",
+            &m.conflicts,
+            "The file is marked conflicted.",
+        ));
+    }
+    let mut scratch = QuipuBackend::in_memory("https://seeds.local/project/scratch")?;
+    let ctx = Ctx {
+        now: now(),
+        actor: "seeds".into(),
+        prefix: String::new(),
+    };
+    sync::import(&mut scratch, &ctx, &m.merged, None, true)?;
+    let merged = pendant::export(&scratch)?;
+    std::fs::write(&a.ours, merged.export_nt().unwrap_or_default())
+        .map_err(|e| SdError::failed(format!("cannot write {}: {e}", a.ours)))?;
+    Ok(Outcome::default())
 }
 
 fn read_text(path: &str) -> Result<String> {
@@ -191,6 +504,7 @@ fn dispatch(cli: &Cli, ctx: &Ctx, b: &mut dyn Backend) -> Result<Outcome> {
                 labels: split_csv(&a.labels),
                 parent: a.parent.clone(),
                 deps: split_csv(&a.deps),
+                workflow_run: a.workflow_run.clone(),
                 dry_run: a.dry_run,
             };
             let (seed, tx) = engine::create(b, ctx, &req)?;
@@ -307,6 +621,7 @@ fn dispatch(cli: &Cli, ctx: &Ctx, b: &mut dyn Backend) -> Result<Outcome> {
                 add_labels: a.add_label.clone(),
                 remove_labels: a.remove_label.clone(),
                 defer: a.defer.clone(),
+                workflow_run: a.workflow_run.clone(),
             };
             let (seeds, tx) = engine::update(b, ctx, &a.ids, &req)?;
             let text = seeds
@@ -376,6 +691,11 @@ fn dispatch(cli: &Cli, ctx: &Ctx, b: &mut dyn Backend) -> Result<Outcome> {
                 Ok(ok(json, output::dep_list_json(&rows), text, vec![]))
             }
         },
+        Command::Export(_) | Command::Import(_) | Command::Sync(_) | Command::MergeDriver(_) => {
+            Err(SdError::usage(
+                "export, import and sync are handled before dispatch",
+            ))
+        }
         Command::Comments { command } => match command {
             CommentsCommand::Add {
                 id,

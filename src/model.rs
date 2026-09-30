@@ -110,6 +110,11 @@ pub struct Seed {
     pub parent: Option<String>,
     /// `discovered-from` dependencies.
     pub discovered_from: BTreeSet<String>,
+    /// The shuttle workflow run that created or drives this seed, as the
+    /// run's IRI (`urn:shuttle:run:<id>`). The run's definition is reachable
+    /// from the run through camayoc's `aegis:runOf`. See
+    /// `docs/book/src/formulas.md`.
+    pub workflow_run: Option<String>,
     /// The compare-and-set token: 1 at create, +1 on every write to the seed.
     pub revision: u64,
 }
@@ -189,6 +194,9 @@ impl Seed {
         }
         for d in &self.discovered_from {
             f.push((term::discovered_from(), Obj::Iri(vocab::item_iri(d))));
+        }
+        if let Some(r) = &self.workflow_run {
+            f.push((term::workflow_run(), Obj::Iri(r.clone())));
         }
         f
     }
@@ -275,6 +283,12 @@ impl Seed {
             related: ids(term::related_to()),
             parent: ids(term::child_of()).into_iter().next(),
             discovered_from: ids(term::discovered_from()),
+            workflow_run: by.get(term::workflow_run().as_str()).and_then(|v| {
+                v.iter().find_map(|o| match o {
+                    Obj::Iri(iri) => Some(iri.clone()),
+                    _ => None,
+                })
+            }),
             revision: i(term::revision())
                 .and_then(|r| u64::try_from(r).ok())
                 .unwrap_or(0),
@@ -367,6 +381,7 @@ impl Seed {
             "defer_until": self.defer_until,
             "parent": self.parent,
             "dependency_count": self.dependencies().len(),
+            "workflow_run": self.workflow_run,
             "revision": self.revision,
         })
     }
@@ -440,6 +455,21 @@ pub struct Snapshot {
 }
 
 impl Snapshot {
+    /// Build a snapshot from facts grouped by subject IRI.
+    pub fn from_subjects(by_subject: &BTreeMap<String, Vec<Fact>>) -> Snapshot {
+        let mut snap = Snapshot::default();
+        for facts in by_subject.values() {
+            if let Some(seed) = Seed::from_facts(facts) {
+                snap.seeds.insert(seed.id.clone(), seed);
+            } else if let Some(c) = Comment::from_facts(facts) {
+                snap.comments.push(c);
+            }
+        }
+        snap.comments
+            .sort_by(|a, b| (&a.seed, a.index).cmp(&(&b.seed, b.index)));
+        snap
+    }
+
     /// A seed by id, or a not-found error.
     pub fn get(&self, id: &str) -> Result<&Seed> {
         self.seeds.get(id).ok_or_else(|| SdError::not_found(id))
@@ -491,6 +521,7 @@ mod tests {
             updated_at: "2026-09-30T00:00:00Z".into(),
             blocked_on: ["sd-def".to_string()].into(),
             parent: Some("sd-p".into()),
+            workflow_run: Some("urn:shuttle:run:triage-7".into()),
             revision: 3,
             ..Seed::default()
         }

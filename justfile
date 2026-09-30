@@ -51,3 +51,9 @@ check:
 
 # The local CI equivalent: the native checks plus the wasm job
 ci: check wasm wasm-test
+
+# The storage-mode tests against a real quipu server:
+#   SEEDS_TEST_QUIPU_SERVER=/path/to/quipu-server just remote-test
+remote-test:
+    test -x "${SEEDS_TEST_QUIPU_SERVER:?set SEEDS_TEST_QUIPU_SERVER to a quipu-server binary}"
+    cargo test --test modes -- --nocapture

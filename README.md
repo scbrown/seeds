@@ -119,6 +119,25 @@ Every verb, flag and exit code: [Reference](docs/book/src/reference.md). Where
 the store lives and how to point it elsewhere:
 [Configuration](docs/book/src/config.md).
 
+## Where the ledger lives
+
+| mode | config | you get |
+|---|---|---|
+| local (default) | nothing | a quipu store at `.seeds/seeds.db` |
+| repo-local pendant | `[pendant] dir = ".seeds/pendant"` | the ledger committed with your code, as quipu's share files; clone the repo and you have the board, and a git merge driver merges branches field by field |
+| remote | `[quipu] url = "https://…"` | a shared quipu server, read and written live |
+| sync | a local store plus `[sync] remote = "https://…"` | `sd sync`: a three-way merge both ways; conflicts are listed, never resolved by last-writer-wins |
+
+Details: [Storage modes](docs/book/src/storage-modes.md).
+
+## Formulas
+
+Workflow templates that stamp and drive chains of work items (beads'
+molecules) are [shuttle](https://github.com/scbrown/shuttle)'s job, not a
+second engine inside seeds. Today a seed can record the shuttle run that
+drives it (`--workflow-run`); the integration is the next step:
+[Formulas](docs/book/src/formulas.md).
+
 ## Wire it into your agent
 
 Agents keep typing `bd`. [desire-path](https://github.com/scbrown/desire-path)

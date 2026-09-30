@@ -43,6 +43,7 @@ is a namespace name, not a host anyone contacts.
 | close reason, defer | `seeds:closeReason`, `seeds:deferUntil` | string |
 | `related`, `parent-child`, `discovered-from` | `seeds:relatedTo`, `seeds:childOf`, `seeds:discoveredFrom` | item IRI |
 | compare-and-set token | `seeds:revision` | integer, 1 at create, +1 per write |
+| driving workflow run | `seeds:workflowRun` | a shuttle run IRI, `urn:shuttle:run:<id>` ([Formulas](formulas.md)) |
 
 A comment is its own entity, `https://seeds.local/item/<id>/comment/<n>`, typed
 `seeds:Comment`, with `seeds:commentOn`, `seeds:commentIndex`, `seeds:author`,
@@ -109,34 +110,27 @@ primitive the shared-server backend needs (below).
 Reads take no lock. quipu keeps the store in SQLite WAL mode, so a reader sees
 the last committed transaction while a write is in flight.
 
-## Why seeds embeds quipu instead of calling a server
+## Why the default is an embedded quipu
 
 The original brief sketched reads through quipu's SPARQL `/query` and writes
-through `/knot` on a quipu server. seeds v0.1 instead embeds quipu as a
-library (`quipu-ai`) with a local store file, as the other stack tools do,
-for four reasons:
+through `/knot` on a quipu server. seeds instead embeds quipu as a library
+(`quipu-ai`) with a local store file by default, as the other stack tools do,
+and reaches a server only when configured to
+([Storage modes](storage-modes.md)):
 
-1. **A lost-update-free write needs a precondition, and the server does not
-   offer one yet.** `/knot` has no compare-and-set. `/update` runs SPARQL
-   `DELETE/INSERT … WHERE` under the store lock, so its `WHERE` clause is an
-   atomic precondition, but it returns no affected count (the caller cannot
-   tell whether the swap matched), records no actor, and rebuilds the whole
-   store in memory on every call. Embedded, seeds checks the revision and
-   commits in the same process, under a lock it controls.
+1. **A lost-update-free write needs a precondition.** `/knot` has none.
+   `/update`'s `WHERE` clause is one, and mode 2 uses it, but it returns no
+   affected count (seeds reads back to confirm), records no actor, and copies
+   the whole store into memory on every call. Embedded, seeds checks the
+   revision and commits in one process, under a lock it controls, for the
+   cost of the seeds that changed.
 2. **Out of the box means local.** `sd create` in an empty directory works with
    no server, no credentials and no configuration.
 3. **The same core runs on wasm32.** quipu's library builds for
-   `wasm32-unknown-unknown` with an in-memory store; a server client would not
-   give the browser a store of its own. See [WebAssembly](wasm.md).
+   `wasm32-unknown-unknown` with an in-memory store; see [WebAssembly](wasm.md).
 4. **Testable.** Every verb, the concurrency guarantees and the JSON shapes
-   are tested against a real quipu store in CI, with nothing to stand up.
+   are tested against a real quipu store with nothing to stand up; the
+   remote mode is tested against a real `quipu-server`.
 
-The store file is an ordinary quipu store, so everything quipu does applies:
-`quipu` itself can open it, and a qpack can carry the project graph to another
-team.
-
-A shared quipu **server** is still the goal for teams. The configuration
-already has a place for it (`[quipu] url`), and it is refused honestly rather
-than faked: an unreachable URL is exit 7 and never falls back to a local store
-(that would fork the ledger); a reachable one is exit 20, "not built yet".
-Building it needs the server-side precondition from point 1.
+The store file is an ordinary quipu store, and a project's ledger travels as a
+pendant, quipu's own share format.

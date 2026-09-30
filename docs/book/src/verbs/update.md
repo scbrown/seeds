@@ -19,6 +19,7 @@ sd update sd-a3f --defer 2026-10-15      # hide from ready until then
 | `--claim` | set assignee to the actor and status to `in_progress`, only if the seed is open, unclaimed and unblocked |
 | `--add-label`, `--remove-label` | repeatable |
 | `--defer DATE` | hide from `ready` until this date or instant (`""` clears it) |
+| `--workflow-run RUN` | the shuttle run driving it (`""` clears it); see [Formulas](../formulas.md) |
 
 **`--claim` is a compare-and-set.** It succeeds for exactly one caller: a
 second claimer, or a claim on a blocked or non-open seed, exits **4** and

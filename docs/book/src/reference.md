@@ -12,7 +12,7 @@ Accepted on every verb.
 | `--json` | output as JSON, in br's output shape |
 | `--actor <NAME>` | actor recorded on writes and used by `--claim` (env `SEEDS_ACTOR`, else `$USER`) |
 | `--store <PATH>` | use this local quipu store file ([configuration](config.md)) |
-| `--quipu <URL>` | use this quipu server ([configuration](config.md); not built yet) |
+| `--quipu <URL>` | use this quipu server ([mode 2](storage-modes.md#mode-2-a-quipu-server)) |
 | `--graph <IRI>` | the project's named graph ([configuration](config.md)) |
 | `--at <TX>` | read as of this transaction (a [pin](pinning.md)); refused on writes |
 | `-h`, `--help` / `-V`, `--version` | help and version |
@@ -33,6 +33,12 @@ Accepted on every verb.
 | [`dep list <ID>`](verbs/dep.md) | `--direction down\|up` |
 | [`comments add <ID> [TEXT]...`](verbs/comments.md) | `-f/--file`, `-m/--message` (alias `--content`), `--author` |
 | [`comments list <ID>`](verbs/comments.md) | |
+| [`export`](verbs/sync.md#sd-export) | `--to <DIR>` |
+| [`import <DIR>`](verbs/sync.md#sd-import) | `--prefer pendant\|store`, `--replace` |
+| [`sync`](verbs/sync.md#sd-sync) | `--remote <URL>` |
+| [`merge-driver <BASE> <OURS> <THEIRS>`](verbs/sync.md#sd-merge-driver) | |
+
+`create` and `update` also take `--workflow-run <RUN>` ([Formulas](formulas.md)).
 
 ## Exit codes
 
@@ -44,12 +50,12 @@ Exit codes are a contract. A code is never reused or renumbered.
 | 1 | failed: store I/O or anything without a more specific code |
 | 2 | usage: an unknown verb, a bad flag or value, `--at` on a write |
 | 3 | not found: an unknown id, dependency or comment |
-| 4 | conflict: a lost `--claim`, or the seed changed since it was read; nothing was written |
+| 4 | conflict: a lost `--claim`, the seed changed since it was read, or two ledgers disagree (import, sync, merge-driver, a pendant that changed alongside the store); nothing was written |
 | 5 | refused: the shapes rejected the write, a dependency cycle, closing a seed with open blockers without `--force` |
 | 6 | configuration: contradictory or unreadable config (for example `store` and `url` both set) |
 | 7 | unreachable: the configured quipu server cannot be reached (seeds never falls back to a local store) |
 | 10-18 | **retired**: the v0 shell's per-verb "not yet implemented" codes. Never reused. |
-| 20 | not built: the configured capability (a quipu server URL) exists in the design but not in this build |
+| 20 | not built: reserved for a configured capability that exists in the design but not in this build (no verb returns it today) |
 
 In `--json` mode an error prints `{"error": {"code": "<NAME>", "message":
 "..."}}` on stdout, where `<NAME>` is `FAILED`, `USAGE`, `NOT_FOUND`,

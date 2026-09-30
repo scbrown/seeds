@@ -18,6 +18,7 @@ sd create "Blocked work" --deps sd-a3f,related:sd-b7c
 | `-l, --labels` | comma-separated labels |
 | `--parent ID` | parent seed; the new id is `<parent>.<n>` |
 | `--deps` | comma-separated: `ID` (a `blocks` dependency) or `TYPE:ID` |
+| `--workflow-run RUN` | the shuttle run that creates or drives it: a run IRI, or a bare id (becomes `urn:shuttle:run:<id>`); see [Formulas](../formulas.md) |
 | `--dry-run` | print what would be created, write nothing |
 | `--silent` | print only the new id |
 

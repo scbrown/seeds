@@ -425,6 +425,7 @@ fn a_stale_write_is_a_conflict_and_writes_nothing() {
             }],
             comments: vec![],
             source: "test".into(),
+            ..WriteBatch::default()
         },
         &ctx(2),
     )
@@ -442,6 +443,7 @@ fn a_stale_write_is_a_conflict_and_writes_nothing() {
                 }],
                 comments: vec![],
                 source: "test".into(),
+                ..WriteBatch::default()
             },
             &ctx(3),
         )
@@ -613,6 +615,7 @@ fn raw_write(b: &mut QuipuBackend, seed: seeds::model::Seed) -> seeds::error::Sd
             }],
             comments: vec![],
             source: "test".into(),
+            ..WriteBatch::default()
         },
         &ctx(1),
     )
@@ -658,4 +661,247 @@ fn the_shapes_refuse_a_seed_the_engine_would_never_build() {
     assert_eq!(e.kind, ErrorKind::Refused);
     assert!(e.message.contains("status"), "{}", e.message);
     assert!(b.snapshot(None).unwrap().seeds.is_empty());
+}
+
+// ---------------------------------------------------------------- pendants and sync
+
+use seeds::pendant::{self, Seal};
+use seeds::sync::{self, Prefer};
+
+fn board(b: &mut QuipuBackend) -> (String, String) {
+    let a = mk(b, "write the parser", 1);
+    let g = mk(b, "design the grammar", 2);
+    engine::dep_add(b, &ctx(3), &a, &g, "blocks").unwrap();
+    engine::comment_add(b, &ctx(4), &a, "needs the grammar first", None).unwrap();
+    engine::update(
+        b,
+        &ctx(5),
+        std::slice::from_ref(&g),
+        &UpdateReq {
+            add_labels: vec!["design".into()],
+            ..UpdateReq::default()
+        },
+    )
+    .unwrap();
+    (a, g)
+}
+
+#[test]
+fn a_pendant_round_trips_into_a_second_store_and_ready_agrees() {
+    let mut a = backend();
+    board(&mut a);
+    let p = pendant::export(&a).unwrap();
+    assert_eq!(pendant::seal(&p).unwrap(), Seal::Intact);
+    for f in pendant::FILES {
+        assert!(p.files.contains_key(f), "{f}");
+    }
+
+    let ledger = pendant::read(&p).unwrap();
+    let mut b = QuipuBackend::in_memory("https://seeds.local/project/other").unwrap();
+    let r = sync::import(&mut b, &ctx(9), &ledger.snapshot, None, false).unwrap();
+    assert_eq!(r.created.len(), 2);
+    assert_eq!(r.comments_added, 1);
+
+    let (sa, sb) = (a.snapshot(None).unwrap(), b.snapshot(None).unwrap());
+    assert_eq!(sa.seeds, sb.seeds, "seeds survive the round trip exactly");
+    assert_eq!(sa.comments, sb.comments);
+    assert_eq!(ready_ids(&a, 10), ready_ids(&b, 10));
+
+    // Deterministic: the second store exports the same ledger bytes.
+    let p2 = pendant::export(&b).unwrap();
+    assert_eq!(p.export_nt(), p2.export_nt());
+
+    // Importing the same pendant again changes nothing.
+    let again = sync::import(&mut b, &ctx(11), &ledger.snapshot, None, false).unwrap();
+    assert_eq!(
+        (again.created.len(), again.updated.len(), again.tx),
+        (0, 0, 0)
+    );
+}
+
+#[test]
+fn an_edited_pendant_breaks_its_seal_but_good_data_still_reads() {
+    let mut a = backend();
+    board(&mut a);
+    let mut p = pendant::export(&a).unwrap();
+    let nt = p.files.get_mut(pendant::EXPORT_NT).unwrap();
+    // A hand edit: reorder two lines. Still valid, no longer canonical.
+    let mut lines: Vec<&str> = nt.lines().collect();
+    lines.swap(0, 1);
+    *nt = lines.join("\n") + "\n";
+    assert!(matches!(pendant::seal(&p).unwrap(), Seal::Broken(_)));
+    let ledger = pendant::read(&p).unwrap();
+    assert_eq!(ledger.snapshot.seeds.len(), 2);
+}
+
+#[test]
+fn a_merge_that_kept_both_statuses_is_reported_not_resolved() {
+    let mut a = backend();
+    let (ida, _) = board(&mut a);
+    let mut p = pendant::export(&a).unwrap();
+    let nt = p.files.get_mut(pendant::EXPORT_NT).unwrap();
+    nt.push_str(&format!(
+        "<{}> <https://seeds.local/ontology/status> \"closed\" .\n",
+        seeds::vocab::item_iri(&ida)
+    ));
+    let e = pendant::read(&p).unwrap_err();
+    assert_eq!(e.kind, ErrorKind::Conflict);
+    assert!(
+        e.message.contains(&ida) && e.message.contains("status"),
+        "{}",
+        e.message
+    );
+}
+
+#[test]
+fn import_reports_conflicts_and_writes_nothing_unless_a_side_is_named() {
+    let mut a = backend();
+    let (ida, _) = board(&mut a);
+    let p = pendant::read(&pendant::export(&a).unwrap()).unwrap();
+    let mut b = backend();
+    sync::import(&mut b, &ctx(9), &p.snapshot, None, false).unwrap();
+    // Diverge: the store changes the title, the incoming ledger the priority.
+    engine::update(
+        &mut b,
+        &ctx(10),
+        std::slice::from_ref(&ida),
+        &UpdateReq {
+            title: Some("store title".into()),
+            ..UpdateReq::default()
+        },
+    )
+    .unwrap();
+    engine::update(
+        &mut a,
+        &ctx(10),
+        std::slice::from_ref(&ida),
+        &UpdateReq {
+            priority: Some("0".into()),
+            ..UpdateReq::default()
+        },
+    )
+    .unwrap();
+    let incoming = pendant::read(&pendant::export(&a).unwrap())
+        .unwrap()
+        .snapshot;
+    let before = b.snapshot(None).unwrap();
+    let e = sync::import(&mut b, &ctx(11), &incoming, None, false).unwrap_err();
+    assert_eq!(e.kind, ErrorKind::Conflict);
+    assert!(e.message.contains(&ida), "{}", e.message);
+    assert_eq!(
+        b.snapshot(None).unwrap().seeds,
+        before.seeds,
+        "nothing was written"
+    );
+
+    let kept = sync::import(&mut b, &ctx(12), &incoming, Some(Prefer::Existing), false).unwrap();
+    assert_eq!(kept.updated.len(), 0);
+    let took = sync::import(&mut b, &ctx(13), &incoming, Some(Prefer::Incoming), false).unwrap();
+    assert_eq!(took.updated, vec![ida.clone()]);
+    let s = b.snapshot(None).unwrap();
+    let s = s.get(&ida).unwrap();
+    assert_eq!((s.title.as_str(), s.priority), ("write the parser", 0));
+    assert!(
+        s.revision > before.get(&ida).unwrap().revision,
+        "revision moved forward"
+    );
+}
+
+#[test]
+fn replace_makes_the_store_exactly_the_ledger() {
+    let mut a = backend();
+    board(&mut a);
+    let incoming = pendant::read(&pendant::export(&a).unwrap())
+        .unwrap()
+        .snapshot;
+    let mut b = backend();
+    let stray = mk(&mut b, "only in the store", 1);
+    let r = sync::import(&mut b, &ctx(9), &incoming, None, true).unwrap();
+    assert_eq!(r.removed, vec![stray]);
+    assert_eq!(b.snapshot(None).unwrap().seeds, incoming.seeds);
+}
+
+#[test]
+fn sync_merges_changes_from_both_sides_field_by_field() {
+    let mut local = backend();
+    let (a, g) = board(&mut local);
+    let base = pendant::read(&pendant::export(&local).unwrap())
+        .unwrap()
+        .snapshot;
+    let mut remote = QuipuBackend::in_memory("https://seeds.local/project/remote").unwrap();
+    sync::import(&mut remote, &ctx(9), &base, None, true).unwrap();
+
+    // Local closes the grammar; remote relabels the parser and comments on it.
+    engine::close(
+        &mut local,
+        &ctx(10),
+        std::slice::from_ref(&g),
+        Some("done"),
+        false,
+    )
+    .unwrap();
+    engine::update(
+        &mut remote,
+        &ctx(10),
+        std::slice::from_ref(&a),
+        &UpdateReq {
+            add_labels: vec!["remote".into()],
+            ..UpdateReq::default()
+        },
+    )
+    .unwrap();
+    engine::comment_add(&mut remote, &ctx(11), &a, "from the remote", None).unwrap();
+    engine::comment_add(&mut local, &ctx(11), &a, "from local", None).unwrap();
+
+    let (merged, _lr, _rr) = sync::sync(&base, &mut local, &mut remote, &ctx(12)).unwrap();
+    let (l, r) = (
+        local.snapshot(None).unwrap(),
+        remote.snapshot(None).unwrap(),
+    );
+    assert_eq!(l.seeds, r.seeds, "both sides agree after sync");
+    assert_eq!(l.comments, r.comments);
+    assert_eq!(l.seeds, merged.seeds);
+    assert_eq!(l.get(&g).unwrap().status, "closed");
+    assert!(l.get(&a).unwrap().labels.contains("remote"));
+    let texts: Vec<&str> = l.comments_on(&a).iter().map(|c| c.text.as_str()).collect();
+    assert_eq!(texts.len(), 3, "both new comments kept: {texts:?}");
+    assert_eq!(ready_ids(&local, 13), ready_ids(&remote, 13));
+    assert_eq!(ready_ids(&local, 13), vec![a.clone()]);
+
+    // A second sync with nothing new is a no-op.
+    let new_base = local.snapshot(None).unwrap();
+    let (_, lr, rr) = sync::sync(&new_base, &mut local, &mut remote, &ctx(14)).unwrap();
+    assert_eq!((lr.tx, rr.tx), (0, 0));
+}
+
+#[test]
+fn sync_reports_a_field_both_sides_changed_and_writes_nothing() {
+    let mut local = backend();
+    let (a, _) = board(&mut local);
+    let base = local.snapshot(None).unwrap();
+    let mut remote = backend();
+    sync::import(&mut remote, &ctx(9), &base, None, true).unwrap();
+    let set_status = |b: &mut QuipuBackend, st: &str| {
+        engine::update(
+            b,
+            &ctx(10),
+            std::slice::from_ref(&a),
+            &UpdateReq {
+                status: Some(st.into()),
+                ..UpdateReq::default()
+            },
+        )
+        .unwrap();
+    };
+    set_status(&mut local, "in_progress");
+    set_status(&mut remote, "blocked");
+    let (lb, rb) = (
+        local.snapshot(None).unwrap(),
+        remote.snapshot(None).unwrap(),
+    );
+    let e = sync::sync(&base, &mut local, &mut remote, &ctx(11)).unwrap_err();
+    assert_eq!(e.kind, ErrorKind::Conflict);
+    assert!(e.message.contains("status"), "{}", e.message);
+    assert_eq!(local.snapshot(None).unwrap().seeds, lb.seeds);
+    assert_eq!(remote.snapshot(None).unwrap().seeds, rb.seeds);
 }

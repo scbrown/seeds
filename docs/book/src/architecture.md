@@ -8,14 +8,14 @@
           │ rewritten to `sd ready --json`
           ▼
   sd (native CLI)   config: flags > env > .seeds/config.toml > ~/.config/seeds > default
-          │         clock, store file, write lock
+          │         clock, store file, write lock, pendant files, HTTP
           ▼
-  seeds core        verbs, ready, JSON         ◀── also builds for wasm32
+  seeds core        verbs, ready, JSON, pendant, merge   ◀── also builds for wasm32
           │  Backend trait
-          ▼
-  QuipuBackend ──── quipu (embedded library) ── .seeds/seeds.db
-                    one project = one named graph; one write = one transaction
-                    shapes: camayoc WorkItem + seeds
+          ├──▶ QuipuBackend ── quipu (embedded) ── .seeds/seeds.db ⇄ .seeds/pendant/ (git)
+          └──▶ RemoteBackend ── quipu server: /query, /update (compare-and-set)
+                one project = one named graph; one write = one transaction
+                shapes: camayoc WorkItem + seeds
 ```
 
 ## The pieces

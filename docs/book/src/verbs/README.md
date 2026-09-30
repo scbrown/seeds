@@ -11,6 +11,7 @@
 | `close` | yes | [close](close.md) |
 | `dep add`, `dep remove`, `dep list` | add/remove | [dep](dep.md) |
 | `comments add`, `comments list` | add | [comments](comments.md) |
+| `export`, `import`, `sync`, `merge-driver` | import, sync, merge-driver | [export, import, sync](sync.md) |
 
 Every verb accepts the [global options](../reference.md#global-options), and
 every read accepts `--at <tx>`. A verb that writes prints the transaction it

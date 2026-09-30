@@ -271,17 +271,6 @@ fn an_unreachable_url_is_an_error_and_never_falls_back_to_local() {
         !sb.work().join(".seeds").exists(),
         "no local store was created"
     );
-
-    // Reachable, but the server backend is not built: a distinct code.
-    let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-    let url = format!("http://127.0.0.1:{}", l.local_addr().unwrap().port());
-    let o = sb
-        .cmd(&sb.work(), &["ready"])
-        .env("SEEDS_QUIPU_URL", &url)
-        .output()
-        .unwrap();
-    assert_eq!(code(&o), 20);
-    assert!(!sb.work().join(".seeds").exists());
 }
 
 #[test]
@@ -364,4 +353,16 @@ fn comments_from_a_file_and_pins_through_the_cli() {
     let then = &sb.json(&["show", &id, "--at", &tx1])[0];
     assert_eq!(then["title"], "Ship the parser");
     assert_eq!(then["priority"], 1);
+}
+
+#[test]
+fn a_seed_records_the_shuttle_run_that_drives_it() {
+    let sb = Sandbox::new("workflow-run");
+    let v = sb.json(&["create", "stamped", "--workflow-run", "release-42"]);
+    assert_eq!(v["workflow_run"], "urn:shuttle:run:release-42");
+    let id = v["id"].as_str().unwrap().to_string();
+    let v = sb.json(&["update", &id, "--workflow-run", "urn:shuttle:run:other"]);
+    assert_eq!(v[0]["workflow_run"], "urn:shuttle:run:other");
+    let v = sb.json(&["update", &id, "--workflow-run", ""]);
+    assert!(v[0]["workflow_run"].is_null());
 }

@@ -60,9 +60,9 @@ else, or to change the id prefix, see [Configuration](config.md).
 - **`no seeds store at … yet`** on a read. Nothing has been written in this
   project (or the configuration points somewhere new); the answer is empty
   because the store is, not because nothing matched.
-- **Exit 7 or 20 with a URL in the message.** A quipu server URL is configured
-  (`[quipu] url` or `SEEDS_QUIPU_URL`). The server backend is not built yet;
-  use a local store. See [Configuration](config.md).
+- **Exit 7 with a URL in the message.** A quipu server is configured
+  (`[quipu] url` or `SEEDS_QUIPU_URL`) and cannot be reached. seeds does not
+  fall back to a local store. See [Storage modes](storage-modes.md).
 - **An older version prints.** Another copy is earlier on your `PATH`:
   `which -a sd`. If `sd --version` does not print `sd <version>`, it is
   a different `sd`.

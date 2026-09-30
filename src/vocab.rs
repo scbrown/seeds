@@ -124,6 +124,14 @@ pub mod term {
     pub fn discovered_from() -> String {
         seeds("discoveredFrom")
     }
+    /// `seeds:workflowRun`: the shuttle run (`urn:shuttle:run:<id>`) that
+    /// created or drives the seed. Neither camayoc nor shuttle has a term
+    /// linking a WorkItem to a WorkflowRun yet; this is seeds' stopgap and a
+    /// proposal for camayoc, not a parallel vocabulary for runs themselves
+    /// (runs, definitions and transitions stay in shuttle's `aegis:` terms).
+    pub fn workflow_run() -> String {
+        seeds("workflowRun")
+    }
     /// `seeds:Comment`.
     pub fn comment() -> String {
         seeds("Comment")
@@ -161,6 +169,20 @@ pub fn item_id(iri: &str) -> Option<String> {
 /// The IRI of a seed's `index`th comment.
 pub fn comment_iri(id: &str, index: u64) -> String {
     format!("{SEEDS_BASE}item/{}/comment/{index}", encode(id))
+}
+
+/// The shuttle namespace for run IRIs (shuttle's default `SHUTTLE_ENTITY_NS`).
+pub const SHUTTLE_RUN_PREFIX: &str = "urn:shuttle:run:";
+
+/// A shuttle run reference as an IRI: a full IRI is kept, a bare run id
+/// becomes `urn:shuttle:run:<id>`.
+pub fn run_iri(run: &str) -> String {
+    let r = run.trim();
+    if r.contains(':') {
+        r.to_string()
+    } else {
+        format!("{SHUTTLE_RUN_PREFIX}{r}")
+    }
 }
 
 /// The IRI of a principal (an assignee).

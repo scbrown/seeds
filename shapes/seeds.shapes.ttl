@@ -77,6 +77,12 @@ seeds:SeedsWorkItemShape a sh:NodeShape ;
         sh:message "seeds: a seed carries exactly one revision, the compare-and-set token" ;
     ] ;
     sh:property [
+        sh:path seeds:workflowRun ;
+        sh:maxCount 1 ;
+        sh:nodeKind sh:IRI ;
+        sh:message "seeds: a seed is driven by at most one workflow run, named by its IRI" ;
+    ] ;
+    sh:property [
         sh:path seeds:issueType ;
         sh:minCount 1 ;
         sh:maxCount 1 ;
