@@ -683,6 +683,159 @@ pub fn epic_close_eligible(
     Ok((closed, skipped, tx))
 }
 
+/// One node of `sd graph`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GraphNode {
+    /// The seed.
+    pub seed: Seed,
+    /// Breadth-first distance from the root (or from the component's roots).
+    pub depth: usize,
+}
+
+/// A connected piece of `sd graph`: nodes, `[waiter, waited_on]` edges, roots.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Graph {
+    /// Nodes in breadth-first order.
+    pub nodes: Vec<GraphNode>,
+    /// `(from, to)`: `from` waits on `to`.
+    pub edges: Vec<(String, String)>,
+    /// Where the walk started.
+    pub roots: Vec<String>,
+}
+
+/// What a live seed waits on, br's way: its `blocks` targets, and (for a
+/// parent) its children, since a parent waits on its children. Tombstones
+/// take no part.
+fn waits_on(snap: &Snapshot, s: &Seed) -> Vec<String> {
+    let live = |id: &String| snap.seeds.get(id).is_some_and(|t| !t.is_tombstone());
+    let mut out: Vec<String> = s.blocked_on.iter().filter(|t| live(t)).cloned().collect();
+    out.extend(
+        snap.seeds
+            .values()
+            .filter(|c| c.parent.as_deref() == Some(s.id.as_str()) && !c.is_tombstone())
+            .map(|c| c.id.clone()),
+    );
+    out
+}
+
+/// One BFS step: the next node, and the `(from, to)` edge that reached it.
+type Step = (String, (String, String));
+
+fn bfs(snap: &Snapshot, roots: &[String], next: &dyn Fn(&Seed) -> Vec<Step>) -> Graph {
+    let mut seen: BTreeSet<String> = roots.iter().cloned().collect();
+    let mut nodes = Vec::new();
+    let mut edges = Vec::new();
+    let mut queue: std::collections::VecDeque<(String, usize)> =
+        roots.iter().map(|r| (r.clone(), 0)).collect();
+    while let Some((id, depth)) = queue.pop_front() {
+        let Some(s) = snap.seeds.get(&id) else {
+            continue;
+        };
+        nodes.push(GraphNode {
+            seed: s.clone(),
+            depth,
+        });
+        for (n, edge) in next(s) {
+            if !edges.contains(&edge) {
+                edges.push(edge);
+            }
+            if seen.insert(n.clone()) {
+                queue.push_back((n, depth + 1));
+            }
+        }
+    }
+    Graph {
+        nodes,
+        edges,
+        roots: roots.to_vec(),
+    }
+}
+
+/// `sd graph <id>`: what the seed unblocks (its `blocks` dependents,
+/// transitively), or with `dependencies` what it waits on (blockers and, for
+/// a parent, children). Shapes as br.
+pub fn graph(b: &dyn Backend, id: &str, dependencies: bool, at: Option<u64>) -> Result<Graph> {
+    let snap = b.snapshot(at)?;
+    snap.get(id)?;
+    let roots = [id.to_string()];
+    Ok(if dependencies {
+        bfs(&snap, &roots, &|s| {
+            waits_on(&snap, s)
+                .into_iter()
+                .map(|t| (t.clone(), (s.id.clone(), t)))
+                .collect()
+        })
+    } else {
+        bfs(&snap, &roots, &|s| {
+            snap.seeds
+                .values()
+                .filter(|d| !d.is_tombstone() && d.blocked_on.contains(&s.id))
+                .map(|d| (d.id.clone(), (d.id.clone(), s.id.clone())))
+                .collect()
+        })
+    })
+}
+
+/// `sd graph --all`: the connected components of every open, in-progress or
+/// blocked seed. Each component is rooted at the seeds that wait on nothing
+/// and walked toward what waits on them.
+pub fn graph_all(b: &dyn Backend, at: Option<u64>) -> Result<Vec<Graph>> {
+    let snap = b.snapshot(at)?;
+    let active = |s: &Seed| matches!(s.status.as_str(), "open" | "in_progress" | "blocked");
+    let members: Vec<&Seed> = snap.seeds.values().filter(|s| active(s)).collect();
+    let ids: BTreeSet<String> = members.iter().map(|s| s.id.clone()).collect();
+    let mut out_edges: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    let mut in_edges: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    for s in &members {
+        for t in waits_on(&snap, s).into_iter().filter(|t| ids.contains(t)) {
+            out_edges.entry(s.id.clone()).or_default().push(t.clone());
+            in_edges.entry(t).or_default().push(s.id.clone());
+        }
+    }
+    let mut done: BTreeSet<String> = BTreeSet::new();
+    let mut graphs = Vec::new();
+    for s in &members {
+        if done.contains(&s.id) {
+            continue;
+        }
+        // The component, ignoring direction.
+        let mut comp: BTreeSet<String> = BTreeSet::new();
+        let mut stack = vec![s.id.clone()];
+        while let Some(id) = stack.pop() {
+            if comp.insert(id.clone()) {
+                for n in out_edges
+                    .get(&id)
+                    .into_iter()
+                    .chain(in_edges.get(&id))
+                    .flatten()
+                {
+                    stack.push(n.clone());
+                }
+            }
+        }
+        done.extend(comp.iter().cloned());
+        let roots: Vec<String> = comp
+            .iter()
+            .filter(|id| out_edges.get(*id).is_none_or(Vec::is_empty))
+            .cloned()
+            .collect();
+        let roots = if roots.is_empty() {
+            vec![s.id.clone()]
+        } else {
+            roots
+        };
+        graphs.push(bfs(&snap, &roots, &|x| {
+            in_edges
+                .get(&x.id)
+                .into_iter()
+                .flatten()
+                .map(|w| (w.clone(), (w.clone(), x.id.clone())))
+                .collect()
+        }));
+    }
+    Ok(graphs)
+}
+
 /// `sd blocked`. Repeated types and priorities are alternatives; labels must
 /// all match (br's semantics).
 #[derive(Debug, Clone, Default)]

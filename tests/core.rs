@@ -1695,3 +1695,48 @@ fn deleting_a_closed_seed_drops_its_close_so_a_tombstone_is_never_a_close() {
         "history keeps the close"
     );
 }
+
+#[test]
+fn graph_walks_like_br_dependents_dependencies_and_components() {
+    // The shape measured on br: target T, B blocks-on T, C child of T, R related to T.
+    let mut b = backend();
+    let t = mk(&mut b, "target", 1);
+    let bl = mk(&mut b, "blocks", 2);
+    let r = mk(&mut b, "related", 3);
+    engine::dep_add(&mut b, &ctx(4), &bl, &t, "blocks").unwrap();
+    engine::dep_add(&mut b, &ctx(5), &r, &t, "related").unwrap();
+    let c = engine::create(
+        &mut b,
+        &ctx(6),
+        &CreateReq {
+            title: "child".into(),
+            parent: Some(t.clone()),
+            ..CreateReq::default()
+        },
+    )
+    .unwrap()
+    .0
+    .id;
+    let ids = |g: &engine::Graph| {
+        g.nodes
+            .iter()
+            .map(|n| (n.seed.id.clone(), n.depth))
+            .collect::<Vec<_>>()
+    };
+    // Dependents: only blocks edges (br shows neither the related nor the child).
+    let g = engine::graph(&b, &t, false, None).unwrap();
+    assert_eq!(ids(&g), [(t.clone(), 0), (bl.clone(), 1)]);
+    assert_eq!(g.edges, [(bl.clone(), t.clone())]);
+    // Dependencies: B waits on T, and T (a parent) waits on its child.
+    let g = engine::graph(&b, &bl, true, None).unwrap();
+    assert_eq!(ids(&g), [(bl.clone(), 0), (t.clone(), 1), (c.clone(), 2)]);
+    assert_eq!(g.edges, [(bl.clone(), t.clone()), (t.clone(), c.clone())]);
+    // Components: {C, T, B} rooted at C; R alone.
+    let all = engine::graph_all(&b, None).unwrap();
+    let big = all.iter().find(|g| g.nodes.len() == 3).unwrap();
+    assert_eq!(big.roots, [c.as_str()]);
+    assert_eq!(ids(big), [(c, 0), (t, 1), (bl, 2)]);
+    assert!(all
+        .iter()
+        .any(|g| g.roots == [r.clone()] && g.nodes.len() == 1));
+}
