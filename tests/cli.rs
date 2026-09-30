@@ -866,6 +866,11 @@ fn orphans_reads_the_git_log_of_the_current_repo() {
     };
     assert_eq!(code(&sb.run(&["orphans"])), 2, "not a git repo yet");
     git(&["init", "-q"]);
+    assert_eq!(
+        sb.json(&["orphans"]),
+        serde_json::json!([]),
+        "no commits yet: empty, not an error"
+    );
     git(&[
         "commit",
         "-q",

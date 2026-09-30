@@ -1583,12 +1583,22 @@ fn dispatch(cli: &Cli, cfg: &Resolved, ctx: &Ctx, b: &mut dyn Backend) -> Result
                 .args(["log", "--format=%h%x1f%H%x1f%s%x1f%b%x1e"])
                 .output()
                 .map_err(|e| SdError::failed(format!("cannot run git: {e}")))?;
-            if !out.status.success() {
+            let in_repo = std::process::Command::new("git")
+                .args(["rev-parse", "--is-inside-work-tree"])
+                .output()
+                .is_ok_and(|o| o.status.success());
+            if !in_repo {
                 return Err(SdError::usage(
                     "orphans reads git history; run it inside a git repository",
                 ));
             }
-            let log = String::from_utf8_lossy(&out.stdout);
+            // A repository with no commits yet has an empty history, not an
+            // error: `git log` fails there, and the answer is [].
+            let log = if out.status.success() {
+                String::from_utf8_lossy(&out.stdout).into_owned()
+            } else {
+                String::new()
+            };
             let mut full: std::collections::BTreeMap<String, String> = Default::default();
             let commits: Vec<engine::CommitText> = log
                 .split('\x1e')
