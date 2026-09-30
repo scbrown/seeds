@@ -325,8 +325,14 @@ pub struct CreateArgs {
     #[arg(short, long)]
     pub priority: Option<String>,
     /// Description
-    #[arg(short, long)]
+    #[arg(short, long, alias = "body")]
     pub description: Option<String>,
+    /// Initial status (open, in_progress, blocked or deferred; default open)
+    #[arg(short, long)]
+    pub status: Option<String>,
+    /// Defer until: +1d, tomorrow, YYYY-MM-DD, RFC 3339 (status deferred)
+    #[arg(long)]
+    pub defer: Option<String>,
     /// Read the description from a file
     #[arg(long, value_name = "PATH")]
     pub description_file: Option<String>,
@@ -708,8 +714,20 @@ pub struct UpdateArgs {
     #[arg(long)]
     pub title: Option<String>,
     /// New description
-    #[arg(short, long)]
+    #[arg(short, long, alias = "body")]
     pub description: Option<String>,
+    /// Read the new description from a file (`-` for stdin)
+    #[arg(long, value_name = "PATH", conflicts_with = "description")]
+    pub description_file: Option<String>,
+    /// New type
+    #[arg(short = 't', long = "type")]
+    pub issue_type: Option<String>,
+    /// Replace ALL labels (repeatable; comma-separated allowed)
+    #[arg(long)]
+    pub set_labels: Vec<String>,
+    /// Move under a new parent ("" detaches)
+    #[arg(long)]
+    pub parent: Option<String>,
     /// New notes
     #[arg(long)]
     pub notes: Option<String>,

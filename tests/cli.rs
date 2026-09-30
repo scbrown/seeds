@@ -899,3 +899,56 @@ fn count_by_shorthands_equal_by_and_conflicts_are_refused() {
     assert_eq!(code(&sb.run(&["count", "--by-status", "--by-type"])), 2);
     assert_eq!(code(&sb.run(&["count", "--by", "status", "--by-type"])), 2);
 }
+
+#[test]
+fn update_changes_type_labels_parent_and_description_like_br() {
+    let sb = Sandbox::new("update-flags");
+    let a = sb
+        .ok(&["create", "a", "-l", "x,y", "--silent"])
+        .trim()
+        .to_string();
+    let p = sb.ok(&["create", "parent", "--silent"]).trim().to_string();
+    // -t (sd-non.3), --set-labels replaces all, --parent reparents.
+    let up = sb.json(&[
+        "update",
+        &a,
+        "-t",
+        "bug",
+        "--set-labels",
+        "z",
+        "--parent",
+        &p,
+    ]);
+    assert_eq!(up[0]["issue_type"], "bug");
+    assert_eq!(up[0]["labels"], serde_json::json!(["z"]));
+    assert_eq!(up[0]["parent"], p.as_str());
+    // A seed cannot become its own ancestor.
+    assert_eq!(code(&sb.run(&["update", &p, "--parent", &a])), 5);
+    // "" detaches; --body is --description; --description-file reads a file.
+    assert!(sb.json(&["update", &a, "--parent", ""])[0]["parent"].is_null());
+    assert_eq!(
+        sb.json(&["update", &a, "--body", "b1"])[0]["description"],
+        "b1"
+    );
+    let f = sb.root.join("desc.md");
+    std::fs::write(&f, "## Acceptance Criteria\n- x\n").unwrap();
+    let d = sb.json(&["update", &a, "--description-file", f.to_str().unwrap()]);
+    assert_eq!(d[0]["description"], "## Acceptance Criteria\n- x\n");
+}
+
+#[test]
+fn create_takes_an_initial_status_or_a_defer_date() {
+    let sb = Sandbox::new("create-status");
+    let s = sb.json(&["create", "working", "--status", "in_progress"]);
+    assert_eq!(s["status"], "in_progress");
+    let d = sb.json(&["create", "later", "--defer", "2099-01-01"]);
+    assert_eq!(
+        (d["status"].as_str(), d["defer_until"].as_str()),
+        (Some("deferred"), Some("2099-01-01"))
+    );
+    assert_eq!(code(&sb.run(&["create", "x", "--status", "closed"])), 2);
+    assert_eq!(
+        code(&sb.run(&["create", "x", "--status", "open", "--defer", "+1d"])),
+        2
+    );
+}

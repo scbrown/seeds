@@ -1335,6 +1335,12 @@ fn tx_note(tx: u64) -> String {
 }
 
 fn read_text(path: &str) -> Result<String> {
+    if path == "-" {
+        let mut s = String::new();
+        std::io::Read::read_to_string(&mut std::io::stdin(), &mut s)
+            .map_err(|e| SdError::usage(format!("cannot read stdin: {e}")))?;
+        return Ok(s);
+    }
     std::fs::read_to_string(path).map_err(|e| SdError::usage(format!("cannot read {path}: {e}")))
 }
 
@@ -1397,6 +1403,8 @@ fn dispatch(cli: &Cli, cfg: &Resolved, ctx: &Ctx, b: &mut dyn Backend) -> Result
                 workflow_run: a.workflow_run.clone(),
                 step: a.step.clone(),
                 visit: a.visit,
+                status: a.status.clone(),
+                defer: a.defer.clone(),
                 dry_run: a.dry_run,
             };
             let engine::Created { seed, tx, existed } = engine::create_outcome(b, ctx, &req)?;
@@ -1885,7 +1893,10 @@ fn dispatch(cli: &Cli, cfg: &Resolved, ctx: &Ctx, b: &mut dyn Backend) -> Result
         Command::Update(a) => {
             let req = engine::UpdateReq {
                 title: a.title.clone(),
-                description: a.description.clone(),
+                description: match &a.description_file {
+                    Some(f) => Some(read_text(f)?),
+                    None => a.description.clone(),
+                },
                 notes: a.notes.clone(),
                 owner: a.owner.clone(),
                 status: a.status.clone(),
@@ -1896,6 +1907,9 @@ fn dispatch(cli: &Cli, cfg: &Resolved, ctx: &Ctx, b: &mut dyn Backend) -> Result
                 remove_labels: a.remove_label.clone(),
                 defer: a.defer.clone(),
                 workflow_run: a.workflow_run.clone(),
+                issue_type: a.issue_type.clone(),
+                set_labels: (!a.set_labels.is_empty()).then(|| a.set_labels.clone()),
+                parent: a.parent.clone(),
                 transition_comment: a.transition_comment.clone(),
             };
             let (seeds, tx) = engine::update(b, ctx, &a.ids, &req)?;
