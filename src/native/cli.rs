@@ -6,7 +6,9 @@ use clap::{Args, Parser, Subcommand};
 #[derive(Debug, Parser)]
 #[command(
     name = "sd",
-    version,
+    // "(seeds)": chmln/sd also answers `sd --version` with "sd <ver>", so
+    // tools that must tell the two apart look for it (aegis-1i5h1j).
+    version = concat!(env!("CARGO_PKG_VERSION"), " (seeds)"),
     about = "Beads-compatible work items as facts in a quipu graph",
     long_about = "seeds is the beads-compatible tracker for the quipu stack, with \
                   fact-level versioning of work items. Each work item is a set of facts in a quipu knowledge \
