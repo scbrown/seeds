@@ -26,6 +26,7 @@
   - [update](verbs/update.md)
   - [close](verbs/close.md)
   - [reopen, defer, undefer](verbs/reopen.md)
+  - [delete](verbs/delete.md)
   - [blocked](verbs/blocked.md)
   - [label](verbs/label.md)
   - [epic](verbs/epic.md)

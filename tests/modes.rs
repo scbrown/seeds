@@ -766,3 +766,49 @@ fn a_lost_response_is_read_back_and_never_duplicates_a_create() {
     );
     assert_eq!(count_remote(&env, &work, &url), 1);
 }
+
+#[test]
+fn a_delete_syncs_both_ways_without_allow_remote_deletes() {
+    // aegis-w3k75d.8 constraint 3: a delete is a tombstone, i.e. an ordinary
+    // change, so sync carries it with no --allow-remote-deletes.
+    let mut env = Env::new("sync-delete");
+    let Some(url) = env.start_server() else {
+        eprintln!("SKIPPED: set SEEDS_TEST_QUIPU_SERVER to a quipu-server binary to run this");
+        return;
+    };
+    let repo = env.pendant_project("repo");
+    let (a, g) = board(&env, &repo);
+    let sync_env = [("SEEDS_SYNC_REMOTE", url.as_str())];
+    env.ok(&repo, &["sync"], &sync_env);
+    let id = std::fs::read_to_string(repo.join(".seeds/project-id")).unwrap();
+    let graph = format!("https://seeds.local/project/sd-{}", id.trim());
+    let remote = [
+        ("SEEDS_QUIPU_URL", url.as_str()),
+        ("SEEDS_GRAPH", graph.as_str()),
+    ];
+    let work = env.dir("work");
+    // Local delete -> sync -> the remote sees a tombstone, not a removal.
+    env.ok(&repo, &["delete", &g, "--force", "--reason", "dup"], &[]);
+    let o = env.sd(&repo, &["sync"], &sync_env);
+    assert_eq!(
+        o.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&o.stderr)
+    );
+    let v: Value = serde_json::from_str(&env.ok(&work, &["show", &g, "--json"], &remote)).unwrap();
+    assert_eq!(v[0]["status"], "tombstone");
+    assert!(!env.ready(&work, &remote).contains(&g));
+    // Remote delete -> sync -> the local store sees it too.
+    env.ok(&work, &["delete", &a, "--force"], &remote);
+    let o = env.sd(&repo, &["sync"], &sync_env);
+    assert_eq!(
+        o.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&o.stderr)
+    );
+    let v: Value = serde_json::from_str(&env.ok(&repo, &["show", &a, "--json"], &[])).unwrap();
+    assert_eq!(v[0]["status"], "tombstone");
+    assert!(env.ready(&repo, &[]).is_empty());
+}

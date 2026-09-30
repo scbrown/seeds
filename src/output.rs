@@ -97,8 +97,8 @@ pub fn with_tx(mut value: Json, tx: Option<u64>) -> Json {
     value
 }
 
-/// `stats --json`: br's `{summary, breakdowns?}`. seeds has no drafts,
-/// tombstones or pins, so those counts are always 0.
+/// `stats --json`: br's `{summary, breakdowns?}`. seeds has no drafts or
+/// pins, so those counts are always 0.
 pub fn stats_json(st: &Stats) -> Json {
     let mut o = json!({"summary": {
         "total_issues": st.total,
@@ -109,7 +109,7 @@ pub fn stats_json(st: &Stats) -> Json {
         "deferred_issues": st.deferred,
         "draft_issues": 0,
         "ready_issues": st.ready,
-        "tombstone_issues": 0,
+        "tombstone_issues": st.tombstones,
         "pinned_issues": 0,
         "epics_eligible_for_closure": st.epics_eligible_for_closure,
         "average_lead_time_hours": st.average_lead_time_hours,
