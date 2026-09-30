@@ -54,6 +54,30 @@ pub fn run(cli: &Cli) -> Outcome {
             Err(e) => error_outcome(cli.json, &e, Vec::new()),
         };
     }
+    if let Command::Schema { target } = &cli.command {
+        // Needs no store and no configuration. The output is JSON either way.
+        let value = if target == "all" {
+            Some(crate::schema::all(env!("CARGO_PKG_VERSION")))
+        } else {
+            crate::schema::target(target)
+        };
+        return match value {
+            Some(v) => ok(
+                cli.json,
+                v.clone(),
+                serde_json::to_string_pretty(&v).unwrap_or_default(),
+                vec![],
+            ),
+            None => {
+                let names: Vec<&str> = crate::schema::TARGETS.iter().map(|(n, _)| *n).collect();
+                let e = SdError::usage(format!(
+                    "unknown schema {target:?}; one of all, {}",
+                    names.join(", ")
+                ));
+                error_outcome(cli.json, &e, Vec::new())
+            }
+        };
+    }
     if let Command::Version(a) = &cli.command {
         // Needs no store and no configuration.
         return version(cli.json, a.short);
@@ -1534,6 +1558,7 @@ fn dispatch(cli: &Cli, cfg: &Resolved, ctx: &Ctx, b: &mut dyn Backend) -> Result
         | Command::Completions(_)
         | Command::Init(_)
         | Command::Where
+        | Command::Schema { .. }
         | Command::Config { .. }
         | Command::Query(_)
         | Command::Upgrade(_)
