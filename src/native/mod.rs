@@ -774,18 +774,6 @@ fn dispatch(cli: &Cli, ctx: &Ctx, b: &mut dyn Backend) -> Result<Outcome> {
             let r = engine::undefer(b, ctx, &a.ids)?;
             Ok(transitions(json, "undeferred", "undeferred", r))
         }
-        Command::Reopen(a) => {
-            let r = engine::reopen(b, ctx, &a.ids, a.reason.as_deref())?;
-            Ok(transitions(json, "reopened", "reopened", r))
-        }
-        Command::Defer(a) => {
-            let r = engine::defer(b, ctx, &a.ids, a.until.as_deref())?;
-            Ok(transitions(json, "deferred", "deferred", r))
-        }
-        Command::Undefer(a) => {
-            let r = engine::undefer(b, ctx, &a.ids)?;
-            Ok(transitions(json, "undeferred", "undeferred", r))
-        }
         Command::Dep { command } => match command {
             DepCommand::Add {
                 issue,
