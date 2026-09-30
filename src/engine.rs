@@ -1186,6 +1186,16 @@ fn claim(snap: &Snapshot, s: &mut Seed, actor: &str) -> Result<()> {
 }
 
 fn set_status(s: &mut Seed, status: &str, now: &str, reason: Option<&str>) {
+    set_status_as(s, status, now, reason, None);
+}
+
+fn set_status_as(
+    s: &mut Seed,
+    status: &str,
+    now: &str,
+    reason: Option<&str>,
+    outcome: Option<&str>,
+) {
     if status == "closed" {
         if s.status != "closed" {
             s.closed_at = Some(now.to_string());
@@ -1193,9 +1203,16 @@ fn set_status(s: &mut Seed, status: &str, now: &str, reason: Option<&str>) {
         if let Some(r) = reason {
             s.close_reason = non_empty(Some(r));
         }
+        s.outcome = Some(
+            outcome
+                .map(str::to_string)
+                .or_else(|| s.outcome.clone())
+                .unwrap_or_else(|| "done".into()),
+        );
     } else {
         s.closed_at = None;
         s.close_reason = None;
+        s.outcome = None;
     }
     s.status = status.to_string();
 }
@@ -1209,6 +1226,20 @@ pub fn close(
     reason: Option<&str>,
     force: bool,
 ) -> Result<(Vec<Seed>, u64, Warnings)> {
+    close_as(b, ctx, ids, reason, None, force)
+}
+
+/// [`close`] with an explicit outcome (one of [`model::OUTCOMES`]; `done`
+/// when `None`).
+pub fn close_as(
+    b: &mut dyn Backend,
+    ctx: &Ctx,
+    ids: &[String],
+    reason: Option<&str>,
+    outcome: Option<&str>,
+    force: bool,
+) -> Result<(Vec<Seed>, u64, Warnings)> {
+    let outcome = outcome.map(model::parse_outcome).transpose()?;
     let mut warnings = Vec::new();
     let reason = reason.map(str::trim).filter(|r| !r.is_empty());
     if reason.is_none() {
@@ -1235,7 +1266,7 @@ pub fn close(
             )));
         }
         let mut s = before.clone();
-        set_status(&mut s, "closed", &ctx.now, reason);
+        set_status_as(&mut s, "closed", &ctx.now, reason, outcome.as_deref());
         s.updated_at = ctx.now.clone();
         s.revision = before.revision + 1;
         writes.push(SeedWrite {

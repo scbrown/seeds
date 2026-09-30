@@ -44,6 +44,22 @@ pub fn parse_type(s: &str) -> Result<String> {
     }
 }
 
+/// How a closed seed ended: camayoc's `aegis:outcome` values.
+pub const OUTCOMES: [&str; 4] = ["done", "abandoned", "superseded", "failed"];
+
+/// Parse a close outcome (one of [`OUTCOMES`]).
+pub fn parse_outcome(s: &str) -> Result<String> {
+    let s = s.trim().to_ascii_lowercase();
+    if OUTCOMES.contains(&s.as_str()) {
+        Ok(s)
+    } else {
+        Err(SdError::usage(format!(
+            "unknown outcome {s:?}; expected one of {}",
+            OUTCOMES.join(", ")
+        )))
+    }
+}
+
 /// Parse a priority: `0`..`4`, optionally written `P0`..`P4`.
 pub fn parse_priority(s: &str) -> Result<u8> {
     let t = s.trim();
@@ -100,6 +116,10 @@ pub struct Seed {
     pub closed_at: Option<String>,
     /// Why it was closed.
     pub close_reason: Option<String>,
+    /// How it ended, when closed: one of [`OUTCOMES`] (`done` when a close
+    /// did not say). A machine-readable field, so a workflow can branch on it
+    /// without parsing the reason.
+    pub outcome: Option<String>,
     /// Hidden from `ready` until this date or instant.
     pub defer_until: Option<String>,
     /// `blocks` dependencies: this seed cannot proceed past these ids.
@@ -175,7 +195,8 @@ impl Seed {
         opt(&mut f, term::close_reason(), &self.close_reason);
         opt(&mut f, term::defer_until(), &self.defer_until);
         if self.status == "closed" {
-            f.push((term::outcome(), Obj::Str("done".into())));
+            let outcome = self.outcome.clone().unwrap_or_else(|| "done".into());
+            f.push((term::outcome(), Obj::Str(outcome)));
         }
         if let Some(a) = &self.assignee {
             f.push((term::assigned_to(), Obj::Iri(vocab::principal_iri(a))));
@@ -278,6 +299,7 @@ impl Seed {
             updated_at: s(term::updated_at()).unwrap_or_default(),
             closed_at: s(term::closed_at()),
             close_reason: s(term::close_reason()),
+            outcome: s(term::outcome()),
             defer_until: s(term::defer_until()),
             blocked_on: ids(term::blocked_on()),
             related: ids(term::related_to()),
@@ -378,6 +400,7 @@ impl Seed {
             "updated_at": self.updated_at,
             "closed_at": self.closed_at,
             "close_reason": self.close_reason,
+            "outcome": self.outcome,
             "defer_until": self.defer_until,
             "parent": self.parent,
             "dependency_count": self.dependencies().len(),

@@ -404,6 +404,10 @@ pub struct CloseArgs {
     /// Why: what landed and how you know. Closing without one warns.
     #[arg(short, long)]
     pub reason: Option<String>,
+    /// How it ended: done (default), abandoned, superseded or failed. Stored
+    /// as a field, so a workflow can branch on it without parsing the reason
+    #[arg(long, value_name = "OUTCOME")]
+    pub outcome: Option<String>,
     /// Close even if the seed still has open blockers
     #[arg(short, long)]
     pub force: bool,

@@ -794,8 +794,14 @@ fn dispatch(cli: &Cli, ctx: &Ctx, b: &mut dyn Backend) -> Result<Outcome> {
             ))
         }
         Command::Close(a) => {
-            let (seeds, tx, warnings) =
-                engine::close(b, ctx, &a.ids, a.reason.as_deref(), a.force)?;
+            let (seeds, tx, warnings) = engine::close_as(
+                b,
+                ctx,
+                &a.ids,
+                a.reason.as_deref(),
+                a.outcome.as_deref(),
+                a.force,
+            )?;
             let text = seeds
                 .iter()
                 .map(|s| format!("closed {}{}", output::seed_line(s), tx_note(tx)))
