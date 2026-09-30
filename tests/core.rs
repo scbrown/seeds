@@ -1256,6 +1256,7 @@ fn search_matches_id_title_description_and_comments_but_not_notes() {
     assert_eq!(found(&b, "parser", true), (1, 0));
     let err = engine::search(&b, &engine::SearchReq::default(), None).unwrap_err();
     assert_eq!(err.kind, ErrorKind::Usage);
+}
 
 /// A backend whose FIRST commit is preceded by another writer's commit of
 /// the same batch: the race a keyed create must survive, made deterministic.
