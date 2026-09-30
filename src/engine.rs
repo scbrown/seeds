@@ -354,6 +354,9 @@ pub struct Page {
     pub limit: usize,
     /// True when `total > issues.len()`.
     pub has_more: bool,
+    /// For each seed on the page, how many seeds declare any dependency on it
+    /// (br's `dependent_count`: blocks, parent-child, related, discovered-from).
+    pub dependent_counts: BTreeMap<String, usize>,
 }
 
 /// `sd list`, as of `at`.
@@ -368,19 +371,24 @@ pub fn list(b: &dyn Backend, req: &ListReq, at: Option<u64>) -> Result<Page> {
         .cloned()
         .collect();
     sort_seeds(&mut seeds, req.sort.as_deref())?;
-    Ok(page(seeds, req.limit.unwrap_or(DEFAULT_LIST_LIMIT)))
+    Ok(page(seeds, req.limit.unwrap_or(DEFAULT_LIST_LIMIT), &snap))
 }
 
-fn page(mut seeds: Vec<Seed>, limit: usize) -> Page {
+fn page(mut seeds: Vec<Seed>, limit: usize, snap: &Snapshot) -> Page {
     let total = seeds.len();
     if limit > 0 && seeds.len() > limit {
         seeds.truncate(limit);
     }
+    let dependent_counts = seeds
+        .iter()
+        .map(|s| (s.id.clone(), snap.dependents(&s.id).len()))
+        .collect();
     Page {
         has_more: seeds.len() < total,
         issues: seeds,
         total,
         limit,
+        dependent_counts,
     }
 }
 
@@ -435,7 +443,7 @@ pub fn search(b: &dyn Backend, req: &SearchReq, at: Option<u64>) -> Result<Searc
     }
     sort_seeds(&mut seeds, req.sort.as_deref())?;
     Ok(SearchPage {
-        page: page(seeds, req.limit.unwrap_or(DEFAULT_LIST_LIMIT)),
+        page: page(seeds, req.limit.unwrap_or(DEFAULT_LIST_LIMIT), &snap),
         hidden_closed,
     })
 }
@@ -717,7 +725,7 @@ pub fn blocked(b: &dyn Backend, req: &BlockedReq, at: Option<u64>) -> Result<Blo
         seeds.push(s.clone());
     }
     sort_seeds(&mut seeds, None)?;
-    let page = page(seeds, req.limit.unwrap_or(DEFAULT_LIST_LIMIT));
+    let page = page(seeds, req.limit.unwrap_or(DEFAULT_LIST_LIMIT), &snap);
     blocked_by.retain(|id, _| page.issues.iter().any(|s| &s.id == id));
     Ok(BlockedPage { page, blocked_by })
 }
@@ -748,7 +756,7 @@ pub fn ready(b: &dyn Backend, ctx: &Ctx, req: &ReadyReq, at: Option<u64>) -> Res
         .cloned()
         .collect();
     sort_seeds(&mut seeds, Some("priority"))?;
-    Ok(page(seeds, req.limit.unwrap_or(0)))
+    Ok(page(seeds, req.limit.unwrap_or(0), &snap))
 }
 
 /// The ready definition computed directly over a snapshot, independent of the

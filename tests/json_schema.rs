@@ -154,7 +154,11 @@ fn every_verb_prints_its_documented_keys() {
         set(&["has_more", "issues", "limit", "offset", "total"]),
         "list"
     );
-    assert_eq!(keys(&list["issues"][0]), set(SEED_KEYS));
+    assert_eq!(
+        keys(&list["issues"][0]),
+        with(SEED_KEYS, &["dependent_count"]),
+        "list issues carry br's dependent_count"
+    );
 
     let ready = st.json(&["ready"]);
     assert!(ready.is_array(), "ready is a bare array, as in br");
