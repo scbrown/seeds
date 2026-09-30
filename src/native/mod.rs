@@ -1578,6 +1578,71 @@ fn dispatch(cli: &Cli, cfg: &Resolved, ctx: &Ctx, b: &mut dyn Backend) -> Result
             };
             Ok(ok(json, value, text, vec![]))
         }
+        Command::Orphans { details } => {
+            let out = std::process::Command::new("git")
+                .args(["log", "--format=%h%x1f%H%x1f%s%x1f%b%x1e"])
+                .output()
+                .map_err(|e| SdError::failed(format!("cannot run git: {e}")))?;
+            let in_repo = std::process::Command::new("git")
+                .args(["rev-parse", "--is-inside-work-tree"])
+                .output()
+                .is_ok_and(|o| o.status.success());
+            if !in_repo {
+                return Err(SdError::usage(
+                    "orphans reads git history; run it inside a git repository",
+                ));
+            }
+            // A repository with no commits yet has an empty history, not an
+            // error: `git log` fails there, and the answer is [].
+            let log = if out.status.success() {
+                String::from_utf8_lossy(&out.stdout).into_owned()
+            } else {
+                String::new()
+            };
+            let mut full: std::collections::BTreeMap<String, String> = Default::default();
+            let commits: Vec<engine::CommitText> = log
+                .split('\x1e')
+                .filter_map(|r| {
+                    let mut f = r.trim_start_matches('\n').splitn(4, '\x1f');
+                    let (h, hh, s, b) = (f.next()?, f.next()?, f.next()?, f.next().unwrap_or(""));
+                    full.insert(h.to_string(), hh.to_string());
+                    Some((h.to_string(), s.to_string(), b.trim().to_string()))
+                })
+                .filter(|c| !c.0.is_empty())
+                .collect();
+            let found = engine::orphans(b, &commits, at)?;
+            let value = serde_json::Value::Array(
+                found
+                    .iter()
+                    .map(|(s, c)| {
+                        let mut o = serde_json::json!({"issue_id": s.id, "title": s.title,
+                            "status": s.status, "latest_commit": c.0,
+                            "latest_commit_message": c.1});
+                        if *details {
+                            o["commit_hash"] = serde_json::json!(full.get(&c.0));
+                            o["commit_body"] = serde_json::json!(c.2);
+                        }
+                        o
+                    })
+                    .collect(),
+            );
+            let text = if found.is_empty() {
+                "no open seeds are mentioned in commits".to_string()
+            } else {
+                let mut lines = vec![format!(
+                    "Orphan seeds ({} open/in_progress mentioned in commits):",
+                    found.len()
+                )];
+                for (i, (s, c)) in found.iter().enumerate() {
+                    lines.push(format!("{}. [{}] {} {}", i + 1, s.status, s.id, s.title));
+                    if *details {
+                        lines.push(format!("   {} {}", c.0, c.1));
+                    }
+                }
+                lines.join("\n")
+            };
+            Ok(ok(json, value, text, vec![]))
+        }
         Command::Stale(a) => {
             let seeds = engine::stale(b, ctx, a.days, &a.status, at)?;
             let text = if seeds.is_empty() {

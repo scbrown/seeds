@@ -1061,6 +1061,53 @@ pub fn lint(
         .collect())
 }
 
+/// A commit, as `sd orphans` reads it: (short hash, subject, body).
+pub type CommitText = (String, String, String);
+
+/// The tokens of a commit message that could be seed ids: runs of letters,
+/// digits, `-`, `.`, `_`, with trailing `.` dropped (end of a sentence).
+fn id_tokens(text: &str) -> BTreeSet<&str> {
+    text.split(|c: char| !(c.is_ascii_alphanumeric() || c == '-' || c == '.' || c == '_'))
+        .map(|t| t.trim_end_matches('.'))
+        .filter(|t| !t.is_empty())
+        .collect()
+}
+
+/// `sd orphans`: open or in-progress seeds that a commit mentions, each with
+/// the newest such commit (`commits` newest first). Ids match as whole tokens,
+/// so `sd-a3f` does not match inside `sd-a3f.1`.
+pub fn orphans(
+    b: &dyn Backend,
+    commits: &[CommitText],
+    at: Option<u64>,
+) -> Result<Vec<(Seed, CommitText)>> {
+    let snap = b.snapshot(at)?;
+    let open: BTreeMap<&str, &Seed> = snap
+        .seeds
+        .values()
+        .filter(|s| s.status == "open" || s.status == "in_progress")
+        .map(|s| (s.id.as_str(), s))
+        .collect();
+    let mut found: BTreeMap<String, (Seed, CommitText)> = BTreeMap::new();
+    for c in commits {
+        let text = format!("{}\n{}", c.1, c.2);
+        for t in id_tokens(&text) {
+            if let Some(s) = open.get(t) {
+                found
+                    .entry(s.id.clone())
+                    .or_insert_with(|| ((*s).clone(), c.clone()));
+            }
+        }
+    }
+    let mut out: Vec<(Seed, CommitText)> = found.into_values().collect();
+    sort_seeds_by(&mut out);
+    Ok(out)
+}
+
+fn sort_seeds_by(v: &mut [(Seed, CommitText)]) {
+    v.sort_by(|a, b| (a.0.priority, &a.0.id).cmp(&(b.0.priority, &b.0.id)));
+}
+
 /// `sd blocked`. Repeated types and priorities are alternatives; labels must
 /// all match (br's semantics).
 #[derive(Debug, Clone, Default)]

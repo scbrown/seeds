@@ -95,6 +95,12 @@ pub enum Command {
     Changelog(ChangelogArgs),
     /// Seeds whose description lacks their type's template sections
     Lint(LintArgs),
+    /// Open or in-progress seeds that a git commit mentions (work that may be done)
+    Orphans {
+        /// Include the full commit hash and message body
+        #[arg(long)]
+        details: bool,
+    },
     /// Count seeds (open ones by default)
     Count(CountArgs),
     /// Update fields on one or more seeds
@@ -882,6 +888,7 @@ impl Command {
             | Command::Ready(_)
             | Command::Blocked(_)
             | Command::Stale(_)
+            | Command::Orphans { .. }
             | Command::Lint(_)
             | Command::Changelog(_)
             | Command::History { .. }
@@ -907,6 +914,7 @@ impl Command {
             Command::Ready(_) => "ready",
             Command::Blocked(_) => "blocked",
             Command::Stale(_) => "stale",
+            Command::Orphans { .. } => "orphans",
             Command::Lint(_) => "lint",
             Command::Changelog(_) => "changelog",
             Command::History { .. } => "history",
@@ -982,6 +990,7 @@ mod tests {
         (&["list", "--status", "open", "--limit", "0"], "list", false),
         (&["ready", "--json", "--limit", "5"], "ready", false),
         (&["count", "--by", "status"], "count", false),
+        (&["orphans", "--details"], "orphans", false),
         (&["lint", "-t", "bug", "-s", "all"], "lint", false),
         (&["changelog", "--since", "+7d"], "changelog", false),
         (&["history", "s-1"], "history", false),

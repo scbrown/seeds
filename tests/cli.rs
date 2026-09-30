@@ -847,3 +847,41 @@ fn doctor_passes_a_fresh_ledger_with_exit_0() {
         assert_ne!(c["status"], "error", "{c}");
     }
 }
+
+#[test]
+fn orphans_reads_the_git_log_of_the_current_repo() {
+    let sb = Sandbox::new("orphans");
+    let id = sb.ok(&["create", "x", "--silent"]).trim().to_string();
+    let git = |args: &[&str]| {
+        std::process::Command::new("git")
+            .args(args)
+            .current_dir(sb.work())
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_AUTHOR_NAME", "t")
+            .env("GIT_AUTHOR_EMAIL", "t@example.org")
+            .env("GIT_COMMITTER_NAME", "t")
+            .env("GIT_COMMITTER_EMAIL", "t@example.org")
+            .output()
+            .unwrap()
+    };
+    assert_eq!(code(&sb.run(&["orphans"])), 2, "not a git repo yet");
+    git(&["init", "-q"]);
+    assert_eq!(
+        sb.json(&["orphans"]),
+        serde_json::json!([]),
+        "no commits yet: empty, not an error"
+    );
+    git(&[
+        "commit",
+        "-q",
+        "--allow-empty",
+        "-m",
+        &format!("work on {id}"),
+    ]);
+    let v = sb.json(&["orphans"]);
+    assert_eq!(v[0]["issue_id"], id.as_str());
+    assert_eq!(
+        v[0]["latest_commit_message"],
+        format!("work on {id}").as_str()
+    );
+}
