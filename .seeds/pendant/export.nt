@@ -72,21 +72,24 @@
 <https://seeds.local/item/sd-non.1> <https://seeds.local/ontology/revision> "3"^^<http://www.w3.org/2001/XMLSchema#integer> .
 <https://seeds.local/item/sd-non.1> <https://seeds.local/ontology/status> "closed" .
 <https://seeds.local/item/sd-non.1> <https://seeds.local/ontology/updatedAt> "2026-09-30T15:56:44Z" .
+<https://seeds.local/item/sd-non.2> <http://aegis.gastown.local/ontology/closedAt> "2026-09-30T16:51:20Z" .
 <https://seeds.local/item/sd-non.2> <http://aegis.gastown.local/ontology/createdAt> "2026-09-30T15:49:58Z" .
 <https://seeds.local/item/sd-non.2> <http://aegis.gastown.local/ontology/identifier> "sd-non.2" .
+<https://seeds.local/item/sd-non.2> <http://aegis.gastown.local/ontology/outcome> "done" .
 <https://seeds.local/item/sd-non.2> <http://aegis.gastown.local/ontology/sourceKind> "declared" .
 <https://seeds.local/item/sd-non.2> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://aegis.gastown.local/ontology/WorkItem> .
 <https://seeds.local/item/sd-non.2> <http://www.w3.org/2000/01/rdf-schema#label> "json write output has no tx field, so a script cannot find the tx to pass to --at" .
 <https://seeds.local/item/sd-non.2> <https://seeds.local/ontology/childOf> <https://seeds.local/item/sd-non> .
+<https://seeds.local/item/sd-non.2> <https://seeds.local/ontology/closeReason> "Every write's --json now carries tx (create/update/close/comments add; label/reopen/defer/dep already did); a CLI test pins each write's tx and reads it back with --at. scbrown/seeds#16 (aegis-w3k75d.8)." .
 <https://seeds.local/item/sd-non.2> <https://seeds.local/ontology/createdBy> "wu" .
 <https://seeds.local/item/sd-non.2> <https://seeds.local/ontology/description> "Found in the aegis-w3k75d.6 local baseline: the tx appears only in the human line '(tx N)'." .
 <https://seeds.local/item/sd-non.2> <https://seeds.local/ontology/issueType> "bug" .
 <https://seeds.local/item/sd-non.2> <https://seeds.local/ontology/label> "json" .
 <https://seeds.local/item/sd-non.2> <https://seeds.local/ontology/label> "parity" .
 <https://seeds.local/item/sd-non.2> <https://seeds.local/ontology/priority> "2"^^<http://www.w3.org/2001/XMLSchema#integer> .
-<https://seeds.local/item/sd-non.2> <https://seeds.local/ontology/revision> "1"^^<http://www.w3.org/2001/XMLSchema#integer> .
-<https://seeds.local/item/sd-non.2> <https://seeds.local/ontology/status> "open" .
-<https://seeds.local/item/sd-non.2> <https://seeds.local/ontology/updatedAt> "2026-09-30T15:49:58Z" .
+<https://seeds.local/item/sd-non.2> <https://seeds.local/ontology/revision> "2"^^<http://www.w3.org/2001/XMLSchema#integer> .
+<https://seeds.local/item/sd-non.2> <https://seeds.local/ontology/status> "closed" .
+<https://seeds.local/item/sd-non.2> <https://seeds.local/ontology/updatedAt> "2026-09-30T16:51:20Z" .
 <https://seeds.local/item/sd-non.3> <http://aegis.gastown.local/ontology/createdAt> "2026-09-30T15:49:58Z" .
 <https://seeds.local/item/sd-non.3> <http://aegis.gastown.local/ontology/identifier> "sd-non.3" .
 <https://seeds.local/item/sd-non.3> <http://aegis.gastown.local/ontology/sourceKind> "declared" .
