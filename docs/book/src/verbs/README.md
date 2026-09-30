@@ -36,6 +36,10 @@
 | `completions` | no | [completions](completions.md) |
 | `export`, `import`, `sync`, `merge-driver` | import, sync, merge-driver | [export, import, sync](sync.md) |
 
+> **Behaviour change (#41):** `list` and `search` hide deferred seeds unless
+> `--deferred`, `--all` or `--status` is given, as the upstream tracker does.
+> Earlier versions listed them by default.
+
 Every verb accepts the [global options](../reference.md#global-options), and
 every read accepts `--at <tx>`. A verb that writes prints the transaction it
 wrote as `(tx N)` in text mode and as `tx` in `--json` (on the object, or on
