@@ -941,6 +941,13 @@ fn update_changes_type_labels_parent_and_description_like_br() {
         sb.json(&["update", &a, "--body", "b1"])[0]["description"],
         "b1"
     );
+    // Visible in --help, so a reader (and parity-diff.py) can find it.
+    for verb in ["create", "update", "q"] {
+        assert!(
+            sb.ok(&[verb, "--help"]).contains("[alias: --body]"),
+            "{verb}"
+        );
+    }
     let f = sb.root.join("desc.md");
     std::fs::write(&f, "## Acceptance Criteria\n- x\n").unwrap();
     let d = sb.json(&["update", &a, "--description-file", f.to_str().unwrap()]);

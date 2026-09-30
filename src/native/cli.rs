@@ -347,7 +347,7 @@ pub struct CreateArgs {
     #[arg(short, long)]
     pub priority: Option<String>,
     /// Description
-    #[arg(short, long, alias = "body")]
+    #[arg(short, long, visible_alias = "body")]
     pub description: Option<String>,
     /// Initial status (open, in_progress, blocked or deferred; default open)
     #[arg(short, long)]
@@ -655,7 +655,7 @@ pub struct QArgs {
     #[arg(short, long)]
     pub labels: Vec<String>,
     /// Description
-    #[arg(short, long, alias = "body")]
+    #[arg(short, long, visible_alias = "body")]
     pub description: Option<String>,
     /// Parent seed
     #[arg(long)]
@@ -772,7 +772,7 @@ pub struct UpdateArgs {
     #[arg(long)]
     pub title: Option<String>,
     /// New description
-    #[arg(short, long, alias = "body")]
+    #[arg(short, long, visible_alias = "body")]
     pub description: Option<String>,
     /// Read the new description from a file (`-` for stdin)
     #[arg(long, value_name = "PATH", conflicts_with = "description")]
