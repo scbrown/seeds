@@ -535,9 +535,21 @@ pub struct ReadyArgs {
     /// Only children of this seed
     #[arg(long)]
     pub parent: Option<String>,
+    /// With --parent: every descendant, not only direct children (refused without --parent)
+    #[arg(short, long)]
+    pub recursive: bool,
+    /// Ready seeds anywhere beneath this seed (--parent <id> --recursive; cycle-safe)
+    #[arg(long, conflicts_with = "parent")]
+    pub epic: Option<String>,
     /// Only seeds with ANY of these labels (repeatable)
     #[arg(long)]
     pub label_any: Vec<String>,
+    /// hybrid (P0/P1 first by age, then the rest by age), priority (default) or oldest
+    #[arg(long)]
+    pub sort: Option<String>,
+    /// Also list deferred seeds (status deferred, or a defer date not yet reached)
+    #[arg(long)]
+    pub include_deferred: bool,
 }
 
 /// `sd blocked`.

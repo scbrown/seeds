@@ -1513,11 +1513,14 @@ fn dispatch(cli: &Cli, cfg: &Resolved, ctx: &Ctx, b: &mut dyn Backend) -> Result
                     unassigned: a.unassigned,
                     labels: a.label.clone(),
                     priority: a.priority.clone(),
-                    parent: a.parent.clone(),
+                    parent: a.epic.clone().or_else(|| a.parent.clone()),
                     labels_any: a.label_any.clone(),
                     ..Filter::default()
                 },
                 limit: a.limit,
+                sort: a.sort.clone(),
+                include_deferred: a.include_deferred,
+                recursive: a.recursive || a.epic.is_some(),
             };
             let p = engine::ready(b, ctx, &req, at)?;
             let mut warnings = vec![];

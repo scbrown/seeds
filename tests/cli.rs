@@ -964,3 +964,31 @@ fn format_json_is_json_text_is_text_and_toon_is_refused() {
     assert_eq!(code(&o), 2);
     assert!(String::from_utf8_lossy(&o.stderr).contains("toon"));
 }
+
+#[test]
+fn ready_epic_is_parent_recursive_and_conflicts_with_parent() {
+    let sb = Sandbox::new("ready-epic");
+    let p = sb.ok(&["create", "epic", "--silent"]).trim().to_string();
+    let c = sb
+        .ok(&["create", "child", "--parent", &p, "--silent"])
+        .trim()
+        .to_string();
+    let g = sb
+        .ok(&["create", "grandchild", "--parent", &c, "--silent"])
+        .trim()
+        .to_string();
+    let ids = |args: &[&str]| -> Vec<String> {
+        sb.json(args)
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|s| s["id"].as_str().unwrap().to_string())
+            .collect()
+    };
+    assert_eq!(ids(&["ready", "--epic", &p]), [c.clone(), g.clone()]);
+    assert_eq!(ids(&["ready", "--parent", &p, "-r"]), [c.clone(), g]);
+    assert_eq!(ids(&["ready", "--parent", &p]), [c]);
+    assert_eq!(code(&sb.run(&["ready", "--epic", &p, "--parent", &p])), 2);
+    assert_eq!(code(&sb.run(&["ready", "-r"])), 2);
+    assert_eq!(code(&sb.run(&["ready", "--sort", "bogus"])), 2);
+}

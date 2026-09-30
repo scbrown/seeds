@@ -2237,3 +2237,108 @@ fn reparent_onto_an_existing_parent_loop_is_refused_not_an_infinite_walk() {
     assert_eq!(err.kind, ErrorKind::Refused);
     assert!(err.message.contains("loop"), "{}", err.message);
 }
+
+// br's `ready` semantics, measured on a br scratch store with the same board:
+// hybrid is P0/P1 first then age, oldest is age only, --include-deferred adds
+// both status deferred and an unreached defer date, --parent -r reaches
+// grandchildren and never the root.
+#[test]
+fn ready_sorts_includes_deferred_and_scopes_to_descendants_like_br() {
+    let mut b = backend();
+    let mkp = |b: &mut QuipuBackend, t: &str, n: u32, p: &str, parent: Option<&String>| {
+        engine::create(
+            b,
+            &ctx(n),
+            &CreateReq {
+                title: t.into(),
+                priority: Some(p.into()),
+                parent: parent.cloned(),
+                ..CreateReq::default()
+            },
+        )
+        .unwrap()
+        .0
+        .id
+    };
+    let a = mkp(&mut b, "a", 1, "3", None);
+    let bb = mkp(&mut b, "b", 2, "1", None);
+    let c = mkp(&mut b, "c", 3, "2", None);
+    let d = mkp(&mut b, "d", 4, "2", None);
+    let e = mkp(&mut b, "e", 5, "2", Some(&bb));
+    let f = mkp(&mut b, "f", 6, "4", Some(&e));
+    for (id, req) in [
+        (
+            &c,
+            UpdateReq {
+                status: Some("deferred".into()),
+                ..UpdateReq::default()
+            },
+        ),
+        (
+            &d,
+            UpdateReq {
+                defer: Some("2030-01-01".into()),
+                ..UpdateReq::default()
+            },
+        ),
+    ] {
+        engine::update(&mut b, &ctx(7), std::slice::from_ref(id), &req).unwrap();
+    }
+    let run = |req: ReadyReq| -> Result<Vec<String>, seeds::error::SdError> {
+        engine::ready(&b, &ctx(8), &req, None).map(|p| p.issues.into_iter().map(|s| s.id).collect())
+    };
+    let sort = |s: &str| ReadyReq {
+        sort: Some(s.into()),
+        ..ReadyReq::default()
+    };
+    assert_eq!(
+        run(ReadyReq::default()).unwrap(),
+        [bb.as_str(), e.as_str(), a.as_str(), f.as_str()]
+    );
+    assert_eq!(
+        run(sort("priority")).unwrap(),
+        [bb.as_str(), e.as_str(), a.as_str(), f.as_str()]
+    );
+    assert_eq!(
+        run(sort("hybrid")).unwrap(),
+        [bb.as_str(), a.as_str(), e.as_str(), f.as_str()]
+    );
+    assert_eq!(
+        run(sort("oldest")).unwrap(),
+        [a.as_str(), bb.as_str(), e.as_str(), f.as_str()]
+    );
+    assert_eq!(run(sort("bogus")).unwrap_err().kind, ErrorKind::Usage);
+    let all = run(ReadyReq {
+        include_deferred: true,
+        ..sort("oldest")
+    })
+    .unwrap();
+    assert_eq!(
+        all,
+        [
+            a.as_str(),
+            bb.as_str(),
+            c.as_str(),
+            d.as_str(),
+            e.as_str(),
+            f.as_str()
+        ]
+    );
+    let under = |recursive| ReadyReq {
+        filter: Filter {
+            parent: Some(bb.clone()),
+            ..Filter::default()
+        },
+        recursive,
+        ..ReadyReq::default()
+    };
+    assert_eq!(run(under(false)).unwrap(), [e.as_str()]);
+    assert_eq!(run(under(true)).unwrap(), [e.as_str(), f.as_str()]);
+    // br ignores -r without --parent; sd refuses a flag that would do nothing.
+    let lone = run(ReadyReq {
+        recursive: true,
+        ..ReadyReq::default()
+    })
+    .unwrap_err();
+    assert_eq!(lone.kind, ErrorKind::Usage);
+}
