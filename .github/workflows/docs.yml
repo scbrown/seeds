@@ -1,0 +1,65 @@
+name: Docs
+
+# Publishes the mdBook to GitHub Pages (https://scbrown.github.io/seeds/) from
+# main. The Pages source must be "GitHub Actions" in the repository settings.
+#
+# Pull requests are covered by ci.yml's `book` job, which builds the same book
+# with the same mdBook. This workflow deliberately does not run on
+# pull_request: a deploy job skipped on every PR would read as a conditional
+# skip, and the merge gate refuses those unless they are allow-listed.
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'docs/**'
+      - 'README.md'
+      - '.github/workflows/docs.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pages-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build docs
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      # Same mdBook as ci.yml's `book` job, so the published book is the one CI checked.
+      - uses: peaceiris/actions-mdbook@v2
+        with:
+          mdbook-version: '0.5.4'
+
+      - name: Build book
+        run: mdbook build docs/book
+
+      - name: Require the pages a reader lands on
+        run: |
+          for f in index.html print.html why-facts.html config.html storage-modes.html; do
+            test -s "docs/book/book/$f" || { echo "missing from book output: $f"; exit 1; }
+          done
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: docs/book/book
+
+  deploy:
+    name: Deploy to GitHub Pages
+    if: github.ref == 'refs/heads/main'
+    needs: [build]
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

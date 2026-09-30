@@ -1,0 +1,22 @@
+[workspace]
+# Take the current version from OUR git tags, never from crates.io. seeds-ai is
+# not published yet, and quipu measured what happens without this: release-plz
+# resolves its baseline by downloading the crate from the registry, finds nothing
+# that matches this source, walks back to the root commit, and writes a release
+# PR whose changelog section is the entire project history.
+# `git_only` and `publish` must not both be true: publishing to crates.io is done
+# by release.yml's `crates` job through Trusted Publishing, not by release-plz.
+git_only = true
+publish = false
+changelog_config = "cliff.toml"
+git_tag_enable = true
+git_release_enable = true
+# release.yml attaches four binaries and SHA256SUMS to a DRAFT, then publishes it.
+git_release_draft = true
+# Release only when a release PR is merged, never on an ordinary push.
+release_always = false
+
+[[package]]
+name = "seeds-ai"
+git_tag_name = "seeds-ai-v{{ version }}"
+git_release_name = "seeds-ai v{{ version }}"

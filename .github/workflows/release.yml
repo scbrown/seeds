@@ -1,8 +1,9 @@
 name: Release
 
-# Versioning is release-please, as in the rest of the stack. Every push to main
-# opens or refreshes a release PR from the conventional-commit history; merging
-# that PR creates the tag and a DRAFT release, and this same run then builds the
+# Versioning is release-plz, as in quipu (release-plz.toml). Every push to main
+# opens or refreshes a release PR from the conventional-commit history, with the
+# changelog section written by git-cliff (cliff.toml). Merging that PR creates the
+# `seeds-ai-v<version>` tag and a DRAFT release, and this same run then builds the
 # `sd` binaries, attaches them with checksums, publishes the release, and
 # publishes seeds-ai to crates.io through Trusted Publishing.
 #
@@ -13,12 +14,12 @@ name: Release
 on:
   push:
     tags:
-      - 'v*'
+      - 'seeds-ai-v*'
     branches: [main]
   workflow_dispatch:
     inputs:
       version:
-        description: 'Version tag (e.g., v0.1.0)'
+        description: 'Version tag (e.g., seeds-ai-v0.1.0)'
         required: true
         type: string
       dry_run:
@@ -34,44 +35,65 @@ env:
 
 # NOTE: VERSION is deliberately NOT set at workflow level. Workflow-level `env`
 # cannot read the `needs` context, and on the release-merge path the version
-# comes from the release-please job's tag_name output (github.ref_name is `main`
+# comes from the release-plz job's tag_name output (github.ref_name is `main`
 # there). It is set per job instead.
 
 jobs:
   # Open/refresh the release PR on every main push; merging it tags + releases.
-  release-please:
-    name: Release Please
+  release-plz:
+    name: Release-plz
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/heads/')
     runs-on: ubuntu-latest
     permissions:
       pull-requests: write
       contents: write
     # Exported so `build` can run IN THIS SAME RUN when the release PR merge
-    # creates a release. release-please pushes the tag with GITHUB_TOKEN, and
+    # creates a release. release-plz pushes the tag with GITHUB_TOKEN, and
     # GitHub does not start workflows from token-authored pushes, so the tag arm
     # above would never fire for it.
     outputs:
       releases_created: ${{ steps.release.outputs.releases_created }}
-      tag_name: ${{ steps.release.outputs.tag_name }}
+      tag_name: ${{ steps.release.outputs.releases_created == 'true' && fromJSON(steps.release.outputs.releases)[0].tag || '' }}
     steps:
-      - uses: googleapis/release-please-action@5c625bfb5d1ff62eadeeb3772007f7f66fdcf071 # v4
-        id: release
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
-          token: ${{ secrets.GITHUB_TOKEN }}
+          # release-plz needs the tags to find its baseline (git_only).
+          fetch-depth: 0
+
+      # release-plz refuses a repository where a tracked path is also ignored.
+      # Catch that at the boundary instead of deep inside release-plz.
+      - name: Reject tracked files matched by .gitignore
+        run: |
+          set -euo pipefail
+          tracked_ignored="$(git ls-files -ci --exclude-standard)"
+          if [ -n "$tracked_ignored" ]; then
+            echo "Tracked files are also ignored:" >&2
+            printf '%s\n' "$tracked_ignored" >&2
+            exit 1
+          fi
+
+      - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # master 2026-09-12
+        with:
+          toolchain: "1.98.1"
+
+      - uses: release-plz/action@b8d6b54b02889ff2ae2bb82e8b57c3a8fc1683a5 # v0.5
+        id: release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   build:
     name: Build ${{ matrix.target }}
-    needs: release-please
-    # `always()` because release-please is SKIPPED on the tag-push and
+    needs: release-plz
+    # `always()` because release-plz is SKIPPED on the tag-push and
     # workflow_dispatch arms, which would otherwise skip this job with it.
     if: >-
       always() &&
       (startsWith(github.ref, 'refs/tags/') ||
        github.event_name == 'workflow_dispatch' ||
-       needs.release-please.outputs.releases_created == 'true')
+       needs.release-plz.outputs.releases_created == 'true')
     runs-on: ${{ matrix.os }}
     env:
-      VERSION: ${{ inputs.version || (startsWith(github.ref, 'refs/tags/') && github.ref_name) || needs.release-please.outputs.tag_name }}
+      VERSION: ${{ inputs.version || (startsWith(github.ref, 'refs/tags/') && github.ref_name) || needs.release-plz.outputs.tag_name }}
       DRY_RUN: ${{ inputs.dry_run == true }}
     permissions:
       # Each matrix leg uploads its own archive to the draft release. Only
@@ -94,7 +116,7 @@ jobs:
 
     steps:
       # ref: the resolved VERSION tag, not the trigger ref, so a binary labelled
-      # vX.Y.Z is built from vX.Y.Z. A dry run has no tag yet and builds the
+      # seeds-ai-vX.Y.Z is built from seeds-ai-vX.Y.Z. A dry run has no tag yet and builds the
       # commit it was dispatched on.
       - name: Checkout
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
@@ -198,7 +220,7 @@ jobs:
     name: Generate checksums
     needs: build
     # `always()` + an explicit result check: build's own dependency
-    # (release-please) is SKIPPED on the tag and workflow_dispatch arms, and a
+    # (release-plz) is SKIPPED on the tag and workflow_dispatch arms, and a
     # skipped ancestor would otherwise skip this job even when build succeeded.
     if: always() && needs.build.result == 'success'
     runs-on: ubuntu-latest
@@ -228,8 +250,8 @@ jobs:
 
   release:
     name: Create release
-    needs: [release-please, build, checksums]
-    # `always()` because release-please is SKIPPED on the tag-push and
+    needs: [release-plz, build, checksums]
+    # `always()` because release-plz is SKIPPED on the tag-push and
     # workflow_dispatch arms. The result checks keep an ordinary main push
     # (where build is skipped) and a dry run from finalizing anything.
     if: >-
@@ -239,7 +261,7 @@ jobs:
       needs.checksums.result == 'success'
     runs-on: ubuntu-latest
     env:
-      VERSION: ${{ inputs.version || (startsWith(github.ref, 'refs/tags/') && github.ref_name) || needs.release-please.outputs.tag_name }}
+      VERSION: ${{ inputs.version || (startsWith(github.ref, 'refs/tags/') && github.ref_name) || needs.release-plz.outputs.tag_name }}
     permissions:
       contents: write
     steps:
@@ -308,8 +330,9 @@ jobs:
           highest="$(retry gh release list --repo "${{ github.repository }}" \
                        --exclude-drafts --exclude-pre-releases --limit 200 \
                        --json tagName --jq '.[].tagName' \
-                     | sed 's/^v//' | sort -V | tail -1)"
-          mine="${version#v}"
+                     | sed 's/^seeds-ai-v//; s/^v//' | sort -V | tail -1)"
+          mine="${version#seeds-ai-v}"
+          mine="${mine#v}"
 
           case "$mine" in
             *-*)
@@ -331,15 +354,21 @@ jobs:
 
   crates:
     name: Publish to crates.io
-    needs: [release-please, build, checksums, release]
+    needs: [release-plz, build, checksums, release]
     # On a real release this runs after the GitHub release is published. On a
     # dry run it runs the rehearsal (guard, registry check, cargo publish
     # --dry-run) and publishes nothing.
+    #
+    # The FIRST crates.io publish is the maintainer's decision, so a real
+    # publish also needs the repository variable CRATES_PUBLISH_ENABLED=true.
+    # Until it is set, merging a release PR still tags, builds and publishes
+    # the GitHub release, and this job is skipped. A dry run rehearses anyway.
     if: >-
       always() &&
       needs.build.result == 'success' &&
       needs.checksums.result == 'success' &&
-      (needs.release.result == 'success' || inputs.dry_run == true)
+      ((needs.release.result == 'success' && vars.CRATES_PUBLISH_ENABLED == 'true') ||
+       inputs.dry_run == true)
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
@@ -348,7 +377,7 @@ jobs:
       # short-lived registry token. No registry secret exists in this repo.
       id-token: write
     env:
-      VERSION: ${{ inputs.version || (startsWith(github.ref, 'refs/tags/') && github.ref_name) || needs.release-please.outputs.tag_name }}
+      VERSION: ${{ inputs.version || (startsWith(github.ref, 'refs/tags/') && github.ref_name) || needs.release-plz.outputs.tag_name }}
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
@@ -360,7 +389,8 @@ jobs:
         id: want
         run: |
           set -euo pipefail
-          echo "version=${VERSION#v}" >> "$GITHUB_OUTPUT"
+          v="${VERSION#seeds-ai-v}"
+          echo "version=${v#v}" >> "$GITHUB_OUTPUT"
       - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # master 2026-09-12
         with:
           toolchain: "1.98.1"

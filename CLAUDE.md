@@ -94,12 +94,16 @@ so **the quality gates are the only gate**.
 
 ## Releases
 
-Versioning is release-please: conventional commits on `main` feed a release
-PR, and merging it tags, builds the `sd` binaries for four targets, publishes
-the GitHub release and publishes `seeds-ai` to crates.io through Trusted
-Publishing (no registry token in the repo). `crates.yml` is the manual recovery
-lane. To rehearse without releasing, dispatch `release.yml` with
-`dry_run: true` (the default).
+Versioning is release-plz (`release-plz.toml`, `git_only`: the baseline is our
+own `seeds-ai-v*` tags, never crates.io). Conventional commits on `main` feed a
+release PR whose changelog section git-cliff writes (`cliff.toml`, which also
+strips internal tracker ids). Merging it tags `seeds-ai-v<version>`, builds the
+`sd` binaries for four targets with `SHA256SUMS.txt`, and publishes the GitHub
+release. Publishing `seeds-ai` to crates.io (Trusted Publishing, no registry
+token in the repo) runs only once the repository variable
+`CRATES_PUBLISH_ENABLED` is `true`. `crates.yml` is the manual recovery lane.
+To rehearse without releasing, dispatch `release.yml` with `dry_run: true`
+(the default). The book is published to GitHub Pages by `docs.yml`.
 
 ## Before Every Push
 
