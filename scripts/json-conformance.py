@@ -52,6 +52,7 @@ STEPS = [
     ("delete preview", ["delete", "{A}", "--dry-run"]),
     ("delete", ["delete", "{B}", "--reason", "dup"]),
     ("changelog", ["changelog"]),
+    ("orphans", ["orphans"]),
     ("list all", ["list", "--all"]),
 ]
 

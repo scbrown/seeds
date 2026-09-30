@@ -1937,3 +1937,259 @@ fn lint_reports_brs_template_sections_per_type() {
         1
     );
 }
+
+#[test]
+fn orphans_match_whole_ids_newest_commit_first_and_only_open_seeds() {
+    let mut b = backend();
+    let a = mk(&mut b, "a", 1);
+    let child = engine::create(
+        &mut b,
+        &ctx(2),
+        &CreateReq {
+            title: "child".into(),
+            parent: Some(a.clone()),
+            ..CreateReq::default()
+        },
+    )
+    .unwrap()
+    .0
+    .id;
+    let done = mk(&mut b, "done", 3);
+    engine::close(
+        &mut b,
+        &ctx(4),
+        std::slice::from_ref(&done),
+        Some("ok"),
+        false,
+    )
+    .unwrap();
+    let c = |h: &str, s: &str| (h.to_string(), s.to_string(), String::new());
+    let commits = vec![
+        c("new1", &format!("fix: finish {child}.")),
+        c("old1", &format!("wip ({a}); also {done}")),
+        c("old0", &format!("start {a}")),
+    ];
+    let found = engine::orphans(&b, &commits, None).unwrap();
+    let got: Vec<(String, String)> = found
+        .iter()
+        .map(|(s, c)| (s.id.clone(), c.0.clone()))
+        .collect();
+    // `child` (sd-x.1) does not also count as its parent; the parent's newest
+    // mention is old1; the closed seed is not an orphan.
+    let mut want = vec![
+        (a.clone(), "old1".to_string()),
+        (child.clone(), "new1".to_string()),
+    ];
+    want.sort();
+    let mut got_sorted = got.clone();
+    got_sorted.sort();
+    assert_eq!(got_sorted, want);
+}
+
+#[test]
+fn list_filters_paginate_reverse_and_hide_deferred_like_br() {
+    let mut b = backend();
+    let mk_f = |b: &mut QuipuBackend, t: &str, p: &str, d: Option<&str>, l: &[&str], n: u32| {
+        engine::create(
+            b,
+            &ctx(n),
+            &CreateReq {
+                title: t.into(),
+                priority: Some(p.into()),
+                description: d.map(str::to_string),
+                labels: l.iter().map(|x| x.to_string()).collect(),
+                ..CreateReq::default()
+            },
+        )
+        .unwrap()
+        .0
+        .id
+    };
+    let a = mk_f(
+        &mut b,
+        "Parser crash",
+        "0",
+        Some("the LEXER fails"),
+        &["x"],
+        1,
+    );
+    let c = mk_f(&mut b, "docs", "3", None, &["y"], 2);
+    let d = mk_f(&mut b, "later", "2", None, &[], 3);
+    engine::defer(&mut b, &ctx(4), std::slice::from_ref(&d), None).unwrap();
+    let ids = |f: Filter, extra: fn(&mut ListReq)| {
+        let mut req = ListReq {
+            filter: f,
+            limit: Some(0),
+            ..ListReq::default()
+        };
+        extra(&mut req);
+        engine::list(&b, &req, None)
+            .unwrap()
+            .issues
+            .into_iter()
+            .map(|s| s.id)
+            .collect::<Vec<_>>()
+    };
+    let none = |_: &mut ListReq| {};
+    assert_eq!(
+        ids(
+            Filter {
+                title_contains: Some("parser".into()),
+                ..Filter::default()
+            },
+            none
+        ),
+        [a.as_str()]
+    );
+    assert_eq!(
+        ids(
+            Filter {
+                desc_contains: Some("lexer".into()),
+                ..Filter::default()
+            },
+            none
+        ),
+        [a.as_str()]
+    );
+    assert_eq!(
+        ids(
+            Filter {
+                labels_any: vec!["x".into(), "y".into()],
+                ..Filter::default()
+            },
+            none
+        )
+        .len(),
+        2
+    );
+    assert_eq!(
+        ids(
+            Filter {
+                priority_min: Some("1".into()),
+                ..Filter::default()
+            },
+            none
+        ),
+        [c.as_str()]
+    );
+    assert_eq!(
+        ids(
+            Filter {
+                priority_max: Some("P1".into()),
+                ..Filter::default()
+            },
+            none
+        ),
+        [a.as_str()]
+    );
+    assert_eq!(
+        ids(
+            Filter {
+                ids: vec![c.clone()],
+                ..Filter::default()
+            },
+            none
+        ),
+        [c.as_str()]
+    );
+    // Deferred is hidden by default (br), shown with --deferred.
+    assert!(!ids(Filter::default(), none).contains(&d));
+    assert!(ids(Filter::default(), |r| r.deferred = true).contains(&d));
+    // Reverse and offset.
+    assert_eq!(
+        ids(Filter::default(), |r| r.reverse = true),
+        [c.as_str(), a.as_str()]
+    );
+    let p = engine::list(
+        &b,
+        &ListReq {
+            offset: 1,
+            limit: Some(1),
+            deferred: true,
+            ..ListReq::default()
+        },
+        None,
+    )
+    .unwrap();
+    assert_eq!(
+        (p.issues.len(), p.offset, p.total, p.has_more),
+        (1, 1, 3, true)
+    );
+}
+
+#[test]
+fn transition_comments_land_in_the_same_tx_and_only_on_changed_seeds() {
+    let mut b = backend();
+    let (x, y) = (mk(&mut b, "x", 1), mk(&mut b, "y", 2));
+    engine::close(
+        &mut b,
+        &ctx(3),
+        std::slice::from_ref(&y),
+        Some("done"),
+        false,
+    )
+    .unwrap();
+    // close: x changes and gets the comment; y is already closed and gets none.
+    let (_, tx, _) = engine::close_as(
+        &mut b,
+        &ctx(4),
+        &[x.clone(), y.clone()],
+        Some("shipped"),
+        None,
+        false,
+        Some("closing with the release"),
+    )
+    .unwrap();
+    let last = |b: &QuipuBackend, id: &str, at: Option<u64>| {
+        engine::comment_list(b, id, at)
+            .unwrap()
+            .last()
+            .map(|c| c.text.clone())
+    };
+    assert_eq!(
+        last(&b, &x, None).as_deref(),
+        Some("closing with the release")
+    );
+    assert_eq!(
+        last(&b, &x, Some(tx - 1)),
+        None,
+        "same transaction as the close"
+    );
+    assert_eq!(
+        last(&b, &y, None),
+        None,
+        "an unchanged seed gets no comment"
+    );
+    // defer / undefer / update carry it too.
+    let z = mk(&mut b, "z", 5);
+    engine::defer_with(
+        &mut b,
+        &ctx(6),
+        std::slice::from_ref(&z),
+        None,
+        Some("waiting on vendor"),
+    )
+    .unwrap();
+    assert_eq!(last(&b, &z, None).as_deref(), Some("waiting on vendor"));
+    engine::undefer_with(
+        &mut b,
+        &ctx(7),
+        std::slice::from_ref(&z),
+        Some("vendor replied"),
+    )
+    .unwrap();
+    assert_eq!(last(&b, &z, None).as_deref(), Some("vendor replied"));
+    engine::update(
+        &mut b,
+        &ctx(8),
+        std::slice::from_ref(&z),
+        &UpdateReq {
+            priority: Some("0".into()),
+            transition_comment: Some("escalated".into()),
+            ..UpdateReq::default()
+        },
+    )
+    .unwrap();
+    assert_eq!(last(&b, &z, None).as_deref(), Some("escalated"));
+    assert_eq!(engine::comment_list(&b, &z, None).unwrap().len(), 3);
+}

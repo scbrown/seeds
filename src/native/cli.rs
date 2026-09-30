@@ -18,8 +18,8 @@ use clap::{Args, Parser, Subcommand};
                   a local store at .seeds/seeds.db, created on first write."
 )]
 pub struct Cli {
-    /// Output as JSON, in bd's output shape
-    #[arg(long, global = true)]
+    /// Output as JSON, in bd's output shape (--robot is br's alias for it)
+    #[arg(long, global = true, visible_alias = "robot")]
     pub json: bool,
 
     /// Actor name recorded on writes and used by --claim (default: $USER)
@@ -95,6 +95,12 @@ pub enum Command {
     Changelog(ChangelogArgs),
     /// Seeds whose description lacks their type's template sections
     Lint(LintArgs),
+    /// Open or in-progress seeds that a git commit mentions (work that may be done)
+    Orphans {
+        /// Include the full commit hash and message body
+        #[arg(long)]
+        details: bool,
+    },
     /// Count seeds (open ones by default)
     Count(CountArgs),
     /// Update fields on one or more seeds
@@ -398,6 +404,36 @@ pub struct ListArgs {
     /// priority (default), created, updated, id or title
     #[arg(long)]
     pub sort: Option<String>,
+    /// Title contains this (case-insensitive)
+    #[arg(long)]
+    pub title_contains: Option<String>,
+    /// Description contains this (case-insensitive)
+    #[arg(long)]
+    pub desc_contains: Option<String>,
+    /// Notes contain this (case-insensitive)
+    #[arg(long)]
+    pub notes_contains: Option<String>,
+    /// Only seeds with ANY of these labels (repeatable)
+    #[arg(long)]
+    pub label_any: Vec<String>,
+    /// Only priority >= this (0-4 or P0-P4)
+    #[arg(long)]
+    pub priority_min: Option<String>,
+    /// Only priority <= this
+    #[arg(long)]
+    pub priority_max: Option<String>,
+    /// Only these ids (repeatable)
+    #[arg(long)]
+    pub id: Vec<String>,
+    /// Skip this many results (pagination)
+    #[arg(long, default_value_t = 0)]
+    pub offset: usize,
+    /// Reverse the sort order
+    #[arg(short, long)]
+    pub reverse: bool,
+    /// Include deferred seeds (hidden by default, as br does)
+    #[arg(long)]
+    pub deferred: bool,
 }
 
 /// `sd search`.
@@ -432,6 +468,36 @@ pub struct SearchArgs {
     /// priority (default), created, updated, id or title
     #[arg(long)]
     pub sort: Option<String>,
+    /// Title contains this (case-insensitive)
+    #[arg(long)]
+    pub title_contains: Option<String>,
+    /// Description contains this (case-insensitive)
+    #[arg(long)]
+    pub desc_contains: Option<String>,
+    /// Notes contain this (case-insensitive)
+    #[arg(long)]
+    pub notes_contains: Option<String>,
+    /// Only seeds with ANY of these labels (repeatable)
+    #[arg(long)]
+    pub label_any: Vec<String>,
+    /// Only priority >= this (0-4 or P0-P4)
+    #[arg(long)]
+    pub priority_min: Option<String>,
+    /// Only priority <= this
+    #[arg(long)]
+    pub priority_max: Option<String>,
+    /// Only these ids (repeatable)
+    #[arg(long)]
+    pub id: Vec<String>,
+    /// Skip this many results (pagination)
+    #[arg(long, default_value_t = 0)]
+    pub offset: usize,
+    /// Reverse the sort order
+    #[arg(short, long)]
+    pub reverse: bool,
+    /// Include deferred seeds (hidden by default, as br does)
+    #[arg(long)]
+    pub deferred: bool,
 }
 
 /// `sd ready`.
@@ -459,6 +525,9 @@ pub struct ReadyArgs {
     /// Only children of this seed
     #[arg(long)]
     pub parent: Option<String>,
+    /// Only seeds with ANY of these labels (repeatable)
+    #[arg(long)]
+    pub label_any: Vec<String>,
 }
 
 /// `sd blocked`.
@@ -603,6 +672,30 @@ pub struct CountArgs {
     /// Count closed seeds too
     #[arg(long)]
     pub include_closed: bool,
+    /// Only this priority
+    #[arg(long)]
+    pub priority: Option<String>,
+    /// Title contains this (case-insensitive)
+    #[arg(long)]
+    pub title_contains: Option<String>,
+    /// Only unassigned seeds
+    #[arg(long)]
+    pub unassigned: bool,
+    /// Group by status (the same as --by status)
+    #[arg(long)]
+    pub by_status: bool,
+    /// Group by priority (the same as --by priority)
+    #[arg(long)]
+    pub by_priority: bool,
+    /// Group by type (the same as --by type)
+    #[arg(long)]
+    pub by_type: bool,
+    /// Group by assignee (the same as --by assignee)
+    #[arg(long)]
+    pub by_assignee: bool,
+    /// Group by label (the same as --by label)
+    #[arg(long)]
+    pub by_label: bool,
 }
 
 /// `sd update`.
@@ -648,6 +741,9 @@ pub struct UpdateArgs {
     /// The shuttle workflow run driving the seed ("" clears it)
     #[arg(long = "workflow-run", value_name = "RUN")]
     pub workflow_run: Option<String>,
+    /// A comment committed with the change, in the same transaction
+    #[arg(long)]
+    pub transition_comment: Option<String>,
 }
 
 /// `sd close`.
@@ -666,6 +762,9 @@ pub struct CloseArgs {
     /// Close even if the seed still has open blockers
     #[arg(short, long)]
     pub force: bool,
+    /// A comment committed with the change, in the same transaction
+    #[arg(long)]
+    pub transition_comment: Option<String>,
 }
 
 /// `sd delete`.
@@ -710,6 +809,9 @@ pub struct DeferArgs {
     /// instant (none: deferred with no date)
     #[arg(long)]
     pub until: Option<String>,
+    /// A comment committed with the change, in the same transaction
+    #[arg(long)]
+    pub transition_comment: Option<String>,
 }
 
 /// `sd undefer`.
@@ -718,6 +820,9 @@ pub struct UndeferArgs {
     /// Seed id(s)
     #[arg(required = true)]
     pub ids: Vec<String>,
+    /// A comment committed with the change, in the same transaction
+    #[arg(long)]
+    pub transition_comment: Option<String>,
 }
 
 /// `sd epic ...`.
@@ -734,6 +839,9 @@ pub enum EpicCommand {
         /// List what would be closed without writing
         #[arg(long)]
         dry_run: bool,
+        /// A comment committed on each closed epic, in the same transaction
+        #[arg(long)]
+        transition_comment: Option<String>,
     },
 }
 
@@ -862,7 +970,7 @@ impl Cli {
                 | Command::Gate(a)
                 | Command::Scheduler(a)
                 | Command::Audit(a)
-                | Command::RobotDocs(a) => a.rest.iter().any(|r| r == "--json"),
+                | Command::RobotDocs(a) => a.rest.iter().any(|r| r == "--json" || r == "--robot"),
                 _ => false,
             }
     }
@@ -882,7 +990,7 @@ impl Command {
             | Command::Undefer(_) => true,
             Command::Dep { command } => !matches!(command, DepCommand::List { .. }),
             Command::Epic { command } => {
-                matches!(command, EpicCommand::CloseEligible { dry_run: false })
+                matches!(command, EpicCommand::CloseEligible { dry_run: false, .. })
             }
             Command::Comments { command } => matches!(command, CommentsCommand::Add { .. }),
             Command::Label { command } => matches!(
@@ -909,6 +1017,7 @@ impl Command {
             | Command::Ready(_)
             | Command::Blocked(_)
             | Command::Stale(_)
+            | Command::Orphans { .. }
             | Command::Lint(_)
             | Command::Changelog(_)
             | Command::History { .. }
@@ -934,6 +1043,7 @@ impl Command {
             Command::Ready(_) => "ready",
             Command::Blocked(_) => "blocked",
             Command::Stale(_) => "stale",
+            Command::Orphans { .. } => "orphans",
             Command::Lint(_) => "lint",
             Command::Changelog(_) => "changelog",
             Command::History { .. } => "history",
@@ -1013,6 +1123,7 @@ mod tests {
         (&["list", "--status", "open", "--limit", "0"], "list", false),
         (&["ready", "--json", "--limit", "5"], "ready", false),
         (&["count", "--by", "status"], "count", false),
+        (&["orphans", "--details"], "orphans", false),
         (&["lint", "-t", "bug", "-s", "all"], "lint", false),
         (&["changelog", "--since", "+7d"], "changelog", false),
         (&["history", "s-1"], "history", false),
@@ -1177,6 +1288,15 @@ mod tests {
         );
         assert_eq!(split(&v(&["s-1"]), &None), None);
         assert_eq!(split(&[], &Some("l".into())), None);
+    }
+
+    #[test]
+    fn robot_is_an_alias_of_json_on_every_verb() {
+        for (args, _, _) in CASES {
+            let mut with: Vec<&str> = args.iter().copied().filter(|a| *a != "--json").collect();
+            with.push("--robot");
+            assert!(parse(&with).wants_json(), "{args:?}");
+        }
     }
 
     #[test]

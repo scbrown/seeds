@@ -17,3 +17,13 @@ sd search "chokes on" -t bug --all --json
 
 **`--json`**: br's envelope `{issues, hidden_closed_count, limit, offset,
 has_more}`, plus `total`.
+
+**Filters** (also on [search](search.md)): `--title-contains`,
+`--desc-contains`, `--notes-contains` (case-insensitive), `--label-any`
+(repeatable, any of), `--priority-min`/`--priority-max`, `--id` (repeatable).
+**Paging**: `--offset N` skips N results (the envelope's `offset` and
+`has_more` account for it); `-r, --reverse` flips the sort.
+
+> **Deferred seeds are hidden by default**, as in br: pass `--deferred` (or
+> `--all`, or `--status deferred`) to see them. Earlier versions of sd listed
+> them by default.

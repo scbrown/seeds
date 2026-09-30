@@ -79,9 +79,12 @@ def main():
             fb, fs = flags(a.br, *path) - gb, flags(a.sd, *path) - gs
             na = fb & set(NOT_APPLICABLE)
             fb -= na
-            per_verb[" ".join(path)] = {"br_only": sorted(fb - fs), "sd_only": sorted(fs - fb),
+            # A br per-verb flag is present in sd if sd has it on the verb OR as a
+            # global flag (br declares --robot per verb; sd declares it once).
+            have = fs | gs
+            per_verb[" ".join(path)] = {"br_only": sorted(fb - have), "sd_only": sorted(fs - fb),
                                         "not_applicable": sorted(na),
-                                        "shared": len(fb & fs), "br_total": len(fb)}
+                                        "shared": len(fb & have), "br_total": len(fb)}
     gna = gb & set(NOT_APPLICABLE)
     mapped = sorted((b & s) & MAPPED)
     report = {"br_verbs": len(b), "sd_verbs": len(s), "covered": len(b & s) - len(mapped),

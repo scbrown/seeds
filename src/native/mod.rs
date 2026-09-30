@@ -1450,10 +1450,20 @@ fn dispatch(cli: &Cli, cfg: &Resolved, ctx: &Ctx, b: &mut dyn Backend) -> Result
                     labels: a.label.clone(),
                     priority: a.priority.clone(),
                     parent: None,
+                    title_contains: a.title_contains.clone(),
+                    desc_contains: a.desc_contains.clone(),
+                    notes_contains: a.notes_contains.clone(),
+                    labels_any: a.label_any.clone(),
+                    priority_min: a.priority_min.clone(),
+                    priority_max: a.priority_max.clone(),
+                    ids: a.id.clone(),
                 },
                 all: a.all,
                 limit: a.limit,
                 sort: a.sort.clone(),
+                offset: a.offset,
+                reverse: a.reverse,
+                deferred: a.deferred,
             };
             let p = engine::list(b, &req, at)?;
             let mut warnings = vec![];
@@ -1485,6 +1495,8 @@ fn dispatch(cli: &Cli, cfg: &Resolved, ctx: &Ctx, b: &mut dyn Backend) -> Result
                     labels: a.label.clone(),
                     priority: a.priority.clone(),
                     parent: a.parent.clone(),
+                    labels_any: a.label_any.clone(),
+                    ..Filter::default()
                 },
                 limit: a.limit,
             };
@@ -1515,10 +1527,20 @@ fn dispatch(cli: &Cli, cfg: &Resolved, ctx: &Ctx, b: &mut dyn Backend) -> Result
                     labels: a.label.clone(),
                     priority: a.priority.clone(),
                     parent: None,
+                    title_contains: a.title_contains.clone(),
+                    desc_contains: a.desc_contains.clone(),
+                    notes_contains: a.notes_contains.clone(),
+                    labels_any: a.label_any.clone(),
+                    priority_min: a.priority_min.clone(),
+                    priority_max: a.priority_max.clone(),
+                    ids: a.id.clone(),
                 },
                 all: a.all,
                 limit: a.limit,
                 sort: a.sort.clone(),
+                offset: a.offset,
+                reverse: a.reverse,
+                deferred: a.deferred,
             };
             let r = engine::search(b, &req, at)?;
             Ok(ok(
@@ -1724,6 +1746,71 @@ fn dispatch(cli: &Cli, cfg: &Resolved, ctx: &Ctx, b: &mut dyn Backend) -> Result
             };
             Ok(ok(json, value, text, vec![]))
         }
+        Command::Orphans { details } => {
+            let out = std::process::Command::new("git")
+                .args(["log", "--format=%h%x1f%H%x1f%s%x1f%b%x1e"])
+                .output()
+                .map_err(|e| SdError::failed(format!("cannot run git: {e}")))?;
+            let in_repo = std::process::Command::new("git")
+                .args(["rev-parse", "--is-inside-work-tree"])
+                .output()
+                .is_ok_and(|o| o.status.success());
+            if !in_repo {
+                return Err(SdError::usage(
+                    "orphans reads git history; run it inside a git repository",
+                ));
+            }
+            // A repository with no commits yet has an empty history, not an
+            // error: `git log` fails there, and the answer is [].
+            let log = if out.status.success() {
+                String::from_utf8_lossy(&out.stdout).into_owned()
+            } else {
+                String::new()
+            };
+            let mut full: std::collections::BTreeMap<String, String> = Default::default();
+            let commits: Vec<engine::CommitText> = log
+                .split('\x1e')
+                .filter_map(|r| {
+                    let mut f = r.trim_start_matches('\n').splitn(4, '\x1f');
+                    let (h, hh, s, b) = (f.next()?, f.next()?, f.next()?, f.next().unwrap_or(""));
+                    full.insert(h.to_string(), hh.to_string());
+                    Some((h.to_string(), s.to_string(), b.trim().to_string()))
+                })
+                .filter(|c| !c.0.is_empty())
+                .collect();
+            let found = engine::orphans(b, &commits, at)?;
+            let value = serde_json::Value::Array(
+                found
+                    .iter()
+                    .map(|(s, c)| {
+                        let mut o = serde_json::json!({"issue_id": s.id, "title": s.title,
+                            "status": s.status, "latest_commit": c.0,
+                            "latest_commit_message": c.1});
+                        if *details {
+                            o["commit_hash"] = serde_json::json!(full.get(&c.0));
+                            o["commit_body"] = serde_json::json!(c.2);
+                        }
+                        o
+                    })
+                    .collect(),
+            );
+            let text = if found.is_empty() {
+                "no open seeds are mentioned in commits".to_string()
+            } else {
+                let mut lines = vec![format!(
+                    "Orphan seeds ({} open/in_progress mentioned in commits):",
+                    found.len()
+                )];
+                for (i, (s, c)) in found.iter().enumerate() {
+                    lines.push(format!("{}. [{}] {} {}", i + 1, s.status, s.id, s.title));
+                    if *details {
+                        lines.push(format!("   {} {}", c.0, c.1));
+                    }
+                }
+                lines.join("\n")
+            };
+            Ok(ok(json, value, text, vec![]))
+        }
         Command::Stale(a) => {
             let seeds = engine::stale(b, ctx, a.days, &a.status, at)?;
             let text = if seeds.is_empty() {
@@ -1753,14 +1840,37 @@ fn dispatch(cli: &Cli, cfg: &Resolved, ctx: &Ctx, b: &mut dyn Backend) -> Result
             ))
         }
         Command::Count(a) => {
+            let shorthands: Vec<&str> = [
+                (a.by_status, "status"),
+                (a.by_priority, "priority"),
+                (a.by_type, "type"),
+                (a.by_assignee, "assignee"),
+                (a.by_label, "label"),
+            ]
+            .iter()
+            .filter(|(on, _)| *on)
+            .map(|(_, by)| *by)
+            .collect();
+            let by = match (a.by.clone(), shorthands.as_slice()) {
+                (by, []) => by,
+                (None, [one]) => Some((*one).to_string()),
+                _ => {
+                    return Err(SdError::usage(
+                        "group by one thing: --by X or a single --by-X flag",
+                    ))
+                }
+            };
             let req = engine::CountReq {
                 filter: Filter {
                     status: a.status.clone(),
                     issue_type: a.issue_type.clone(),
                     assignee: a.assignee.clone(),
+                    unassigned: a.unassigned,
+                    priority: a.priority.clone(),
+                    title_contains: a.title_contains.clone(),
                     ..Filter::default()
                 },
-                by: a.by.clone(),
+                by,
                 include_closed: a.include_closed,
             };
             let c = engine::count(b, &req, at)?;
@@ -1785,6 +1895,7 @@ fn dispatch(cli: &Cli, cfg: &Resolved, ctx: &Ctx, b: &mut dyn Backend) -> Result
                 remove_labels: a.remove_label.clone(),
                 defer: a.defer.clone(),
                 workflow_run: a.workflow_run.clone(),
+                transition_comment: a.transition_comment.clone(),
             };
             let (seeds, tx) = engine::update(b, ctx, &a.ids, &req)?;
             let text = seeds
@@ -1807,6 +1918,7 @@ fn dispatch(cli: &Cli, cfg: &Resolved, ctx: &Ctx, b: &mut dyn Backend) -> Result
                 a.reason.as_deref(),
                 a.outcome.as_deref(),
                 a.force,
+                a.transition_comment.as_deref(),
             )?;
             let text = seeds
                 .iter()
@@ -1862,11 +1974,17 @@ fn dispatch(cli: &Cli, cfg: &Resolved, ctx: &Ctx, b: &mut dyn Backend) -> Result
             Ok(transitions(json, "reopened", "reopened", r))
         }
         Command::Defer(a) => {
-            let r = engine::defer(b, ctx, &a.ids, a.until.as_deref())?;
+            let r = engine::defer_with(
+                b,
+                ctx,
+                &a.ids,
+                a.until.as_deref(),
+                a.transition_comment.as_deref(),
+            )?;
             Ok(transitions(json, "deferred", "deferred", r))
         }
         Command::Undefer(a) => {
-            let r = engine::undefer(b, ctx, &a.ids)?;
+            let r = engine::undefer_with(b, ctx, &a.ids, a.transition_comment.as_deref())?;
             Ok(transitions(json, "undeferred", "undeferred", r))
         }
         Command::Epic { command } => match command {
@@ -1879,7 +1997,7 @@ fn dispatch(cli: &Cli, cfg: &Resolved, ctx: &Ctx, b: &mut dyn Backend) -> Result
                     vec![],
                 ))
             }
-            EpicCommand::CloseEligible { dry_run: true } => {
+            EpicCommand::CloseEligible { dry_run: true, .. } => {
                 let rows = engine::epic_status(b, true, at)?;
                 Ok(ok(
                     json,
@@ -1888,8 +2006,12 @@ fn dispatch(cli: &Cli, cfg: &Resolved, ctx: &Ctx, b: &mut dyn Backend) -> Result
                     vec![],
                 ))
             }
-            EpicCommand::CloseEligible { dry_run: false } => {
-                let (closed, skipped, tx) = engine::epic_close_eligible(b, ctx)?;
+            EpicCommand::CloseEligible {
+                dry_run: false,
+                transition_comment,
+            } => {
+                let (closed, skipped, tx) =
+                    engine::epic_close_eligible_with(b, ctx, transition_comment.as_deref())?;
                 let ids: Vec<&str> = closed.iter().map(|s| s.id.as_str()).collect();
                 let mut value = serde_json::json!({"closed": ids, "count": ids.len(), "tx": tx});
                 if !skipped.is_empty() {
