@@ -365,3 +365,78 @@ pub fn count_text(c: &Count) -> String {
         }
     }
 }
+
+/// The `--format csv` columns sd can fill (br's list, less `due_at` and
+/// `external_ref`, which sd does not model).
+pub const CSV_FIELDS: &[&str] = &[
+    "id",
+    "title",
+    "description",
+    "status",
+    "priority",
+    "issue_type",
+    "assignee",
+    "owner",
+    "created_at",
+    "updated_at",
+    "closed_at",
+    "defer_until",
+    "notes",
+];
+
+/// br's default `--format csv` columns.
+pub const CSV_DEFAULT: &str = "id,title,status,priority,issue_type,assignee,created_at,updated_at";
+
+/// Parse a `--fields` list, refusing a column sd cannot fill rather than
+/// dropping it (br drops unknown columns silently).
+pub fn csv_fields(spec: &str) -> crate::error::Result<Vec<String>> {
+    let fields: Vec<String> = spec.split(',').map(|f| f.trim().to_string()).collect();
+    for f in &fields {
+        if !CSV_FIELDS.contains(&f.as_str()) {
+            return Err(crate::error::SdError::usage(format!(
+                "--fields: sd has no column {f:?}; expected some of {}",
+                CSV_FIELDS.join(", ")
+            )));
+        }
+    }
+    Ok(fields)
+}
+
+/// Seeds as RFC 4180 CSV: a header row, then one row per seed. A value with a
+/// comma, quote or newline is quoted, and its quotes are doubled.
+pub fn seeds_csv(seeds: &[Seed], fields: &[String]) -> String {
+    fn cell(v: &str) -> String {
+        if v.contains([',', '"', '\n', '\r']) {
+            format!("\"{}\"", v.replace('"', "\"\""))
+        } else {
+            v.to_string()
+        }
+    }
+    let mut out = vec![fields.join(",")];
+    for s in seeds {
+        let row: Vec<String> = fields
+            .iter()
+            .map(|f| {
+                let v = match f.as_str() {
+                    "id" => s.id.clone(),
+                    "title" => s.title.clone(),
+                    "description" => s.description.clone().unwrap_or_default(),
+                    "status" => s.status.clone(),
+                    "priority" => s.priority.to_string(),
+                    "issue_type" => s.issue_type.clone(),
+                    "assignee" => s.assignee.clone().unwrap_or_default(),
+                    "owner" => s.owner.clone().unwrap_or_default(),
+                    "created_at" => s.created_at.clone(),
+                    "updated_at" => s.updated_at.clone(),
+                    "closed_at" => s.closed_at.clone().unwrap_or_default(),
+                    "defer_until" => s.defer_until.clone().unwrap_or_default(),
+                    "notes" => s.notes.clone().unwrap_or_default(),
+                    _ => String::new(),
+                };
+                cell(&v)
+            })
+            .collect();
+        out.push(row.join(","));
+    }
+    out.join("\n")
+}

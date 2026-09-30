@@ -1005,3 +1005,41 @@ fn quiet_prints_nothing_on_success_and_still_explains_a_failure() {
     assert_ne!(code(&o), 0);
     assert!(!o.stderr.is_empty());
 }
+
+#[test]
+fn format_csv_on_list_and_search_quotes_like_rfc4180_and_refuses_what_it_would_ignore() {
+    let sb = Sandbox::new("csv");
+    let id = sb
+        .ok(&["create", "has, comma and \"quote\"", "-p", "1", "--silent"])
+        .trim()
+        .to_string();
+    let out = sb.ok(&["list", "--format", "csv"]);
+    let mut lines = out.lines();
+    assert_eq!(
+        lines.next().unwrap(),
+        "id,title,status,priority,issue_type,assignee,created_at,updated_at"
+    );
+    let row = lines.next().unwrap();
+    assert!(
+        row.starts_with(&format!(
+            "{id},\"has, comma and \"\"quote\"\"\",open,1,task,,"
+        )),
+        "{row}"
+    );
+    assert_eq!(
+        sb.ok(&["list", "--format", "csv", "--fields", "id,priority"]),
+        format!("id,priority\n{id},1\n")
+    );
+    assert_eq!(
+        sb.ok(&["search", "comma", "--format", "csv", "--fields", "id"]),
+        format!("id\n{id}\n")
+    );
+    for bad in [
+        vec!["list", "--format", "csv", "--fields", "id,due_at"],
+        vec!["list", "--fields", "id"],
+        vec!["list", "--format", "csv", "--json"],
+        vec!["ready", "--format", "csv"],
+    ] {
+        assert_eq!(code(&sb.run(&bad)), 2, "{bad:?}");
+    }
+}
