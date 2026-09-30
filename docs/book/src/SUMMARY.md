@@ -39,6 +39,7 @@
   - [export, import, sync](verbs/sync.md)
   - [version, where, info](verbs/about.md)
   - [config](verbs/config.md)
+  - [capabilities](verbs/capabilities.md)
   - [schema](verbs/schema.md)
   - [doctor](verbs/doctor.md)
   - [completions](verbs/completions.md)

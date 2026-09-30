@@ -805,6 +805,39 @@ fn config_lists_and_gets_resolved_values_and_never_prints_a_token() {
 }
 
 #[test]
+fn capabilities_are_derived_and_classify_every_verb() {
+    let sb = Sandbox::new("capabilities");
+    let c = sb.json(&["capabilities"]);
+    let cmds = c["commands"].as_array().unwrap();
+    let op = |name: &str| {
+        cmds.iter()
+            .find(|x| x["name"] == name)
+            .map(|x| x["operation"].as_str().unwrap().to_string())
+    };
+    // Every leaf verb is classified; none is unknown.
+    assert!(cmds.iter().all(|x| x["operation"] != "unknown"), "{c}");
+    assert_eq!(op("create").as_deref(), Some("write"));
+    assert_eq!(op("comments add").as_deref(), Some("write"));
+    assert_eq!(op("list").as_deref(), Some("read"));
+    assert_eq!(op("graph").as_deref(), Some("read"));
+    assert_eq!(op("query").as_deref(), Some("elsewhere"));
+    let codes: Vec<i64> = c["exit_codes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|e| e["code"].as_i64().unwrap())
+        .collect();
+    assert_eq!(codes, [0, 1, 2, 3, 4, 5, 6, 7, 8, 20, 21]);
+    assert_eq!(
+        sb.json(&["capabilities", "--for", "comments add"])["operation"],
+        "write"
+    );
+    assert_eq!(code(&sb.run(&["capabilities", "--for", "no such verb"])), 2);
+    // Reads nothing from a ledger, creates nothing.
+    assert!(!sb.work().join(".seeds").exists());
+}
+
+#[test]
 fn doctor_passes_a_fresh_ledger_with_exit_0() {
     let sb = Sandbox::new("doctor");
     sb.ok(&["create", "a"]);

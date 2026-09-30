@@ -54,6 +54,17 @@ pub fn run(cli: &Cli) -> Outcome {
             Err(e) => error_outcome(cli.json, &e, Vec::new()),
         };
     }
+    if let Command::Capabilities { command_path } = &cli.command {
+        return match capabilities(command_path.as_deref()) {
+            Ok(v) => ok(
+                cli.json,
+                v.clone(),
+                serde_json::to_string_pretty(&v).unwrap_or_default(),
+                vec![],
+            ),
+            Err(e) => error_outcome(cli.json, &e, Vec::new()),
+        };
+    }
     if let Command::Schema { target } = &cli.command {
         // Needs no store and no configuration. The output is JSON either way.
         let value = if target == "all" {
@@ -469,6 +480,107 @@ fn info_outcome(json: bool, cfg: &Resolved, b: &dyn Backend) -> Result<Outcome> 
         store.or(url).unwrap_or_default()
     );
     Ok(ok(json, value, text, vec![]))
+}
+
+/// Every leaf command path (e.g. `["comments", "add"]`) with its clap definition.
+fn leaf_commands(
+    cmd: &clap::Command,
+    prefix: Vec<String>,
+    out: &mut Vec<(Vec<String>, clap::Command)>,
+) {
+    for sub in cmd.get_subcommands().filter(|s| s.get_name() != "help") {
+        let mut path = prefix.clone();
+        path.push(sub.get_name().to_string());
+        if sub.has_subcommands() {
+            leaf_commands(sub, path, out);
+        } else {
+            out.push((path, sub.clone()));
+        }
+    }
+}
+
+/// `sd capabilities`: derived from sd's own definitions rather than written
+/// out, so it cannot drift. read/write is `Command::writes`, the same flag that
+/// decides whether a verb takes the store's write lock.
+fn capabilities(command_path: Option<&str>) -> Result<Json> {
+    use clap::{CommandFactory, Parser};
+    let root = Cli::command();
+    let mut leaves = Vec::new();
+    leaf_commands(&root, Vec::new(), &mut leaves);
+    let describe = |path: &[String], sub: &clap::Command| {
+        // Parse the verb with a placeholder for each required positional to
+        // learn its write class and whether it is a pointer elsewhere.
+        let placeholder = |a: &clap::Arg| {
+            a.get_possible_values()
+                .first()
+                .map_or_else(|| "x".to_string(), |v| v.get_name().to_string())
+        };
+        let attempt = |all: bool| {
+            let mut argv: Vec<String> = vec!["sd".into()];
+            argv.extend(path.iter().cloned());
+            for a in sub.get_positionals().filter(|a| all || a.is_required_set()) {
+                let n = a.get_num_args().map_or(1, |r| r.min_values().max(1));
+                argv.extend(std::iter::repeat_n(placeholder(a), n));
+            }
+            Cli::try_parse_from(&argv).ok()
+        };
+        let parsed = attempt(false).or_else(|| attempt(true));
+        let operation = match &parsed {
+            Some(c) if mapped_pointer(&c.command).is_some() => "elsewhere",
+            Some(c) if c.command.writes() => "write",
+            Some(_) => "read",
+            None => "unknown",
+        };
+        serde_json::json!({
+            "name": path.join(" "),
+            "summary": sub.get_about().map(|s| s.to_string()),
+            "aliases": sub.get_visible_aliases().collect::<Vec<_>>(),
+            "operation": operation,
+            "pins_with_at": operation == "read",
+            "flags": sub.get_arguments()
+                .filter(|a| !a.is_global_set() && a.get_long().is_some())
+                .map(|a| format!("--{}", a.get_long().unwrap_or_default()))
+                .collect::<Vec<_>>(),
+        })
+    };
+    if let Some(p) = command_path {
+        let want: Vec<String> = p.split_whitespace().map(str::to_string).collect();
+        return leaves
+            .iter()
+            .find(|(path, _)| *path == want)
+            .map(|(path, sub)| describe(path, sub))
+            .ok_or_else(|| SdError::usage(format!("unknown command path {p:?}")));
+    }
+    Ok(serde_json::json!({
+        "tool": "sd",
+        "version": env!("CARGO_PKG_VERSION"),
+        "contract_version": "sd.capabilities.v1",
+        "commands": leaves.iter().map(|(p, s)| describe(p, s)).collect::<Vec<_>>(),
+        "global_flags": root.get_arguments()
+            .filter(|a| a.get_long().is_some())
+            .map(|a| serde_json::json!({
+                "flag": format!("--{}", a.get_long().unwrap_or_default()),
+                "description": a.get_help().map(|h| h.to_string()),
+            }))
+            .collect::<Vec<_>>(),
+        "output_formats": ["text", "json"],
+        "exit_codes": std::iter::once(serde_json::json!({"code": 0, "name": "OK", "description": "success"}))
+            .chain(ErrorKind::ALL.iter().map(|k| serde_json::json!({
+                "code": k.exit_code(), "name": k.name(), "description": k.description()})))
+            .collect::<Vec<_>>(),
+        "env_vars": ["SEEDS_ACTOR", "SEEDS_QUIPU_STORE", "SEEDS_QUIPU_URL", "SEEDS_GRAPH",
+                     "SEEDS_PREFIX", "SEEDS_SYNC_REMOTE", "SEEDS_QUIPU_TOKEN",
+                     "SEEDS_QUIPU_TOKEN_FILE"],
+        "safety": [
+            "every write is one quipu transaction: all named seeds change, or none do",
+            "a lost response is read back; an unconfirmed write is exit 8, never a blind retry",
+            "an unreachable server is exit 7; sd never falls back to a local store",
+            "a token is never sent to a project-chosen server unless the user trusts its host",
+            "--at pins any read to a past transaction; writes always apply to now",
+            "delete is a tombstone: history is kept, sync carries it without deleting data",
+        ],
+        "json_schemas": "sd schema",
+    }))
 }
 
 /// Where a br verb that sd does not own lives. These exit 21 (ELSEWHERE) with
@@ -1723,6 +1835,7 @@ fn dispatch(cli: &Cli, cfg: &Resolved, ctx: &Ctx, b: &mut dyn Backend) -> Result
         | Command::Init(_)
         | Command::Where
         | Command::Schema { .. }
+        | Command::Capabilities { .. }
         | Command::Config { .. }
         | Command::Query(_)
         | Command::Upgrade(_)
