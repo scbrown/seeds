@@ -126,16 +126,19 @@
 <https://seeds.local/item/sd-non> <https://seeds.local/ontology/revision> "1"^^<http://www.w3.org/2001/XMLSchema#integer> .
 <https://seeds.local/item/sd-non> <https://seeds.local/ontology/status> "open" .
 <https://seeds.local/item/sd-non> <https://seeds.local/ontology/updatedAt> "2026-09-30T15:49:17Z" .
+<https://seeds.local/item/sd-p75> <http://aegis.gastown.local/ontology/closedAt> "2026-09-30T16:28:09Z" .
 <https://seeds.local/item/sd-p75> <http://aegis.gastown.local/ontology/createdAt> "2026-09-30T15:49:17Z" .
 <https://seeds.local/item/sd-p75> <http://aegis.gastown.local/ontology/identifier> "sd-p75" .
+<https://seeds.local/item/sd-p75> <http://aegis.gastown.local/ontology/outcome> "done" .
 <https://seeds.local/item/sd-p75> <http://aegis.gastown.local/ontology/sourceKind> "declared" .
 <https://seeds.local/item/sd-p75> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://aegis.gastown.local/ontology/WorkItem> .
 <https://seeds.local/item/sd-p75> <http://www.w3.org/2000/01/rdf-schema#label> "release parity: release-plz, mdBook on Pages, 4-platform binaries" .
+<https://seeds.local/item/sd-p75> <https://seeds.local/ontology/closeReason> "seeds-ai v0.0.2 released by release-plz: 4 binaries + SHA256SUMS, book on Pages (#7, #8, #9)" .
 <https://seeds.local/item/sd-p75> <https://seeds.local/ontology/createdBy> "wu" .
 <https://seeds.local/item/sd-p75> <https://seeds.local/ontology/description> "Tracked upstream as aegis-w3k75d.7." .
 <https://seeds.local/item/sd-p75> <https://seeds.local/ontology/issueType> "feature" .
 <https://seeds.local/item/sd-p75> <https://seeds.local/ontology/label> "release" .
 <https://seeds.local/item/sd-p75> <https://seeds.local/ontology/priority> "1"^^<http://www.w3.org/2001/XMLSchema#integer> .
-<https://seeds.local/item/sd-p75> <https://seeds.local/ontology/revision> "1"^^<http://www.w3.org/2001/XMLSchema#integer> .
-<https://seeds.local/item/sd-p75> <https://seeds.local/ontology/status> "open" .
-<https://seeds.local/item/sd-p75> <https://seeds.local/ontology/updatedAt> "2026-09-30T15:49:17Z" .
+<https://seeds.local/item/sd-p75> <https://seeds.local/ontology/revision> "2"^^<http://www.w3.org/2001/XMLSchema#integer> .
+<https://seeds.local/item/sd-p75> <https://seeds.local/ontology/status> "closed" .
+<https://seeds.local/item/sd-p75> <https://seeds.local/ontology/updatedAt> "2026-09-30T16:28:09Z" .

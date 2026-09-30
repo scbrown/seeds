@@ -68,7 +68,7 @@ sd --version
 ```
 
 ```text
-sd 0.0.1
+sd 0.0.2
 ```
 
 **Already have `sd`?** [chmln/sd](https://github.com/chmln/sd), the popular
