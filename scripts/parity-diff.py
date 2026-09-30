@@ -58,6 +58,7 @@ NOT_APPLICABLE = {
     "--export-parallelism": "JSONL export", "--witness": "JSONL witness",
     "--witness-chunk-lines": "JSONL witness", "--witness-parallelism": "JSONL witness",
     "--migrate-source-repo-path": "br store migration", "--rename-prefix": "br id prefix migration",
+    "--stats": "token-savings stats for br's TOON output, which sd does not produce",
 }
 
 

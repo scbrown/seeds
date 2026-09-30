@@ -37,6 +37,16 @@ pub struct Outcome {
 
 /// Run a parsed command against the configuration in the environment.
 pub fn run(cli: &Cli) -> Outcome {
+    if let Some(f) = cli.format.as_deref() {
+        if !matches!(f, "text" | "json") {
+            let e = SdError::usage(format!(
+                "--format {f:?} is not supported; sd prints text or json (--format json is --json). \
+                 br's toon format is not implemented"
+            ));
+            return error_outcome(false, &e, Vec::new());
+        }
+    }
+
     if let Command::MergeDriver(a) = &cli.command {
         // Needs no store and no configuration: git runs it mid-merge.
         return match merge_driver(a) {
@@ -2356,7 +2366,9 @@ fn label(
 /// The process entry point used by `src/main.rs`.
 pub fn main_entry() -> i32 {
     use clap::Parser;
-    let cli = Cli::parse();
+    let mut cli = Cli::parse();
+    // --format json is --json; normalise once so every verb sees one flag.
+    cli.json = cli.wants_json();
     let o = run(&cli);
     if !o.stdout.is_empty() {
         println!("{}", o.stdout);
