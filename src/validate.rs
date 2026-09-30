@@ -31,6 +31,7 @@ pub fn functional_predicates() -> Vec<String> {
         term::revision(),
         term::description(),
         term::notes(),
+        term::owner(),
         term::closed_at(),
         term::close_reason(),
         term::defer_until(),

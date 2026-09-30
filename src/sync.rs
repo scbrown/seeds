@@ -274,6 +274,7 @@ pub fn diff_fields(a: &Seed, b: &Seed, a_name: &str, b_name: &str) -> Vec<String
         );
     }
     f("notes", format!("{:?}", a.notes), format!("{:?}", b.notes));
+    f("owner", format!("{:?}", a.owner), format!("{:?}", b.owner));
     f(
         "labels",
         format!("{:?}", a.labels),
@@ -424,6 +425,15 @@ fn merge_seed(base: Option<&Seed>, l: &Seed, r: &Seed, sides: Sides) -> (Seed, V
             base.map(|b| &b.notes),
             &l.notes,
             &r.notes,
+            &mut c,
+            sides,
+            dbg,
+        ),
+        owner: pick(
+            "owner",
+            base.map(|b| &b.owner),
+            &l.owner,
+            &r.owner,
             &mut c,
             sides,
             dbg,

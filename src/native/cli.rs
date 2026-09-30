@@ -223,6 +223,9 @@ pub struct CreateArgs {
     /// Assignee
     #[arg(short, long)]
     pub assignee: Option<String>,
+    /// Owner (usually an email)
+    #[arg(long)]
+    pub owner: Option<String>,
     /// Comma-separated labels
     #[arg(short, long)]
     pub labels: Option<String>,
@@ -434,6 +437,9 @@ pub struct UpdateArgs {
     /// New notes
     #[arg(long)]
     pub notes: Option<String>,
+    /// New owner (usually an email; "" clears it)
+    #[arg(long)]
+    pub owner: Option<String>,
     /// New status: open, in_progress, blocked, deferred or closed
     #[arg(short, long)]
     pub status: Option<String>,

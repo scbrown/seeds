@@ -88,6 +88,11 @@ pub mod term {
     pub fn notes() -> String {
         seeds("notes")
     }
+
+    /// `seeds:owner`: who owns the work (br's `owner`), a plain string.
+    pub fn owner() -> String {
+        seeds("owner")
+    }
     /// `seeds:label`, one fact per label.
     pub fn label() -> String {
         seeds("label")
