@@ -30,7 +30,7 @@ Setting status to `closed` records `closed_at`; setting it back to anything
 else clears `closed_at` and `close_reason`. An update that changes nothing
 writes nothing.
 
-**`--json`**: an array of the updated seed objects.
+**`--json`**: an array of the updated seed objects, each with the `tx`.
 
 **Exit codes**: 0; 2 for a bad value or `--claim` combined with `--assignee`
 or `--status`; 3 for an unknown id; 4 for a lost claim or a concurrent change.

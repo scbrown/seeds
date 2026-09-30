@@ -610,7 +610,8 @@ fn dispatch(cli: &Cli, ctx: &Ctx, b: &mut dyn Backend) -> Result<Outcome> {
             } else {
                 format!("created {}{}", output::seed_line(&seed), tx_note(tx))
             };
-            Ok(ok(json, seed.to_json(), text, vec![]))
+            let tx = (!a.dry_run).then_some(tx);
+            Ok(ok(json, output::with_tx(seed.to_json(), tx), text, vec![]))
         }
         Command::Show(a) => {
             let views = engine::show(b, &a.ids, at)?;
@@ -739,7 +740,12 @@ fn dispatch(cli: &Cli, ctx: &Ctx, b: &mut dyn Backend) -> Result<Outcome> {
                 .map(|s| format!("updated {}{}", output::seed_line(s), tx_note(tx)))
                 .collect::<Vec<_>>()
                 .join("\n");
-            Ok(ok(json, output::seeds_json(&seeds), text, vec![]))
+            Ok(ok(
+                json,
+                output::with_tx(output::seeds_json(&seeds), Some(tx)),
+                text,
+                vec![],
+            ))
         }
         Command::Close(a) => {
             let (seeds, tx, warnings) =
@@ -749,7 +755,12 @@ fn dispatch(cli: &Cli, ctx: &Ctx, b: &mut dyn Backend) -> Result<Outcome> {
                 .map(|s| format!("closed {}{}", output::seed_line(s), tx_note(tx)))
                 .collect::<Vec<_>>()
                 .join("\n");
-            Ok(ok(json, output::seeds_json(&seeds), text, warnings))
+            Ok(ok(
+                json,
+                output::with_tx(output::seeds_json(&seeds), Some(tx)),
+                text,
+                warnings,
+            ))
         }
         Command::Reopen(a) => {
             let r = engine::reopen(b, ctx, &a.ids, a.reason.as_deref())?;
@@ -850,7 +861,12 @@ fn dispatch(cli: &Cli, ctx: &Ctx, b: &mut dyn Backend) -> Result<Outcome> {
                 };
                 let (c, tx) = engine::comment_add(b, ctx, id, &body, author.as_deref())?;
                 let text = format!("added comment {} to {}{}", c.index, c.seed, tx_note(tx));
-                Ok(ok(json, c.to_json(), text, vec![]))
+                Ok(ok(
+                    json,
+                    output::with_tx(c.to_json(), Some(tx)),
+                    text,
+                    vec![],
+                ))
             }
             CommentsCommand::List { id } => {
                 let cs = engine::comment_list(b, id, at)?;

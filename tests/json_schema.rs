@@ -95,7 +95,7 @@ fn every_verb_prints_its_documented_keys() {
     let st = Store::new("keys");
 
     let a = st.json(&["create", "a", "-l", "x", "-d", "desc"]);
-    assert_eq!(keys(&a), set(SEED_KEYS), "create");
+    assert_eq!(keys(&a), with(SEED_KEYS, &["tx"]), "create");
     let a = a["id"].as_str().unwrap().to_string();
     let b = st.json(&["create", "b"])["id"]
         .as_str()
@@ -132,7 +132,7 @@ fn every_verb_prints_its_documented_keys() {
     );
 
     let c = st.json(&["comments", "add", &a, "hello"]);
-    assert_eq!(keys(&c), set(COMMENT_KEYS), "comments add");
+    assert_eq!(keys(&c), with(COMMENT_KEYS, &["tx"]), "comments add");
     let cl = st.json(&["comments", "list", &a]);
     assert_eq!(keys(&cl[0]), set(COMMENT_KEYS), "comments list");
 
@@ -166,11 +166,11 @@ fn every_verb_prints_its_documented_keys() {
 
     let up = st.json(&["update", &a, "--add-label", "y"]);
     assert!(up.is_array());
-    assert_eq!(keys(&up[0]), set(SEED_KEYS), "update");
+    assert_eq!(keys(&up[0]), with(SEED_KEYS, &["tx"]), "update");
 
     let closed = st.json(&["close", &b, "--reason", "done"]);
     assert!(closed.is_array());
-    assert_eq!(keys(&closed[0]), set(SEED_KEYS), "close");
+    assert_eq!(keys(&closed[0]), with(SEED_KEYS, &["tx"]), "close");
     assert_eq!(closed[0]["status"], "closed");
 
     let rm = st.json(&["dep", "remove", &a, &b]);
