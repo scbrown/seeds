@@ -9,7 +9,7 @@
 
 use serde_json::{json, Value as Json};
 
-use crate::engine::{BlockedPage, Count, DepChange, DepRow, Page, SeedView};
+use crate::engine::{BlockedPage, Count, DepChange, DepRow, Page, SearchPage, SeedView};
 use crate::model::{Comment, Seed};
 
 /// `show --json`: an array of full seed objects.
@@ -51,6 +51,27 @@ pub fn list_json(p: &Page) -> Json {
         "offset": 0,
         "has_more": p.has_more,
     })
+}
+
+/// `search --json`: br's envelope, `{issues, hidden_closed_count, limit, offset,
+/// has_more}`, plus `total`.
+pub fn search_json(r: &SearchPage) -> Json {
+    let mut o = list_json(&r.page);
+    o["hidden_closed_count"] = json!(r.hidden_closed);
+    o
+}
+
+/// `search` as text: the hits, then how many closed ones were hidden.
+pub fn search_text(r: &SearchPage, query: &str) -> String {
+    let mut out = page_text(&r.page, "matching");
+    if r.hidden_closed > 0 {
+        out.push_str(&format!(
+            "\n({} closed seed{} also match {query:?}; --all shows them)",
+            r.hidden_closed,
+            if r.hidden_closed == 1 { "" } else { "s" }
+        ));
+    }
+    out
 }
 
 /// Stamp a write's transaction on its `--json` output: on an object, or on each

@@ -320,6 +320,62 @@ fn page(mut seeds: Vec<Seed>, limit: usize) -> Page {
     }
 }
 
+/// `sd search`.
+#[derive(Debug, Clone, Default)]
+pub struct SearchReq {
+    /// Text to find (case-insensitive substring).
+    pub query: String,
+    /// Filters.
+    pub filter: Filter,
+    /// Include closed seeds (hidden, and counted, unless `--status` or `--all`).
+    pub all: bool,
+    /// Page size; `None` means [`DEFAULT_LIST_LIMIT`] (br's 50), `Some(0)` means all.
+    pub limit: Option<usize>,
+    /// Sort order (one of [`SORTS`]).
+    pub sort: Option<String>,
+}
+
+/// A page of search hits and how many closed hits were hidden.
+#[derive(Debug, Clone)]
+pub struct SearchPage {
+    /// The page.
+    pub page: Page,
+    /// Closed seeds that matched but were hidden (pass `--all` to see them).
+    pub hidden_closed: usize,
+}
+
+/// `sd search`: seeds whose id, title, description or any comment contains
+/// the query, case-insensitively (br's fields; notes are not searched, as in br).
+pub fn search(b: &dyn Backend, req: &SearchReq, at: Option<u64>) -> Result<SearchPage> {
+    let query = req.query.trim().to_lowercase();
+    if query.is_empty() {
+        return Err(SdError::usage("search needs a non-empty query"));
+    }
+    let f = req.filter.compile()?;
+    let snap = b.snapshot(at)?;
+    let hit = |s: &Seed| {
+        let has = |t: &str| t.to_lowercase().contains(&query);
+        has(&s.id)
+            || has(&s.title)
+            || s.description.as_deref().is_some_and(has)
+            || snap.comments_on(&s.id).iter().any(|c| has(&c.text))
+    };
+    let show_closed = req.all || f.status.is_some();
+    let (mut seeds, mut hidden_closed) = (Vec::new(), 0);
+    for s in snap.seeds.values().filter(|s| f.matches(s) && hit(s)) {
+        if s.status == "closed" && !show_closed {
+            hidden_closed += 1;
+        } else {
+            seeds.push(s.clone());
+        }
+    }
+    sort_seeds(&mut seeds, req.sort.as_deref())?;
+    Ok(SearchPage {
+        page: page(seeds, req.limit.unwrap_or(DEFAULT_LIST_LIMIT)),
+        hidden_closed,
+    })
+}
+
 /// `sd blocked`. Repeated types and priorities are alternatives; labels must
 /// all match (br's semantics).
 #[derive(Debug, Clone, Default)]

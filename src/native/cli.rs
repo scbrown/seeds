@@ -55,6 +55,9 @@ pub enum Command {
     Show(ShowArgs),
     /// List seeds (open ones by default; 50 at a time, --limit 0 for all)
     List(ListArgs),
+    /// Find seeds whose id, title, description or comments contain the text
+    /// (closed ones are hidden and counted unless --all)
+    Search(SearchArgs),
     /// List open seeds with no open blockers. Never truncated unless you pass
     /// --limit, and then it says so.
     Ready(ReadyArgs),
@@ -201,6 +204,40 @@ pub struct ShowArgs {
 /// `sd list`.
 #[derive(Debug, Args)]
 pub struct ListArgs {
+    /// Only this status (includes closed when you ask for closed)
+    #[arg(short, long)]
+    pub status: Option<String>,
+    /// Only this type
+    #[arg(short = 't', long = "type")]
+    pub issue_type: Option<String>,
+    /// Only this assignee
+    #[arg(long)]
+    pub assignee: Option<String>,
+    /// Only unassigned seeds
+    #[arg(long)]
+    pub unassigned: bool,
+    /// Only seeds with this label (repeatable; all must match)
+    #[arg(short, long)]
+    pub label: Vec<String>,
+    /// Only this priority
+    #[arg(short, long)]
+    pub priority: Option<String>,
+    /// Include closed seeds
+    #[arg(short, long)]
+    pub all: bool,
+    /// Page size (default 50; 0 = all). The output says when it was cut short.
+    #[arg(long)]
+    pub limit: Option<usize>,
+    /// priority (default), created, updated, id or title
+    #[arg(long)]
+    pub sort: Option<String>,
+}
+
+/// `sd search`.
+#[derive(Debug, Args)]
+pub struct SearchArgs {
+    /// Text to find (case-insensitive)
+    pub query: String,
     /// Only this status (includes closed when you ask for closed)
     #[arg(short, long)]
     pub status: Option<String>,
@@ -518,6 +555,7 @@ impl Command {
             | Command::List(_)
             | Command::Ready(_)
             | Command::Blocked(_)
+            | Command::Search(_)
             | Command::Count(_) => false,
         }
     }
@@ -530,6 +568,7 @@ impl Command {
             Command::List(_) => "list",
             Command::Ready(_) => "ready",
             Command::Blocked(_) => "blocked",
+            Command::Search(_) => "search",
             Command::Count(_) => "count",
             Command::Update(_) => "update",
             Command::Close(_) => "close",
@@ -571,6 +610,11 @@ mod tests {
         (&["list", "--status", "open", "--limit", "0"], "list", false),
         (&["ready", "--json", "--limit", "5"], "ready", false),
         (&["count", "--by", "status"], "count", false),
+        (
+            &["search", "lexer", "-a", "--limit", "0", "-l", "x"],
+            "search",
+            false,
+        ),
         (
             &[
                 "blocked", "-t", "bug", "-t", "task", "-p", "1", "--limit", "0",
