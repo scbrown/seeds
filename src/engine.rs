@@ -1475,6 +1475,11 @@ pub fn delete(
         }
         let mut s = before.clone();
         s.status = model::TOMBSTONE.into();
+        // A tombstone is not a close, even for a seed that was closed first:
+        // drop the close fields (history keeps them, and --at reads them).
+        s.closed_at = None;
+        s.close_reason = None;
+        s.outcome = None;
         s.updated_at = ctx.now.clone();
         s.revision = before.revision + 1;
         writes.push(SeedWrite {

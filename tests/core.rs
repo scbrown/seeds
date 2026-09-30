@@ -1652,3 +1652,46 @@ fn delete_cascade_takes_dependents_with_it() {
         0
     );
 }
+
+#[test]
+fn deleting_a_closed_seed_drops_its_close_so_a_tombstone_is_never_a_close() {
+    // wu, seeds#28 review: delete set the status only, so a seed closed first
+    // kept closed_at and close_reason. History keeps them; --at still reads them.
+    let mut b = backend();
+    let x = mk(&mut b, "x", 1);
+    let (_, closed_tx, _) = engine::close(
+        &mut b,
+        &ctx(2),
+        std::slice::from_ref(&x),
+        Some("done earlier"),
+        false,
+    )
+    .unwrap();
+    engine::delete(
+        &mut b,
+        &ctx(3),
+        std::slice::from_ref(&x),
+        "dup",
+        false,
+        false,
+        false,
+    )
+    .unwrap();
+    let t = engine::show(&b, std::slice::from_ref(&x), None).unwrap()[0]
+        .seed
+        .clone();
+    assert_eq!(t.status, "tombstone");
+    assert_eq!(
+        (t.closed_at, t.close_reason, t.outcome),
+        (None, None, None),
+        "a tombstone carries no close"
+    );
+    let before = engine::show(&b, std::slice::from_ref(&x), Some(closed_tx)).unwrap()[0]
+        .seed
+        .clone();
+    assert_eq!(
+        before.close_reason.as_deref(),
+        Some("done earlier"),
+        "history keeps the close"
+    );
+}
