@@ -43,6 +43,10 @@ pub fn run(cli: &Cli) -> Outcome {
             Err(e) => error_outcome(cli.json, &e, Vec::new()),
         };
     }
+    if let Some(pointer) = mapped_pointer(&cli.command) {
+        let e = SdError::new(ErrorKind::Elsewhere, pointer);
+        return error_outcome(cli.wants_json(), &e, Vec::new());
+    }
     if let Command::Completions(a) = &cli.command {
         // Needs no store and no configuration.
         return match completions(a) {
@@ -154,6 +158,34 @@ fn info_outcome(json: bool, cfg: &Resolved, b: &dyn Backend) -> Result<Outcome> 
         store.or(url).unwrap_or_default()
     );
     Ok(ok(json, value, text, vec![]))
+}
+
+/// Where a br verb that sd does not own lives. These exit 21 (ELSEWHERE) with
+/// the pointer on stderr, so desire-path records every attempt (aegis-w3k75d.8).
+fn mapped_pointer(c: &Command) -> Option<String> {
+    let (verb, where_) = match c {
+        Command::Query(_) => (
+            "query",
+            "saved queries are quipu stored queries: ask quipu (quipu ask / the quipu_ask tool)",
+        ),
+        Command::Upgrade(_) => (
+            "upgrade",
+            "sd is installed and upgraded by caboodle: caboodle update-release --tool seeds",
+        ),
+        Command::Gate(_) => ("gate", "workflow gates are shuttle's"),
+        Command::Scheduler(_) => ("scheduler", "ranking ready work for a swarm is shuttle's"),
+        Command::Audit(_) => (
+            "audit",
+            "provenance is quipu's: every sd write is a transaction recording its actor and \
+             source; read past states with sd show --at <tx>",
+        ),
+        Command::RobotDocs(_) => (
+            "robot-docs",
+            "the automation docs are the seeds book and sd <verb> --help",
+        ),
+        _ => return None,
+    };
+    Some(format!("`sd {verb}` is not an sd verb: {where_}"))
 }
 
 /// `sd completions <shell> [-o dir]`: clap's generator over the real CLI
@@ -791,6 +823,20 @@ fn dispatch(cli: &Cli, cfg: &Resolved, ctx: &Ctx, b: &mut dyn Backend) -> Result
             let tx = (!a.dry_run && tx != 0).then_some(tx);
             Ok(ok(json, output::with_tx(seed.to_json(), tx), text, vec![]))
         }
+        Command::Q(a) => {
+            let req = engine::CreateReq {
+                title: a.title.join(" "),
+                description: a.description.clone(),
+                issue_type: a.issue_type.clone(),
+                priority: a.priority.clone(),
+                labels: a.labels.iter().flat_map(|l| split_csv(&Some(l.clone()))).collect(),
+                parent: a.parent.clone(),
+                ..engine::CreateReq::default()
+            };
+            let (seed, tx) = engine::create(b, ctx, &req)?;
+            let value = serde_json::json!({"id": seed.id, "title": seed.title, "tx": tx});
+            Ok(ok(json, value, seed.id.clone(), vec![]))
+        }
         Command::Show(a) => {
             let views = engine::show(b, &a.ids, at)?;
             let text = views
@@ -1120,8 +1166,14 @@ fn dispatch(cli: &Cli, cfg: &Resolved, ctx: &Ctx, b: &mut dyn Backend) -> Result
         | Command::Version(_)
         | Command::Completions(_)
         | Command::Init(_)
-        | Command::Where => Err(SdError::usage(
-            "export, import, sync, merge-driver, completions, init, version and where are handled before dispatch",
+        | Command::Where
+        | Command::Query(_)
+        | Command::Upgrade(_)
+        | Command::Gate(_)
+        | Command::Scheduler(_)
+        | Command::Audit(_)
+        | Command::RobotDocs(_) => Err(SdError::usage(
+            "export, import, sync, merge-driver, completions, init, version, where and the mapped verbs are handled before dispatch",
         )),
         Command::Label { command } => label(json, at, ctx, b, command),
         Command::Comments { command } => match command {

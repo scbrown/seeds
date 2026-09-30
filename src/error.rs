@@ -33,6 +33,9 @@ pub enum ErrorKind {
     Indeterminate,
     /// A configured capability exists in the design but is not built yet.
     NotBuilt,
+    /// A br verb whose capability lives in another tool of the stack (quipu,
+    /// shuttle, caboodle). The message names where; desire-path records it.
+    Elsewhere,
 }
 
 impl ErrorKind {
@@ -48,6 +51,7 @@ impl ErrorKind {
             ErrorKind::Unreachable => 7,
             ErrorKind::Indeterminate => 8,
             ErrorKind::NotBuilt => 20,
+            ErrorKind::Elsewhere => 21,
         }
     }
 
@@ -63,6 +67,7 @@ impl ErrorKind {
             ErrorKind::Unreachable => "UNREACHABLE",
             ErrorKind::Indeterminate => "INDETERMINATE",
             ErrorKind::NotBuilt => "NOT_BUILT",
+            ErrorKind::Elsewhere => "ELSEWHERE",
         }
     }
 }

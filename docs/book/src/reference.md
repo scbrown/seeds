@@ -57,8 +57,9 @@ Exit codes are a contract. A code is never reused or renumbered.
 | 8 | indeterminate: a remote write's response was lost and a read-back does not show it; it may still land. Check the named ids before doing anything; do not simply retry |
 | 10-18 | **retired**: the v0 shell's per-verb "not yet implemented" codes. Never reused. |
 | 20 | not built: reserved for a configured capability that exists in the design but not in this build (no verb returns it today) |
+| 21 | elsewhere: a br verb whose capability lives in another tool of the stack (`query`, `upgrade`, `gate`, `scheduler`, `audit`, `robot-docs`); the message says where |
 
 In `--json` mode an error prints `{"error": {"code": "<NAME>", "message":
 "..."}}` on stdout, where `<NAME>` is `FAILED`, `USAGE`, `NOT_FOUND`,
-`CONFLICT`, `REFUSED`, `CONFIG`, `UNREACHABLE`, `INDETERMINATE` or `NOT_BUILT`. The message
+`CONFLICT`, `REFUSED`, `CONFIG`, `UNREACHABLE`, `INDETERMINATE`, `NOT_BUILT` or `ELSEWHERE`. The message
 always goes to stderr as well.

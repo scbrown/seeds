@@ -707,3 +707,46 @@ fn owner_is_set_changed_cleared_and_survives_a_pendant_round_trip() {
     sb.ok(&["update", &a, "--owner", ""]);
     assert_eq!(sb.json(&["show", &a])[0]["owner"], Value::Null);
 }
+
+#[test]
+fn q_captures_status_aliases_stats_and_mapped_verbs_point_elsewhere() {
+    let sb = Sandbox::new("q-mapped");
+    // q: title words joined, prints only the id.
+    let id = sb
+        .ok(&["q", "quick", "one", "-p", "1", "-l", "a,b"])
+        .trim()
+        .to_string();
+    let shown = sb.json(&["show", &id]);
+    assert_eq!(shown[0]["title"], "quick one");
+    assert_eq!(shown[0]["priority"], 1);
+    let q = sb.json(&["q", "second"]);
+    assert!(q["id"].is_string() && q["tx"].as_u64().unwrap() > 0);
+    // status is stats.
+    assert_eq!(sb.json(&["status"]), sb.json(&["stats"]));
+    // A mapped verb exits 21 with the pointer on stderr, whatever its args,
+    // and touches nothing.
+    for (verb, needle) in [
+        ("query", "quipu"),
+        ("upgrade", "caboodle"),
+        ("gate", "shuttle"),
+    ] {
+        let o = sb.run(&[verb, "anything", "--flag"]);
+        assert_eq!(code(&o), 21, "{verb}");
+        assert!(
+            String::from_utf8_lossy(&o.stderr).contains(needle),
+            "{verb}"
+        );
+    }
+    let j: Value = serde_json::from_slice(&sb.run(&["audit", "--json"]).stdout).unwrap();
+    assert_eq!(j["error"]["code"], "ELSEWHERE");
+    assert_eq!(sb.json(&["count"])["count"], 2);
+}
+
+#[test]
+fn a_mapped_verb_honours_a_trailing_json_flag() {
+    let sb = Sandbox::new("mapped-json");
+    let o = sb.run(&["query", "list", "--json"]);
+    assert_eq!(code(&o), 21);
+    let j: Value = serde_json::from_slice(&o.stdout).unwrap();
+    assert_eq!(j["error"]["code"], "ELSEWHERE");
+}

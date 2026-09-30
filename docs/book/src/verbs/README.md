@@ -9,7 +9,9 @@
 | `ready` | no | [ready](ready.md) |
 | `search` | no | [search](search.md) |
 | `stale` | no | [stale](stale.md) |
-| `stats` | no | [stats](stats.md) |
+| `stats` (alias `status`) | no | [stats](stats.md) |
+| `q` | yes | [q](q.md) |
+| `query`, `upgrade`, `gate`, `scheduler`, `audit`, `robot-docs` | no (exit 21, pointer) | [elsewhere](q.md) |
 | `count` | no | [count](count.md) |
 | `update` | yes | [update](update.md) |
 | `close` | yes | [close](close.md) |
