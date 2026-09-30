@@ -284,6 +284,17 @@ fn check_url(url: &str, origin: &str) -> Result<String> {
     }
 }
 
+/// The project and user config files resolution would read, whether or not
+/// they exist: (project, user).
+pub fn config_paths(inputs: &Inputs) -> (Option<PathBuf>, Option<PathBuf>) {
+    let project = find_project_root(&inputs.cwd).map(|r| r.join(PROJECT_DIR).join(CONFIG_FILE));
+    let user = inputs
+        .user_config_dir
+        .as_ref()
+        .map(|d| d.join("seeds").join(CONFIG_FILE));
+    (project, user)
+}
+
 /// Resolve the configuration from `inputs`. Reads the two config files.
 pub fn resolve(inputs: &Inputs) -> Result<Resolved> {
     let project_root = find_project_root(&inputs.cwd);
