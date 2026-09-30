@@ -33,6 +33,7 @@
   - [graph](verbs/graph.md)
   - [history](verbs/history.md)
   - [changelog](verbs/changelog.md)
+  - [lint](verbs/lint.md)
   - [dep](verbs/dep.md)
   - [comments](verbs/comments.md)
   - [export, import, sync](verbs/sync.md)

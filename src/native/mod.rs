@@ -1246,6 +1246,39 @@ fn dispatch(cli: &Cli, cfg: &Resolved, ctx: &Ctx, b: &mut dyn Backend) -> Result
             }
             Ok(ok(json, value, lines.join("\n"), vec![]))
         }
+        Command::Lint(a) => {
+            let results = engine::lint(b, &a.ids, a.issue_type.as_deref(), a.status.as_deref(), at)?;
+            let warnings: usize = results.iter().map(|r| r.missing.len()).sum();
+            let value = serde_json::json!({
+                "total": warnings,
+                "issues": results.len(),
+                "results": results.iter().map(|r| serde_json::json!({
+                    "id": r.seed.id, "title": r.seed.title, "type": r.seed.issue_type,
+                    "missing": r.missing.iter().map(|(s, _)| s).collect::<Vec<_>>(),
+                    "warnings": r.missing.len(),
+                    "suggestions": r.missing.iter()
+                        .map(|(s, h)| serde_json::json!({"section": s, "hint": h}))
+                        .collect::<Vec<_>>(),
+                })).collect::<Vec<_>>(),
+            });
+            let text = if results.is_empty() {
+                "no template warnings".to_string()
+            } else {
+                let mut lines = vec![format!(
+                    "Template warnings ({} seed{}, {warnings} warning{}):",
+                    results.len(),
+                    if results.len() == 1 { "" } else { "s" },
+                    if warnings == 1 { "" } else { "s" }
+                )];
+                for r in &results {
+                    lines.push(String::new());
+                    lines.push(format!("{} [{}]: {}", r.seed.id, r.seed.issue_type, r.seed.title));
+                    lines.extend(r.missing.iter().map(|(s, h)| format!("  missing: {s} - {h}")));
+                }
+                lines.join("\n")
+            };
+            Ok(ok(json, value, text, vec![]))
+        }
         Command::Stale(a) => {
             let seeds = engine::stale(b, ctx, a.days, &a.status, at)?;
             let text = if seeds.is_empty() {

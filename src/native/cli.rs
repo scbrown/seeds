@@ -93,6 +93,8 @@ pub enum Command {
     },
     /// Closed seeds since a date, tag or commit, grouped by type
     Changelog(ChangelogArgs),
+    /// Seeds whose description lacks their type's template sections
+    Lint(LintArgs),
     /// Count seeds (open ones by default)
     Count(CountArgs),
     /// Update fields on one or more seeds
@@ -527,6 +529,19 @@ pub struct ChangelogArgs {
     pub since_commit: Option<String>,
 }
 
+/// `sd lint`.
+#[derive(Debug, Args)]
+pub struct LintArgs {
+    /// Seed id(s) to lint (default: open seeds)
+    pub ids: Vec<String>,
+    /// Only this type
+    #[arg(short = 't', long = "type")]
+    pub issue_type: Option<String>,
+    /// Only this status (default open; "all" for every status)
+    #[arg(short, long)]
+    pub status: Option<String>,
+}
+
 /// `sd count`.
 #[derive(Debug, Args)]
 pub struct CountArgs {
@@ -847,6 +862,7 @@ impl Command {
             | Command::Ready(_)
             | Command::Blocked(_)
             | Command::Stale(_)
+            | Command::Lint(_)
             | Command::Changelog(_)
             | Command::History { .. }
             | Command::Graph(_)
@@ -871,6 +887,7 @@ impl Command {
             Command::Ready(_) => "ready",
             Command::Blocked(_) => "blocked",
             Command::Stale(_) => "stale",
+            Command::Lint(_) => "lint",
             Command::Changelog(_) => "changelog",
             Command::History { .. } => "history",
             Command::Graph(_) => "graph",
@@ -942,6 +959,7 @@ mod tests {
         (&["list", "--status", "open", "--limit", "0"], "list", false),
         (&["ready", "--json", "--limit", "5"], "ready", false),
         (&["count", "--by", "status"], "count", false),
+        (&["lint", "-t", "bug", "-s", "all"], "lint", false),
         (&["changelog", "--since", "+7d"], "changelog", false),
         (&["history", "s-1"], "history", false),
         (

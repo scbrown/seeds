@@ -1861,3 +1861,79 @@ fn changelog_groups_closed_seeds_by_type_newest_first_since_a_date() {
         ErrorKind::Usage
     );
 }
+
+#[test]
+fn lint_reports_brs_template_sections_per_type() {
+    let mut b = backend();
+    let mk_d = |b: &mut QuipuBackend, t: &str, ty: &str, d: Option<&str>| {
+        engine::create(
+            b,
+            &ctx(1),
+            &CreateReq {
+                title: t.into(),
+                issue_type: Some(ty.into()),
+                description: d.map(str::to_string),
+                ..CreateReq::default()
+            },
+        )
+        .unwrap()
+        .0
+        .id
+    };
+    let bug = mk_d(&mut b, "bug", "bug", None);
+    let task_ok = mk_d(
+        &mut b,
+        "ok",
+        "task",
+        Some("intro\n\n### acceptance criteria\n- x"),
+    );
+    let epic = mk_d(
+        &mut b,
+        "epic",
+        "epic",
+        Some("## Acceptance Criteria\n(wrong section)"),
+    );
+    mk_d(&mut b, "chore", "chore", None);
+    let r = engine::lint(&b, &[], None, None, None).unwrap();
+    let by: std::collections::BTreeMap<_, _> = r
+        .iter()
+        .map(|x| {
+            (
+                x.seed.id.clone(),
+                x.missing.iter().map(|(s, _)| *s).collect::<Vec<_>>(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        by[&bug],
+        ["## Steps to Reproduce", "## Acceptance Criteria"]
+    );
+    assert_eq!(by[&epic], ["## Success Criteria"]);
+    assert!(
+        !by.contains_key(&task_ok),
+        "any heading level, case-insensitive"
+    );
+    assert_eq!(by.len(), 2, "chores have no template");
+    // Closed seeds are skipped unless asked for.
+    engine::close(
+        &mut b,
+        &ctx(2),
+        std::slice::from_ref(&bug),
+        Some("done"),
+        false,
+    )
+    .unwrap();
+    assert_eq!(engine::lint(&b, &[], None, None, None).unwrap().len(), 1);
+    assert_eq!(
+        engine::lint(&b, &[], None, Some("all"), None)
+            .unwrap()
+            .len(),
+        2
+    );
+    assert_eq!(
+        engine::lint(&b, &[], Some("bug"), Some("all"), None)
+            .unwrap()
+            .len(),
+        1
+    );
+}
