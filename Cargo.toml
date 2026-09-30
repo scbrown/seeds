@@ -28,7 +28,7 @@ required-features = ["native"]
 # core, which builds for wasm32-unknown-unknown with `--no-default-features`
 # (see `just wasm`).
 default = ["native"]
-native = ["dep:clap", "dep:toml", "dep:ureq", "shacl"]
+native = ["dep:clap", "dep:clap_complete", "dep:toml", "dep:ureq", "shacl"]
 # Validate every write against the WorkItem shapes (camayoc's, plus the seeds
 # shape). quipu's SHACL engine is not part of quipu's own wasm32 gate, so the
 # wasm build leaves it out and says so rather than claiming a check it did not
@@ -41,6 +41,8 @@ serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"
 sha2 = "0.10"
 clap = { version = "4.5", features = ["derive", "env"], optional = true }
+# Shell completions for `sd completions` (native only; same project as clap).
+clap_complete = { version = "4.5", optional = true }
 toml = { version = "0.8", optional = true }
 # The shared-server backend (native only): quipu over HTTP.
 ureq = { version = "2", optional = true }
