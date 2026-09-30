@@ -20,6 +20,7 @@ STEPS = [
     ("list", ["list"]),
     ("ready", ["ready"]),
     ("count", ["count"]),
+    ("lint", ["lint"]),
     ("version", ["version"]),
     ("where", ["where"]),
     ("info", ["info"]),

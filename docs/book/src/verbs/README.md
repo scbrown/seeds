@@ -22,6 +22,7 @@
 | `graph` | no | [graph](graph.md) |
 | `history` | no | [history](history.md) |
 | `changelog` | no | [changelog](changelog.md) |
+| `lint` | no | [lint](lint.md) |
 | `epic status`, `epic close-eligible` | close-eligible | [epic](epic.md) |
 | `dep add`, `dep remove`, `dep list` | add/remove | [dep](dep.md) |
 | `comments add`, `comments list` | add | [comments](comments.md) |

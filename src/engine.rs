@@ -979,6 +979,88 @@ pub fn changelog(
     Ok(groups)
 }
 
+/// The description sections br's templates expect, by type, with br's hint.
+pub fn template_sections(issue_type: &str) -> &'static [(&'static str, &'static str)] {
+    match issue_type {
+        "bug" => &[
+            ("## Steps to Reproduce", "Describe how to reproduce the bug"),
+            (
+                "## Acceptance Criteria",
+                "Define criteria to verify the fix",
+            ),
+        ],
+        "task" | "feature" => &[(
+            "## Acceptance Criteria",
+            "Define criteria to verify completion",
+        )],
+        "epic" => &[("## Success Criteria", "Define high-level success criteria")],
+        _ => &[],
+    }
+}
+
+/// Whether `description` has a heading (any level) named like `section`.
+fn has_section(description: Option<&str>, section: &str) -> bool {
+    let want = section.trim_start_matches('#').trim();
+    description.is_some_and(|d| {
+        d.lines().any(|l| {
+            let l = l.trim();
+            l.starts_with('#') && l.trim_start_matches('#').trim().eq_ignore_ascii_case(want)
+        })
+    })
+}
+
+/// One seed's missing template sections in `sd lint`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LintResult {
+    /// The seed.
+    pub seed: Seed,
+    /// (section, hint) pairs missing from its description.
+    pub missing: Vec<(&'static str, &'static str)>,
+}
+
+/// `sd lint [ids]`: seeds whose description lacks their type's template
+/// sections. Without ids: open seeds, or `status` (a status, or "all"),
+/// optionally of one type. Only seeds with something missing are returned.
+pub fn lint(
+    b: &dyn Backend,
+    ids: &[String],
+    issue_type: Option<&str>,
+    status: Option<&str>,
+    at: Option<u64>,
+) -> Result<Vec<LintResult>> {
+    let snap = b.snapshot(at)?;
+    let issue_type = issue_type.map(model::parse_type).transpose()?;
+    let status = match status {
+        None => Some("open".to_string()),
+        Some("all") => None,
+        Some(s) => Some(model::parse_status(s)?),
+    };
+    let seeds: Vec<&Seed> = if ids.is_empty() {
+        snap.seeds
+            .values()
+            .filter(|s| !s.is_tombstone())
+            .filter(|s| status.as_ref().is_none_or(|st| &s.status == st))
+            .filter(|s| issue_type.as_ref().is_none_or(|t| &s.issue_type == t))
+            .collect()
+    } else {
+        ids.iter().map(|id| snap.get(id)).collect::<Result<_>>()?
+    };
+    Ok(seeds
+        .into_iter()
+        .filter_map(|s| {
+            let missing: Vec<_> = template_sections(&s.issue_type)
+                .iter()
+                .filter(|(sec, _)| !has_section(s.description.as_deref(), sec))
+                .copied()
+                .collect();
+            (!missing.is_empty()).then(|| LintResult {
+                seed: s.clone(),
+                missing,
+            })
+        })
+        .collect())
+}
+
 /// `sd blocked`. Repeated types and priorities are alternatives; labels must
 /// all match (br's semantics).
 #[derive(Debug, Clone, Default)]
