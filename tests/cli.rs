@@ -836,3 +836,14 @@ fn capabilities_are_derived_and_classify_every_verb() {
     // Reads nothing from a ledger, creates nothing.
     assert!(!sb.work().join(".seeds").exists());
 }
+
+#[test]
+fn doctor_passes_a_fresh_ledger_with_exit_0() {
+    let sb = Sandbox::new("doctor");
+    sb.ok(&["create", "a"]);
+    let v = sb.json(&["doctor"]);
+    assert_eq!(v["ok"], true, "{v}");
+    for c in v["checks"].as_array().unwrap() {
+        assert_ne!(c["status"], "error", "{c}");
+    }
+}

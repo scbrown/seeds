@@ -137,6 +137,8 @@ pub enum Command {
     Where,
     /// Show the ledger's location, mode and size
     Info,
+    /// Check the ledger and configuration (read-only; exit 1 if any check fails)
+    Doctor,
     /// sd's machine-readable contract: commands (read or write), global flags,
     /// exit codes, environment, safety guarantees
     Capabilities {
@@ -870,6 +872,7 @@ impl Command {
             | Command::Completions(_)
             | Command::Version(_)
             | Command::Where
+            | Command::Doctor
             | Command::Schema { .. }
             | Command::Capabilities { .. }
             | Command::Info
@@ -948,6 +951,7 @@ impl Command {
             Command::Version(_) => "version",
             Command::Where => "where",
             Command::Info => "info",
+            Command::Doctor => "doctor",
             Command::Schema { .. } => "schema",
             Command::Capabilities { .. } => "capabilities",
             Command::Config { command } => match command {
@@ -1056,6 +1060,7 @@ mod tests {
         (&["completions", "bash"], "completions", false),
         (&["where"], "where", false),
         (&["info"], "info", false),
+        (&["doctor"], "doctor", false),
         (&["schema", "issue"], "schema", false),
         (
             &["capabilities", "--for", "comments add"],

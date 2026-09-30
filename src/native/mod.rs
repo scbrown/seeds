@@ -295,6 +295,169 @@ fn config_outcome(
     }
 }
 
+/// `sd doctor`: read-only checks. Every check is reported; the exit code is 1
+/// when any check is an error (so a script or CI can gate on it), 0 otherwise.
+fn doctor(json: bool, cfg: &Resolved, b: &mut dyn Backend) -> Result<Outcome> {
+    let mut checks: Vec<(String, &'static str, String)> = Vec::new();
+    let mut add = |name: &str, status: &'static str, msg: String| {
+        checks.push((name.to_string(), status, msg));
+    };
+    add(
+        "config.resolves",
+        "ok",
+        format!("from {}", cfg.location_source),
+    );
+    match std::fs::read_to_string(&cfg.project_id_file) {
+        Ok(id) if !id.trim().is_empty() && id.trim().chars().all(|c| c.is_ascii_alphanumeric()) => {
+            add("project.id", "ok", id.trim().to_string())
+        }
+        Ok(_) => add(
+            "project.id",
+            "error",
+            format!(
+                "{} does not hold a project id",
+                cfg.project_id_file.display()
+            ),
+        ),
+        Err(_) => add(
+            "project.id",
+            "warn",
+            format!(
+                "no {} yet (created by the first write)",
+                cfg.project_id_file.display()
+            ),
+        ),
+    }
+    if let Location::Store(p) = &cfg.location {
+        let gi = p.parent().map(|d| d.join(".gitignore"));
+        match gi {
+            Some(g) if g.exists() || !p.exists() => {
+                add(".gitignore", "ok", g.display().to_string())
+            }
+            Some(g) => add(
+                ".gitignore",
+                "warn",
+                format!(
+                    "{} is missing: the local store could be committed",
+                    g.display()
+                ),
+            ),
+            None => {}
+        }
+    }
+    let snap = match b.snapshot(None) {
+        Ok(s) => {
+            add(
+                "store.opens",
+                "ok",
+                format!(
+                    "{} seeds, {} comments at tx {}",
+                    s.seeds.len(),
+                    s.comments.len(),
+                    s.tx
+                ),
+            );
+            Some(s)
+        }
+        Err(e) => {
+            add("store.opens", "error", e.message.clone());
+            None
+        }
+    };
+    if let Some(snap) = &snap {
+        // The same validation `sd import` applies to a pendant: shapes,
+        // single-valued fields, dangling blocks edges.
+        match pendant_of(b).and_then(|p| {
+            let nt = p.export_nt().unwrap_or_default().to_string();
+            Ok(crate::validate::validate_ledger(
+                &nt,
+                &pendant::parse_ntriples(&nt)?,
+            ))
+        }) {
+            Ok(problems) if problems.is_empty() => {
+                add("ledger.valid", "ok", "shapes and fields conform".into())
+            }
+            Ok(problems) => add("ledger.valid", "error", problems.join("; ")),
+            Err(e) => add("ledger.valid", "error", e.message.clone()),
+        }
+        let dangling: Vec<String> = snap
+            .seeds
+            .values()
+            .flat_map(|s| {
+                s.dependencies()
+                    .into_iter()
+                    .map(move |(t, ty)| (s.id.clone(), t, ty))
+            })
+            .filter(|(_, t, _)| !snap.seeds.contains_key(t))
+            .map(|(s, t, ty)| format!("{s} -{ty}-> {t}"))
+            .collect();
+        if dangling.is_empty() {
+            add(
+                "deps.targets_exist",
+                "ok",
+                "every dependency points at a seed".into(),
+            );
+        } else {
+            add("deps.targets_exist", "error", dangling.join(", "));
+        }
+        // A cycle in `blocks` makes every seed on it permanently unready.
+        let mut cycle: Option<Vec<String>> = None;
+        let (mut done, mut stack): (std::collections::BTreeSet<String>, Vec<String>) =
+            (std::collections::BTreeSet::new(), Vec::new());
+        fn visit(
+            id: &str,
+            snap: &crate::model::Snapshot,
+            done: &mut std::collections::BTreeSet<String>,
+            stack: &mut Vec<String>,
+            cycle: &mut Option<Vec<String>>,
+        ) {
+            if cycle.is_some() || done.contains(id) {
+                return;
+            }
+            if let Some(i) = stack.iter().position(|s| s == id) {
+                let mut c = stack[i..].to_vec();
+                c.push(id.to_string());
+                *cycle = Some(c);
+                return;
+            }
+            stack.push(id.to_string());
+            if let Some(s) = snap.seeds.get(id) {
+                for t in &s.blocked_on {
+                    visit(t, snap, done, stack, cycle);
+                }
+            }
+            stack.pop();
+            done.insert(id.to_string());
+        }
+        for id in snap.seeds.keys() {
+            visit(id, snap, &mut done, &mut stack, &mut cycle);
+        }
+        match cycle {
+            None => add("deps.no_cycles", "ok", "no blocks cycle".into()),
+            Some(c) => add(
+                "deps.no_cycles",
+                "error",
+                format!("blocks cycle: {}", c.join(" -> ")),
+            ),
+        }
+    }
+    let failed = checks.iter().any(|(_, s, _)| *s == "error");
+    let value = serde_json::json!({
+        "ok": !failed,
+        "checks": checks.iter().map(|(n, s, m)| serde_json::json!({"name": n, "status": s, "message": m})).collect::<Vec<_>>(),
+    });
+    let text = checks
+        .iter()
+        .map(|(n, s, m)| format!("{:5} {n}: {m}", s))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let mut o = ok(json, value, text, vec![]);
+    if failed {
+        o.code = 1;
+    }
+    Ok(o)
+}
+
 /// `sd info`: `where`, plus what the ledger holds.
 fn info_outcome(json: bool, cfg: &Resolved, b: &dyn Backend) -> Result<Outcome> {
     let snap = b.snapshot(None)?;
@@ -1662,6 +1825,7 @@ fn dispatch(cli: &Cli, cfg: &Resolved, ctx: &Ctx, b: &mut dyn Backend) -> Result
             }
         },
         Command::Info => info_outcome(json, cfg, b),
+        Command::Doctor => doctor(json, cfg, b),
         Command::Export(_)
         | Command::Import(_)
         | Command::Sync(_)
@@ -1945,5 +2109,102 @@ mod changelog_tests {
             to_utc("2026-09-30T14:00:00+00:00").as_deref(),
             Some("2026-09-30T14:00:00Z")
         );
+    }
+}
+
+#[cfg(test)]
+mod doctor_tests {
+    use super::*;
+    use crate::backend::{SeedWrite, WriteBatch};
+    use crate::model::Seed;
+
+    fn cfg() -> Resolved {
+        let dir = std::env::temp_dir().join(format!("seeds-doctor-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        config::resolve(&config::Inputs {
+            cwd: dir,
+            ..config::Inputs::default()
+        })
+        .unwrap()
+    }
+
+    fn seed(id: &str, blocked_on: &[&str]) -> SeedWrite {
+        SeedWrite {
+            seed: Seed {
+                id: id.into(),
+                title: id.into(),
+                status: "open".into(),
+                priority: 2,
+                issue_type: "task".into(),
+                created_at: "2026-09-30T00:00:00Z".into(),
+                updated_at: "2026-09-30T00:00:00Z".into(),
+                revision: 1,
+                blocked_on: blocked_on.iter().map(|s| s.to_string()).collect(),
+                ..Seed::default()
+            },
+            expected_revision: None,
+        }
+    }
+
+    fn run(b: &mut QuipuBackend) -> (i32, Json) {
+        let o = doctor(true, &cfg(), b).unwrap();
+        (o.code, serde_json::from_str(&o.stdout).unwrap())
+    }
+
+    fn status(v: &Json, name: &str) -> String {
+        v["checks"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|c| c["name"] == name)
+            .map(|c| c["status"].as_str().unwrap().to_string())
+            .unwrap_or_default()
+    }
+
+    #[test]
+    fn a_healthy_ledger_passes_and_a_blocks_cycle_fails_with_exit_1() {
+        let ctx = Ctx {
+            now: "2026-09-30T00:00:00Z".into(),
+            actor: "t".into(),
+            prefix: "sd".into(),
+        };
+        let mut b = QuipuBackend::in_memory("https://seeds.local/project/doctor").unwrap();
+        b.commit(
+            &WriteBatch {
+                seeds: vec![seed("sd-a", &[]), seed("sd-b", &["sd-a"])],
+                source: "test".into(),
+                ..WriteBatch::default()
+            },
+            &ctx,
+        )
+        .unwrap();
+        let (code, v) = run(&mut b);
+        assert_eq!(
+            (code, status(&v, "deps.no_cycles"), v["ok"].clone()),
+            (0, "ok".into(), Json::Bool(true)),
+            "{v}"
+        );
+        // A cycle cannot be made through the verbs (dep add refuses it), but a
+        // raw write or a bad merge can: doctor must see it.
+        let snap = b.snapshot(None).unwrap();
+        let mut a = snap.get("sd-a").unwrap().clone();
+        a.blocked_on.insert("sd-b".into());
+        a.revision += 1;
+        b.commit(
+            &WriteBatch {
+                seeds: vec![SeedWrite {
+                    seed: a,
+                    expected_revision: Some(1),
+                }],
+                source: "test".into(),
+                ..WriteBatch::default()
+            },
+            &ctx,
+        )
+        .unwrap();
+        let (code, v) = run(&mut b);
+        assert_eq!(code, 1, "{v}");
+        assert_eq!(status(&v, "deps.no_cycles"), "error");
+        assert_eq!(v["ok"], false);
     }
 }
