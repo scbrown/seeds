@@ -62,7 +62,26 @@ pub struct CreateReq {
 }
 
 /// Create a seed. Returns it and the transaction that wrote it (0 on a dry run).
+/// What `create` did.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Created {
+    /// The seed (the existing one, for a keyed create that found it).
+    pub seed: Seed,
+    /// The transaction, or 0 when there is none to report: a dry run, an
+    /// existing keyed seed, or a remote store (quipu's /update returns no tx).
+    pub tx: u64,
+    /// A keyed create found the seed already there and wrote nothing.
+    pub existed: bool,
+}
+
 pub fn create(b: &mut dyn Backend, ctx: &Ctx, req: &CreateReq) -> Result<(Seed, u64)> {
+    create_outcome(b, ctx, req).map(|c| (c.seed, c.tx))
+}
+
+/// [`create`], saying explicitly whether a keyed create found an existing
+/// seed. Callers must branch on `existed`, never on `tx == 0`: a remote store
+/// reports tx 0 for every write.
+pub fn create_outcome(b: &mut dyn Backend, ctx: &Ctx, req: &CreateReq) -> Result<Created> {
     let title = req.title.trim();
     if title.is_empty() {
         return Err(SdError::usage("a seed needs a non-empty title"));
@@ -92,7 +111,11 @@ pub fn create(b: &mut dyn Backend, ctx: &Ctx, req: &CreateReq) -> Result<(Seed, 
     };
     if let Some(id) = &keyed {
         if let Some(existing) = existing_keyed(&snap, id, run.as_deref())? {
-            return Ok((existing, 0));
+            return Ok(Created {
+                seed: existing,
+                tx: 0,
+                existed: true,
+            });
         }
     }
     let id = match (&keyed, &req.parent) {
@@ -133,7 +156,11 @@ pub fn create(b: &mut dyn Backend, ctx: &Ctx, req: &CreateReq) -> Result<(Seed, 
         seed.add_dep(&target, &dep_type);
     }
     if req.dry_run {
-        return Ok((seed, 0));
+        return Ok(Created {
+            seed,
+            tx: 0,
+            existed: false,
+        });
     }
     let written = b.commit(
         &WriteBatch {
@@ -148,14 +175,22 @@ pub fn create(b: &mut dyn Backend, ctx: &Ctx, req: &CreateReq) -> Result<(Seed, 
         ctx,
     );
     match (written, &keyed) {
-        (Ok(tx), _) => Ok((seed, tx)),
+        (Ok(tx), _) => Ok(Created {
+            seed,
+            tx,
+            existed: false,
+        }),
         // A keyed create that lost a race: the other writer created the same
         // seed between our read and our write, and the compare-and-set refused
         // ours. That is the idempotent outcome, not a failure.
         (Err(e), Some(id)) if e.kind == ErrorKind::Conflict => {
             let snap = b.snapshot(None)?;
             match existing_keyed(&snap, id, run.as_deref())? {
-                Some(existing) => Ok((existing, 0)),
+                Some(existing) => Ok(Created {
+                    seed: existing,
+                    tx: 0,
+                    existed: true,
+                }),
                 None => Err(e),
             }
         }

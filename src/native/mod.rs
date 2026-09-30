@@ -1399,12 +1399,12 @@ fn dispatch(cli: &Cli, cfg: &Resolved, ctx: &Ctx, b: &mut dyn Backend) -> Result
                 visit: a.visit,
                 dry_run: a.dry_run,
             };
-            let (seed, tx) = engine::create(b, ctx, &req)?;
+            let engine::Created { seed, tx, existed } = engine::create_outcome(b, ctx, &req)?;
             let text = if a.silent {
                 seed.id.clone()
             } else if a.dry_run {
                 format!("would create {}", output::seed_line(&seed))
-            } else if tx == 0 {
+            } else if existed {
                 format!(
                     "exists {} (this run and step already created it)",
                     output::seed_line(&seed)
@@ -1412,9 +1412,10 @@ fn dispatch(cli: &Cli, cfg: &Resolved, ctx: &Ctx, b: &mut dyn Backend) -> Result
             } else {
                 format!("created {}{}", output::seed_line(&seed), tx_note(tx))
             };
-            // null when nothing was written: a dry run, or a keyed create whose
-            // seed already existed (tx 0 is not a transaction to pin with --at).
-            let tx = (!a.dry_run && tx != 0).then_some(tx);
+            // null when there is no transaction to pin with --at: a dry run, a
+            // keyed create whose seed already existed, or a remote store (tx 0:
+            // quipu's /update returns no transaction id, aegis-xajsgn).
+            let tx = (!a.dry_run && !existed && tx != 0).then_some(tx);
             Ok(ok(json, output::with_tx(seed.to_json(), tx), text, vec![]))
         }
         Command::Q(a) => {
