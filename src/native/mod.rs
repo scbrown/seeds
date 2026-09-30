@@ -43,12 +43,52 @@ pub fn run(cli: &Cli) -> Outcome {
             Err(e) => error_outcome(cli.json, &e, Vec::new()),
         };
     }
+    if let Command::Completions(a) = &cli.command {
+        // Needs no store and no configuration.
+        return match completions(a) {
+            Ok(o) => o,
+            Err(e) => error_outcome(cli.json, &e, Vec::new()),
+        };
+    }
     let result = config::Inputs::from_env(cli.store.clone(), cli.quipu.clone(), cli.graph.clone())
         .and_then(|i| config::resolve(&i))
         .and_then(|cfg| run_with(cli, &cfg));
     match result {
         Ok(o) => o,
         Err(e) => error_outcome(cli.json, &e, Vec::new()),
+    }
+}
+
+/// `sd completions <shell> [-o dir]`: clap's generator over the real CLI
+/// definition, so completions can never drift from the verbs.
+fn completions(a: &cli::CompletionsArgs) -> Result<Outcome> {
+    use clap::CommandFactory;
+    let mut cmd = Cli::command();
+    let mut buf = Vec::new();
+    clap_complete::generate(a.shell, &mut cmd, "sd", &mut buf);
+    let script = String::from_utf8(buf)
+        .map_err(|e| SdError::failed(format!("completion script is not UTF-8: {e}")))?;
+    match &a.output {
+        None => Ok(ok(false, Json::Null, script, vec![])),
+        Some(dir) => {
+            let name = match a.shell {
+                clap_complete::Shell::Bash => "sd.bash".to_string(),
+                clap_complete::Shell::Zsh => "_sd".to_string(),
+                clap_complete::Shell::Fish => "sd.fish".to_string(),
+                clap_complete::Shell::PowerShell => "_sd.ps1".to_string(),
+                clap_complete::Shell::Elvish => "sd.elv".to_string(),
+                other => format!("sd.{other}"),
+            };
+            let path = std::path::Path::new(dir).join(name);
+            std::fs::write(&path, script)
+                .map_err(|e| SdError::failed(format!("cannot write {}: {e}", path.display())))?;
+            Ok(ok(
+                false,
+                Json::Null,
+                format!("wrote {}", path.display()),
+                vec![],
+            ))
+        }
     }
 }
 
@@ -877,11 +917,13 @@ fn dispatch(cli: &Cli, ctx: &Ctx, b: &mut dyn Backend) -> Result<Outcome> {
                 Ok(ok(json, output::dep_list_json(&rows), text, vec![]))
             }
         },
-        Command::Export(_) | Command::Import(_) | Command::Sync(_) | Command::MergeDriver(_) => {
-            Err(SdError::usage(
-                "export, import and sync are handled before dispatch",
-            ))
-        }
+        Command::Export(_)
+        | Command::Import(_)
+        | Command::Sync(_)
+        | Command::MergeDriver(_)
+        | Command::Completions(_) => Err(SdError::usage(
+            "export, import and sync are handled before dispatch",
+        )),
         Command::Label { command } => label(json, at, ctx, b, command),
         Command::Comments { command } => match command {
             CommentsCommand::Add {

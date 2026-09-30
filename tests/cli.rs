@@ -576,3 +576,20 @@ fn every_write_reports_its_tx_and_at_reads_that_state_back() {
     // A dry run writes nothing, so it has no tx.
     assert!(sb.json(&["create", "x", "--dry-run"])["tx"].is_null());
 }
+
+#[test]
+fn completions_cover_every_verb_and_need_no_ledger() {
+    let sb = Sandbox::new("completions");
+    let bash = sb.ok(&["completions", "bash"]);
+    for verb in ["create", "ready", "label", "comments", "completions"] {
+        assert!(bash.contains(verb), "bash completions lack {verb}");
+    }
+    assert!(!sb.work().join(".seeds").exists(), "no ledger is created");
+    let dir = sb.work().join("out");
+    std::fs::create_dir_all(&dir).unwrap();
+    sb.ok(&["completions", "zsh", "-o", dir.to_str().unwrap()]);
+    assert!(std::fs::read_to_string(dir.join("_sd"))
+        .unwrap()
+        .contains("#compdef sd"));
+    assert_eq!(code(&sb.run(&["completions", "tcsh"])), 2);
+}

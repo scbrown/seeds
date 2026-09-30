@@ -93,6 +93,8 @@ pub enum Command {
         #[command(subcommand)]
         command: LabelCommand,
     },
+    /// Print a shell completion script (bash, zsh, fish, powershell, elvish)
+    Completions(CompletionsArgs),
     /// Write the ledger as a pendant (quipu's share files) to a directory
     Export(ExportArgs),
     /// Read a pendant into the configured store; conflicts are reported, never
@@ -115,6 +117,16 @@ pub struct MergeDriverArgs {
     pub ours: String,
     /// Theirs (git's %B)
     pub theirs: String,
+}
+
+/// `sd completions`.
+#[derive(Debug, Args)]
+pub struct CompletionsArgs {
+    /// The shell to generate completions for
+    pub shell: clap_complete::Shell,
+    /// Write `<dir>/<file>` for the shell instead of printing to stdout
+    #[arg(short, long, value_name = "DIR")]
+    pub output: Option<String>,
 }
 
 /// `sd export`.
@@ -573,6 +585,7 @@ impl Command {
             ),
             Command::Import(_) | Command::Sync(_) | Command::MergeDriver(_) => true,
             Command::Export(_)
+            | Command::Completions(_)
             | Command::Show(_)
             | Command::List(_)
             | Command::Ready(_)
@@ -615,6 +628,7 @@ impl Command {
                 LabelCommand::ListAll => "label list-all",
                 LabelCommand::Rename { .. } => "label rename",
             },
+            Command::Completions(_) => "completions",
             Command::Export(_) => "export",
             Command::Import(_) => "import",
             Command::Sync(_) => "sync",
@@ -681,6 +695,7 @@ mod tests {
         (&["label", "list-all"], "label list-all", false),
         (&["label", "rename", "a", "b"], "label rename", true),
         (&["export", "--to", "p"], "export", false),
+        (&["completions", "bash"], "completions", false),
         (&["import", "p", "--prefer", "store"], "import", true),
         (&["sync"], "sync", true),
         (&["merge-driver", "o", "a", "b"], "merge-driver", true),
