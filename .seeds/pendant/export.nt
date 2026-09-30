@@ -90,19 +90,22 @@
 <https://seeds.local/item/sd-non.2> <https://seeds.local/ontology/revision> "2"^^<http://www.w3.org/2001/XMLSchema#integer> .
 <https://seeds.local/item/sd-non.2> <https://seeds.local/ontology/status> "closed" .
 <https://seeds.local/item/sd-non.2> <https://seeds.local/ontology/updatedAt> "2026-09-30T16:51:20Z" .
+<https://seeds.local/item/sd-non.3> <http://aegis.gastown.local/ontology/closedAt> "2026-09-30T20:18:08Z" .
 <https://seeds.local/item/sd-non.3> <http://aegis.gastown.local/ontology/createdAt> "2026-09-30T15:49:58Z" .
 <https://seeds.local/item/sd-non.3> <http://aegis.gastown.local/ontology/identifier> "sd-non.3" .
+<https://seeds.local/item/sd-non.3> <http://aegis.gastown.local/ontology/outcome> "done" .
 <https://seeds.local/item/sd-non.3> <http://aegis.gastown.local/ontology/sourceKind> "declared" .
 <https://seeds.local/item/sd-non.3> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://aegis.gastown.local/ontology/WorkItem> .
 <https://seeds.local/item/sd-non.3> <http://www.w3.org/2000/01/rdf-schema#label> "update has no --type (br update -t)" .
 <https://seeds.local/item/sd-non.3> <https://seeds.local/ontology/childOf> <https://seeds.local/item/sd-non> .
+<https://seeds.local/item/sd-non.3> <https://seeds.local/ontology/closeReason> "sd update -t/--type changes a seed's type, as upstream update -t does; tested in tests/cli.rs. scbrown/seeds#45 (aegis-w3k75d.13)." .
 <https://seeds.local/item/sd-non.3> <https://seeds.local/ontology/createdBy> "wu" .
 <https://seeds.local/item/sd-non.3> <https://seeds.local/ontology/issueType> "feature" .
 <https://seeds.local/item/sd-non.3> <https://seeds.local/ontology/label> "parity" .
 <https://seeds.local/item/sd-non.3> <https://seeds.local/ontology/priority> "2"^^<http://www.w3.org/2001/XMLSchema#integer> .
-<https://seeds.local/item/sd-non.3> <https://seeds.local/ontology/revision> "1"^^<http://www.w3.org/2001/XMLSchema#integer> .
-<https://seeds.local/item/sd-non.3> <https://seeds.local/ontology/status> "open" .
-<https://seeds.local/item/sd-non.3> <https://seeds.local/ontology/updatedAt> "2026-09-30T15:49:58Z" .
+<https://seeds.local/item/sd-non.3> <https://seeds.local/ontology/revision> "2"^^<http://www.w3.org/2001/XMLSchema#integer> .
+<https://seeds.local/item/sd-non.3> <https://seeds.local/ontology/status> "closed" .
+<https://seeds.local/item/sd-non.3> <https://seeds.local/ontology/updatedAt> "2026-09-30T20:18:08Z" .
 <https://seeds.local/item/sd-non.4> <http://aegis.gastown.local/ontology/createdAt> "2026-09-30T15:49:58Z" .
 <https://seeds.local/item/sd-non.4> <http://aegis.gastown.local/ontology/identifier> "sd-non.4" .
 <https://seeds.local/item/sd-non.4> <http://aegis.gastown.local/ontology/sourceKind> "declared" .

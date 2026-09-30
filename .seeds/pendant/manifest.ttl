@@ -5,9 +5,9 @@
 @prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
 @prefix quipu: <https://quipu.dev/ontology/> .
 
-<urn:sha256:d3932c48a7825a7811e517e1de493334e858cd29c5818fe4d66df7480c6a4c38> a dcat:Dataset, prov:Entity ;
-  dct:identifier "sha256:d3932c48a7825a7811e517e1de493334e858cd29c5818fe4d66df7480c6a4c38" ;
-  prov:generatedAtTime "2026-09-30T16:51:20Z"^^xsd:dateTime ;
+<urn:sha256:3c92685fa8a32c6a4e06e6f38c635ec6f6ea14f56e9eba319c01b0e286eee20e> a dcat:Dataset, prov:Entity ;
+  dct:identifier "sha256:3c92685fa8a32c6a4e06e6f38c635ec6f6ea14f56e9eba319c01b0e286eee20e" ;
+  prov:generatedAtTime "2026-09-30T20:18:08Z"^^xsd:dateTime ;
   prov:wasAttributedTo [ a prov:SoftwareAgent ;
     dct:title "quipu" ; quipu:version "0.9.1" ] ;
   quipu:destination "internal" ;
@@ -15,8 +15,8 @@
     dcat:mediaType "application/n-triples" ;
     dcat:downloadURL <payload:export.nt> ;
     spdx:checksum [ a spdx:Checksum ; spdx:algorithm spdx:checksumAlgorithm_sha256 ;
-      spdx:checksumValue "76b86cab87a1e4f1c58cf50b45d61a5eb2f491685fba1db805007ff19be681be" ] ],
+      spdx:checksumValue "5c533f5700f7884e881cb847936967576a8f4cfc6534e9dc5546b431a6f6c016" ] ],
   [ a dcat:Distribution ; dcat:mediaType "text/turtle" ;
     dcat:downloadURL <payload:shapes.ttl> ;
     spdx:checksum [ a spdx:Checksum ; spdx:algorithm spdx:checksumAlgorithm_sha256 ;
-      spdx:checksumValue "926b313a2e91e88f6c2c4bbced223b52770c4943330f68699e2e47bfbd4e422d" ] ] .
+      spdx:checksumValue "74e03050b3d4e53c34bf9259e8113f53ee7b3f9d74c65939fb124b8035df448a" ] ] .
