@@ -617,7 +617,9 @@ fn dispatch(cli: &Cli, ctx: &Ctx, b: &mut dyn Backend) -> Result<Outcome> {
             } else {
                 format!("created {}{}", output::seed_line(&seed), tx_note(tx))
             };
-            let tx = (!a.dry_run).then_some(tx);
+            // null when nothing was written: a dry run, or a keyed create whose
+            // seed already existed (tx 0 is not a transaction to pin with --at).
+            let tx = (!a.dry_run && tx != 0).then_some(tx);
             Ok(ok(json, output::with_tx(seed.to_json(), tx), text, vec![]))
         }
         Command::Show(a) => {

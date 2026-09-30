@@ -176,6 +176,17 @@ fn a_workflow_step_creates_its_seed_once() {
     assert!(String::from_utf8_lossy(&again.stdout).contains("exists"));
     assert_eq!(sb.ok(&args).trim(), a);
     assert_eq!(ids(&sb.json(&["list"])), vec![a.clone()]);
+    // The retry wrote nothing, so it names no transaction.
+    let j = sb.json(&[
+        "create",
+        "triage the report",
+        "--workflow-run",
+        "r1",
+        "--step",
+        "triage",
+    ]);
+    assert_eq!(j["id"], a.as_str());
+    assert_eq!(j["tx"], Value::Null);
     // A second visit to the same step is a new seed.
     let b = sb
         .ok(&[
