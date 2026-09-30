@@ -125,6 +125,31 @@ fn the_transcript_create_dep_ready_close_ready() {
 }
 
 #[test]
+fn a_blocker_that_has_its_own_blocker_can_be_added() {
+    // c -> b -> a. Adding the c -> b edge used to be refused by the shapes:
+    // b was validated with its own blockedOn edge to a, and a was not in the
+    // validated graph.
+    let sb = Sandbox::new("chain");
+    let a = sb.ok(&["create", "a", "--silent"]).trim().to_string();
+    let b = sb
+        .ok(&["create", "b", "--deps", &a, "--silent"])
+        .trim()
+        .to_string();
+    let c = sb
+        .ok(&["create", "c", "--deps", &b, "--silent"])
+        .trim()
+        .to_string();
+    let d = sb.ok(&["create", "d", "--silent"]).trim().to_string();
+    sb.ok(&["dep", "add", &d, &c]);
+    assert_eq!(ids(&sb.json(&["ready"])), vec![a.clone()]);
+    sb.ok(&["close", &a, "--reason", "done"]);
+    assert_eq!(ids(&sb.json(&["ready"])), vec![b]);
+    // The edges that were not written still hold: a dangling blocker is refused.
+    let o = sb.run(&["create", "e", "--deps", "sd-nope"]);
+    assert!(!o.status.success());
+}
+
+#[test]
 fn concurrent_label_writes_from_separate_processes_lose_nothing() {
     let sb = Sandbox::new("concurrent-labels");
     let id = sb
