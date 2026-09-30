@@ -243,7 +243,38 @@ fn config_outcome(
         other => other.to_string(),
     };
     match command {
-        ConfigCommand::List => {
+        ConfigCommand::List { project, user } if *project || *user => {
+            let (p, u) = config::config_paths(inputs);
+            let path = if *project { p } else { u };
+            let which = if *project { "project" } else { "user" };
+            let Some(path) = path else {
+                return Err(SdError::usage(format!(
+                    "there is no {which} config location here"
+                )));
+            };
+            let pairs = match std::fs::read_to_string(&path) {
+                Ok(text) => file_pairs(&text, &path.display().to_string())?,
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => Vec::new(),
+                Err(e) => {
+                    return Err(SdError::usage(format!(
+                        "cannot read {}: {e}",
+                        path.display()
+                    )))
+                }
+            };
+            let value = Json::Object(pairs.iter().cloned().collect());
+            let text = if pairs.is_empty() {
+                format!("{} sets nothing", path.display())
+            } else {
+                pairs
+                    .iter()
+                    .map(|(k, v)| format!("{k} = {}", text_of(v)))
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            };
+            Ok(ok(json, value, text, vec![]))
+        }
+        ConfigCommand::List { .. } => {
             let pairs = config_pairs(cfg);
             let value = Json::Object(
                 pairs
@@ -1398,6 +1429,38 @@ fn claims(cli: &Cli) -> Result<crate::backend::Claims> {
         harness: pick(&cli.harness, "SEEDS_HARNESS", "BR_HARNESS"),
         model: pick(&cli.model, "SEEDS_MODEL", "BR_MODEL"),
     })
+}
+
+/// The keys one config file itself sets, flattened to `section.key`, sorted
+/// by key. The file is validated first (the same parser resolution uses). A
+/// token's value is never shown: `quipu.token` reads "(set)".
+fn file_pairs(text: &str, origin: &str) -> Result<Vec<(String, Json)>> {
+    config::parse_file(text, origin)?;
+    let table: toml::Table =
+        toml::from_str(text).map_err(|e| SdError::usage(format!("{origin}: {e}")))?;
+    let mut out = Vec::new();
+    for (section, v) in &table {
+        match v {
+            toml::Value::Table(t) => {
+                for (k, v) in t {
+                    let key = format!("{section}.{k}");
+                    // Defence in depth: parse_file refuses a `token` key today
+                    // (tokens come from the environment or token_file).
+                    let value = if k == "token" {
+                        Json::String("(set)".into())
+                    } else {
+                        serde_json::to_value(v).unwrap_or(Json::Null)
+                    };
+                    out.push((key, value));
+                }
+            }
+            other => out.push((
+                section.clone(),
+                serde_json::to_value(other).unwrap_or(Json::Null),
+            )),
+        }
+    }
+    Ok(out)
 }
 
 /// `--format csv` is list's and search's, `--fields` shapes only it, and it
