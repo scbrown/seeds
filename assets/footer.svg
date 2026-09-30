@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 40" role="img" aria-label="Animated footer: a cord runs across with colored seeds sliding along it and small knots at even intervals">
+  <path d="M0 20 C 150 12, 300 28, 450 20 S 750 12, 900 20" fill="none" stroke="#8B5E3C" stroke-width="4" stroke-linecap="round"/>
+  <g fill="#8B5E3C">
+    <circle cx="150" cy="17" r="4"/><circle cx="300" cy="23" r="4"/><circle cx="450" cy="20" r="4"/><circle cx="600" cy="16" r="4"/><circle cx="750" cy="17" r="4"/>
+  </g>
+  <g stroke="#5A3A1E" stroke-width="1.2">
+    <ellipse rx="6" ry="4.2" fill="#B3422E"><animateMotion dur="12s" repeatCount="indefinite" path="M0 20 C 150 12, 300 28, 450 20 S 750 12, 900 20"/></ellipse>
+    <ellipse rx="6" ry="4.2" fill="#C9A227"><animateMotion dur="12s" begin="-3s" repeatCount="indefinite" path="M0 20 C 150 12, 300 28, 450 20 S 750 12, 900 20"/></ellipse>
+    <ellipse rx="6" ry="4.2" fill="#3E5C6E"><animateMotion dur="12s" begin="-6s" repeatCount="indefinite" path="M0 20 C 150 12, 300 28, 450 20 S 750 12, 900 20"/></ellipse>
+    <ellipse rx="6" ry="4.2" fill="#E37E96"><animateMotion dur="12s" begin="-9s" repeatCount="indefinite" path="M0 20 C 150 12, 300 28, 450 20 S 750 12, 900 20"/></ellipse>
+  </g>
+</svg>

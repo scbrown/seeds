@@ -1,0 +1,85 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 150" role="img" aria-label="Animated seeds banner: seeds hop across the compartments of a wooden counting board, then one seed travels along an arc to a hanging cord, where a new knot is tied">
+  <!-- the yupana: a counting board of compartments -->
+  <g>
+    <ellipse cx="170" cy="136" rx="138" ry="7" fill="#2A241D" opacity="0.10"/>
+    <rect x="36" y="22" width="268" height="106" rx="10" fill="#E9C98B" stroke="#8B5E3C" stroke-width="3"/>
+    <g stroke="#8B5E3C" stroke-width="2" opacity="0.8">
+      <line x1="103" y1="26" x2="103" y2="124"/>
+      <line x1="170" y1="26" x2="170" y2="124"/>
+      <line x1="237" y1="26" x2="237" y2="124"/>
+      <line x1="40" y1="57" x2="300" y2="57"/>
+      <line x1="40" y1="92" x2="300" y2="92"/>
+    </g>
+    <!-- holes: 5, 3, 2, 1 per compartment, left to right -->
+    <g fill="#8B5E3C" opacity="0.35">
+      <circle cx="54" cy="36" r="3"/><circle cx="66" cy="36" r="3"/><circle cx="78" cy="36" r="3"/><circle cx="90" cy="36" r="3"/><circle cx="72" cy="47" r="3"/>
+      <circle cx="124" cy="40" r="3"/><circle cx="136" cy="40" r="3"/><circle cx="148" cy="40" r="3"/>
+      <circle cx="196" cy="40" r="3"/><circle cx="212" cy="40" r="3"/>
+      <circle cx="270" cy="40" r="3"/>
+      <circle cx="54" cy="72" r="3"/><circle cx="66" cy="72" r="3"/><circle cx="78" cy="72" r="3"/><circle cx="90" cy="72" r="3"/><circle cx="72" cy="83" r="3"/>
+      <circle cx="124" cy="75" r="3"/><circle cx="136" cy="75" r="3"/><circle cx="148" cy="75" r="3"/>
+      <circle cx="196" cy="75" r="3"/><circle cx="212" cy="75" r="3"/>
+      <circle cx="270" cy="75" r="3"/>
+      <circle cx="54" cy="106" r="3"/><circle cx="66" cy="106" r="3"/><circle cx="78" cy="106" r="3"/><circle cx="90" cy="106" r="3"/><circle cx="72" cy="117" r="3"/>
+      <circle cx="124" cy="110" r="3"/><circle cx="136" cy="110" r="3"/><circle cx="148" cy="110" r="3"/>
+      <circle cx="196" cy="110" r="3"/><circle cx="212" cy="110" r="3"/>
+      <circle cx="270" cy="110" r="3"/>
+    </g>
+    <!-- resting seeds -->
+    <g stroke="#5A3A1E" stroke-width="1.2">
+      <ellipse cx="54" cy="72" rx="5" ry="3.6" fill="#B3422E"/>
+      <ellipse cx="66" cy="72" rx="5" ry="3.6" fill="#B3422E"/>
+      <ellipse cx="124" cy="110" rx="5" ry="3.6" fill="#C9A227"/>
+      <ellipse cx="196" cy="40" rx="5" ry="3.6" fill="#3E5C6E"/>
+      <ellipse cx="212" cy="40" rx="5" ry="3.6" fill="#3E5C6E"/>
+      <ellipse cx="270" cy="110" rx="5" ry="3.6" fill="#E37E96"/>
+    </g>
+    <!-- a seed hopping compartment to compartment -->
+    <ellipse rx="5.5" ry="4" fill="#C9A227" stroke="#5A3A1E" stroke-width="1.2">
+      <animateMotion dur="6s" repeatCount="indefinite" keyTimes="0;0.25;0.5;0.75;1" keyPoints="0;0.25;0.5;0.75;1" calcMode="spline" keySplines="0.4 0 0.2 1;0.4 0 0.2 1;0.4 0 0.2 1;0.4 0 0.2 1" path="M78 106 Q 100 84, 136 75 Q 160 60, 212 75 Q 240 60, 270 75 Q 280 50, 270 40"/>
+    </ellipse>
+  </g>
+
+  <!-- the arc from board to cord, and a seed carried along it -->
+  <path d="M300 50 C 360 -4, 420 10, 470 40" fill="none" stroke="#8B5E3C" stroke-width="2" stroke-dasharray="4 6" opacity="0.6">
+    <animate attributeName="stroke-dashoffset" from="0" to="-20" dur="1.6s" repeatCount="indefinite"/>
+  </path>
+  <ellipse rx="5" ry="3.6" fill="#E37E96" stroke="#5A3A1E" stroke-width="1.2">
+    <animateMotion dur="4s" repeatCount="indefinite" path="M300 50 C 360 -4, 420 10, 470 40"/>
+    <animate attributeName="opacity" values="0;1;1;0" keyTimes="0;0.1;0.85;1" dur="4s" repeatCount="indefinite"/>
+  </ellipse>
+
+  <!-- the quipu: a main cord with hanging pendants -->
+  <g stroke-linecap="round" fill="none">
+    <path d="M460 40 C 560 34, 720 46, 880 38" stroke="#8B5E3C" stroke-width="6"/>
+    <path d="M510 39 C 506 70, 516 100, 510 132" stroke="#B3422E" stroke-width="4">
+      <animateTransform attributeName="transform" type="rotate" values="0 510 39; 2 510 39; 0 510 39; -2 510 39; 0 510 39" dur="6s" repeatCount="indefinite"/>
+    </path>
+    <path d="M590 38 C 596 72, 584 104, 592 128" stroke="#7EC8C3" stroke-width="4">
+      <animateTransform attributeName="transform" type="rotate" values="0 590 38; -2 590 38; 0 590 38; 2 590 38; 0 590 38" dur="5.2s" repeatCount="indefinite"/>
+    </path>
+    <path d="M670 40 C 664 74, 676 102, 668 134" stroke="#C9A227" stroke-width="4">
+      <animateTransform attributeName="transform" type="rotate" values="0 670 40; 2 670 40; 0 670 40; -2 670 40; 0 670 40" dur="6.6s" repeatCount="indefinite"/>
+    </path>
+    <path d="M750 42 C 756 76, 744 104, 752 130" stroke="#3E5C6E" stroke-width="4">
+      <animateTransform attributeName="transform" type="rotate" values="0 750 42; -2 750 42; 0 750 42; 2 750 42; 0 750 42" dur="5.8s" repeatCount="indefinite"/>
+    </path>
+    <path d="M830 40 C 826 72, 836 100, 830 124" stroke="#E37E96" stroke-width="4">
+      <animateTransform attributeName="transform" type="rotate" values="0 830 40; 2 830 40; 0 830 40; -2 830 40; 0 830 40" dur="6.2s" repeatCount="indefinite"/>
+    </path>
+  </g>
+  <!-- knots already tied -->
+  <g stroke="#2A241D" stroke-width="1.2">
+    <circle cx="510" cy="72" r="5.5" fill="#B3422E"/>
+    <circle cx="512" cy="96" r="5.5" fill="#B3422E"/>
+    <circle cx="591" cy="84" r="5.5" fill="#7EC8C3"/>
+    <circle cx="668" cy="66" r="5.5" fill="#C9A227"/>
+    <circle cx="670" cy="90" r="5.5" fill="#C9A227"/>
+    <circle cx="669" cy="112" r="5.5" fill="#C9A227"/>
+    <circle cx="750" cy="100" r="5.5" fill="#3E5C6E"/>
+  </g>
+  <!-- the new knot, tied as each counted seed arrives -->
+  <circle cx="830" cy="80" r="6.5" fill="#E37E96" stroke="#2A241D" stroke-width="1.2">
+    <animate attributeName="r" values="0;0;8;6.5;6.5" keyTimes="0;0.8;0.88;0.95;1" dur="4s" repeatCount="indefinite"/>
+  </circle>
+</svg>

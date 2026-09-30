@@ -1,0 +1,31 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" role="img" aria-label="Seeds logo: a wooden counting board with four compartments holding colored seeds, and a knotted cord hanging below it">
+  <circle cx="100" cy="100" r="96" fill="#FBF3E4" stroke="#8B5E3C" stroke-width="3"/>
+  <!-- counting board -->
+  <rect x="34" y="38" width="132" height="70" rx="9" fill="#E9C98B" stroke="#8B5E3C" stroke-width="3"/>
+  <g stroke="#8B5E3C" stroke-width="2">
+    <line x1="67" y1="41" x2="67" y2="105"/>
+    <line x1="100" y1="41" x2="100" y2="105"/>
+    <line x1="133" y1="41" x2="133" y2="105"/>
+  </g>
+  <!-- seeds: 5, 3, 2, 1 -->
+  <g stroke="#5A3A1E" stroke-width="1.3">
+    <ellipse cx="44" cy="56" rx="6" ry="4.4" fill="#B3422E" transform="rotate(-20 44 56)"/>
+    <ellipse cx="57" cy="56" rx="6" ry="4.4" fill="#B3422E" transform="rotate(15 57 56)"/>
+    <ellipse cx="44" cy="72" rx="6" ry="4.4" fill="#B3422E" transform="rotate(10 44 72)"/>
+    <ellipse cx="57" cy="72" rx="6" ry="4.4" fill="#B3422E" transform="rotate(-25 57 72)"/>
+    <ellipse cx="50" cy="88" rx="6" ry="4.4" fill="#B3422E" transform="rotate(5 50 88)"/>
+    <ellipse cx="83" cy="58" rx="6" ry="4.4" fill="#C9A227" transform="rotate(20 83 58)"/>
+    <ellipse cx="83" cy="74" rx="6" ry="4.4" fill="#C9A227" transform="rotate(-10 83 74)"/>
+    <ellipse cx="83" cy="90" rx="6" ry="4.4" fill="#C9A227" transform="rotate(30 83 90)"/>
+    <ellipse cx="116" cy="64" rx="6" ry="4.4" fill="#3E5C6E" transform="rotate(-15 116 64)"/>
+    <ellipse cx="116" cy="82" rx="6" ry="4.4" fill="#3E5C6E" transform="rotate(20 116 82)"/>
+    <ellipse cx="150" cy="73" rx="6" ry="4.4" fill="#E37E96" transform="rotate(-30 150 73)"/>
+  </g>
+  <!-- the cord the count is knotted into -->
+  <path d="M100 108 C 94 126, 106 144, 100 176" fill="none" stroke="#8B5E3C" stroke-width="5" stroke-linecap="round"/>
+  <g stroke="#2A241D" stroke-width="1.3">
+    <circle cx="99" cy="128" r="6" fill="#B3422E"/>
+    <circle cx="101" cy="146" r="6" fill="#C9A227"/>
+    <circle cx="100" cy="163" r="6" fill="#E37E96"/>
+  </g>
+</svg>

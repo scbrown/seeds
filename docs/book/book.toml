@@ -1,0 +1,17 @@
+[book]
+title = "seeds"
+description = "Track agent work as facts in a knowledge graph, and pin any item to any moment"
+authors = ["Steve Brown"]
+language = "en"
+src = "src"
+
+[output.html]
+default-theme = "coal"
+preferred-dark-theme = "coal"
+git-repository-url = "https://github.com/scbrown/seeds"
+edit-url-template = "https://github.com/scbrown/seeds/edit/main/docs/book/{path}"
+additional-css = ["custom/css/custom.css"]
+site-url = "/seeds/"
+
+[output.html.search]
+enable = true
