@@ -45,8 +45,8 @@ def flags(tool, *path):
     return found - {"--help", "--version"}
 
 
-# br flags about its SQLite+JSONL storage engine. seeds stores facts in quipu, so these have
-# no referent; each is listed with its reason and counted separately, never silently dropped.
+# br flags with no referent in sd: its SQLite+JSONL storage engine (seeds stores facts in
+# quipu), and output features sd does not have (TOON, colour, truncation, logging); each is listed with its reason and counted separately, never silently dropped.
 NOT_APPLICABLE = {
     "--db": "SQLite path; seeds uses --store/--quipu",
     "--no-db": "JSONL-only mode", "--no-daemon": "br daemon",
@@ -59,6 +59,10 @@ NOT_APPLICABLE = {
     "--witness-chunk-lines": "JSONL witness", "--witness-parallelism": "JSONL witness",
     "--migrate-source-repo-path": "br store migration", "--rename-prefix": "br id prefix migration",
     "--stats": "token-savings stats for br's TOON output, which sd does not produce",
+    "--no-color": "sd emits no ANSI colour, so there is nothing to disable",
+    "--wrap": "sd never truncates text output, so lines are already whole",
+    "--no-wrap": "sd never truncates or wraps text output",
+    "--verbose": "sd writes no log output for a level to raise",
 }
 
 
@@ -108,7 +112,7 @@ def main():
     print("sd-only verbs:", " ".join(report["sd_only_verbs"]))
     print("global flags br-only:", " ".join(report["global_flags"]["br_only"]))
     print("global flags sd-only:", " ".join(report["global_flags"]["sd_only"]))
-    print("global flags n/a (br storage):", " ".join(report["global_flags"]["not_applicable"]))
+    print("global flags n/a:", " ".join(report["global_flags"]["not_applicable"]))
     for verb, row in per_verb.items():
         print(f"\n{verb}: {row['shared']}/{row['br_total']}")
         print("  br-only:", " ".join(row["br_only"]) or "-")

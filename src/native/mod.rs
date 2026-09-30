@@ -2373,6 +2373,10 @@ pub fn main_entry() -> i32 {
     // --format json is --json; normalise once so every verb sees one flag.
     cli.json = cli.wants_json();
     let o = run(&cli);
+    // br's -q: no output except errors. A failure still says why.
+    if cli.quiet && o.code == 0 {
+        return 0;
+    }
     if !o.stdout.is_empty() {
         println!("{}", o.stdout);
     }
