@@ -20,7 +20,7 @@ use crate::output;
 use crate::pendant;
 use crate::quipu_backend::QuipuBackend;
 use crate::sync;
-use cli::{Cli, Command, CommentsCommand, DepCommand, EpicCommand, LabelCommand};
+use cli::{Cli, Command, CommentsCommand, ConfigCommand, DepCommand, EpicCommand, LabelCommand};
 use config::{Location, Resolved};
 
 /// What a run produced: the exit code and the two streams.
@@ -65,8 +65,9 @@ pub fn run(cli: &Cli) -> Outcome {
         };
     }
     let result = config::Inputs::from_env(cli.store.clone(), cli.quipu.clone(), cli.graph.clone())
-        .and_then(|i| config::resolve(&i))
-        .and_then(|cfg| match cli.command {
+        .and_then(|i| config::resolve(&i).map(|cfg| (i, cfg)))
+        .and_then(|(inputs, cfg)| match &cli.command {
+            Command::Config { command } => config_outcome(cli.json, &inputs, &cfg, command),
             // Reads only the configuration: never creates a project id or a store.
             Command::Where => Ok(where_outcome(cli.json, &cfg)),
             _ => run_with(cli, &cfg),
@@ -134,6 +135,129 @@ fn where_outcome(json: bool, cfg: &Resolved) -> Outcome {
         lines.push(format!("  pendant {p}"));
     }
     ok(json, value, lines.join("\n"), vec![])
+}
+
+/// The resolved configuration as flat `section.key` pairs. A token is shown as
+/// set or unset, never its value.
+fn config_pairs(cfg: &Resolved) -> Vec<(&'static str, Json)> {
+    let (store, url, _) = location_parts(cfg);
+    let path = |p: &Option<std::path::PathBuf>| {
+        p.as_ref()
+            .map_or(Json::Null, |p| Json::String(p.display().to_string()))
+    };
+    vec![
+        ("quipu.store", serde_json::json!(store)),
+        ("quipu.url", serde_json::json!(url)),
+        (
+            "quipu.location_source",
+            serde_json::json!(cfg.location_source),
+        ),
+        (
+            "quipu.token",
+            serde_json::json!(match (&cfg.token, &cfg.token_file) {
+                (Some(_), _) => "(set: SEEDS_QUIPU_TOKEN)",
+                (None, Some(_)) => "(set: token_file)",
+                (None, None) => "(unset)",
+            }),
+        ),
+        ("quipu.token_file", path(&cfg.token_file)),
+        ("quipu.trusted_hosts", serde_json::json!(cfg.trusted_hosts)),
+        (
+            "quipu.allow_plain_http_hosts",
+            serde_json::json!(cfg.allow_plain_http_hosts),
+        ),
+        ("project.prefix", serde_json::json!(cfg.prefix)),
+        ("project.graph", serde_json::json!(cfg.graph)),
+        (
+            "project.id_file",
+            serde_json::json!(cfg.project_id_file.display().to_string()),
+        ),
+        ("pendant.dir", path(&cfg.pendant)),
+        ("sync.remote", serde_json::json!(cfg.sync_remote)),
+    ]
+}
+
+/// `sd config`: read-only over the resolved layers. Writing is not built: a
+/// prefix or graph change would re-point the project at another ledger (see
+/// `sd init`), so the file is edited deliberately, by hand.
+fn config_outcome(
+    json: bool,
+    inputs: &config::Inputs,
+    cfg: &Resolved,
+    command: &ConfigCommand,
+) -> Result<Outcome> {
+    let text_of = |v: &Json| match v {
+        Json::String(s) => s.clone(),
+        Json::Null => "(none)".into(),
+        other => other.to_string(),
+    };
+    match command {
+        ConfigCommand::List => {
+            let pairs = config_pairs(cfg);
+            let value = Json::Object(
+                pairs
+                    .iter()
+                    .map(|(k, v)| (k.to_string(), v.clone()))
+                    .collect(),
+            );
+            let text = pairs
+                .iter()
+                .map(|(k, v)| format!("{k} = {}", text_of(v)))
+                .collect::<Vec<_>>()
+                .join("\n");
+            Ok(ok(json, value, text, vec![]))
+        }
+        ConfigCommand::Get { key } => {
+            let pairs = config_pairs(cfg);
+            let Some((_, v)) = pairs.iter().find(|(k, _)| k == key) else {
+                return Err(SdError::usage(format!(
+                    "unknown key {key:?}; sd config list shows every key"
+                )));
+            };
+            Ok(ok(
+                json,
+                serde_json::json!({"key": key, "value": v}),
+                text_of(v),
+                vec![],
+            ))
+        }
+        ConfigCommand::Path => {
+            let (project, user) = config::config_paths(inputs);
+            let row = |p: &Option<std::path::PathBuf>| {
+                serde_json::json!({"path": p.as_ref().map(|p| p.display().to_string()),
+                                   "exists": p.as_ref().is_some_and(|p| p.exists())})
+            };
+            let value = serde_json::json!({"project": row(&project), "user": row(&user)});
+            let line = |name: &str, p: &Option<std::path::PathBuf>| match p {
+                Some(p) => format!(
+                    "{name} config: {} ({})",
+                    p.display(),
+                    if p.exists() { "exists" } else { "absent" }
+                ),
+                None => format!("{name} config: (none: not inside a project)"),
+            };
+            Ok(ok(
+                json,
+                value,
+                format!("{}\n{}", line("Project", &project), line("User", &user)),
+                vec![],
+            ))
+        }
+        ConfigCommand::Set { .. } | ConfigCommand::Delete { .. } | ConfigCommand::Edit => {
+            let (project, _) = config::config_paths(inputs);
+            Err(SdError::new(
+                ErrorKind::NotBuilt,
+                format!(
+                    "sd config does not write yet: edit {} by hand. A prefix or graph change \
+                     moves the project to another ledger, which is why this is not a one-liner",
+                    project.map_or_else(
+                        || ".seeds/config.toml".to_string(),
+                        |p| p.display().to_string()
+                    )
+                ),
+            ))
+        }
+    }
 }
 
 /// `sd info`: `where`, plus what the ledger holds.
@@ -1377,6 +1501,7 @@ fn dispatch(cli: &Cli, cfg: &Resolved, ctx: &Ctx, b: &mut dyn Backend) -> Result
         | Command::Completions(_)
         | Command::Init(_)
         | Command::Where
+        | Command::Config { .. }
         | Command::Query(_)
         | Command::Upgrade(_)
         | Command::Gate(_)

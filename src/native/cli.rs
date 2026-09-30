@@ -135,6 +135,11 @@ pub enum Command {
     Where,
     /// Show the ledger's location, mode and size
     Info,
+    /// Show the resolved configuration (list, get, path)
+    Config {
+        #[command(subcommand)]
+        command: ConfigCommand,
+    },
     /// Make the current directory a seeds project (.seeds/ with config,
     /// project id and .gitignore)
     Init(InitArgs),
@@ -170,6 +175,35 @@ pub struct CompletionsArgs {
     /// Write `<dir>/<file>` for the shell instead of printing to stdout
     #[arg(short, long, value_name = "DIR")]
     pub output: Option<String>,
+}
+
+/// `sd config ...`.
+#[derive(Debug, Subcommand)]
+pub enum ConfigCommand {
+    /// Every resolved setting (a token is shown as set/unset, never its value)
+    List,
+    /// One resolved setting
+    Get {
+        /// The key, e.g. project.prefix
+        key: String,
+    },
+    /// The project and user config files, and whether each exists
+    Path,
+    /// Not built: edit the file `sd config path` names
+    Set {
+        /// The key
+        key: String,
+        /// The value
+        value: String,
+    },
+    /// Not built: edit the file `sd config path` names
+    #[command(visible_alias = "unset")]
+    Delete {
+        /// The key
+        key: String,
+    },
+    /// Not built: open the file `sd config path` names in your editor
+    Edit,
 }
 
 /// `sd version`.
@@ -807,6 +841,7 @@ impl Command {
             | Command::Version(_)
             | Command::Where
             | Command::Info
+            | Command::Config { .. }
             | Command::Show(_)
             | Command::List(_)
             | Command::Ready(_)
@@ -879,6 +914,14 @@ impl Command {
             Command::Version(_) => "version",
             Command::Where => "where",
             Command::Info => "info",
+            Command::Config { command } => match command {
+                ConfigCommand::List => "config list",
+                ConfigCommand::Get { .. } => "config get",
+                ConfigCommand::Path => "config path",
+                ConfigCommand::Set { .. } => "config set",
+                ConfigCommand::Delete { .. } => "config delete",
+                ConfigCommand::Edit => "config edit",
+            },
             Command::Init(_) => "init",
             Command::Export(_) => "export",
             Command::Import(_) => "import",
@@ -976,6 +1019,9 @@ mod tests {
         (&["completions", "bash"], "completions", false),
         (&["where"], "where", false),
         (&["info"], "info", false),
+        (&["config", "list"], "config list", false),
+        (&["config", "get", "project.prefix"], "config get", false),
+        (&["config", "unset", "x"], "config delete", false),
         (&["import", "p", "--prefer", "store"], "import", true),
         (&["sync"], "sync", true),
         (&["merge-driver", "o", "a", "b"], "merge-driver", true),

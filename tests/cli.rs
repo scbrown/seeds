@@ -768,3 +768,38 @@ fn history_names_its_meaning_in_text_and_json() {
         .starts_with("priority:"));
     assert_eq!(code(&sb.run(&["history", &id, "--at", "1"])), 2);
 }
+
+#[test]
+fn config_lists_and_gets_resolved_values_and_never_prints_a_token() {
+    let sb = Sandbox::new("config");
+    sb.ok(&["init", "--prefix", "cf"]);
+    let list = sb.json(&["config", "list"]);
+    assert_eq!(list["project.prefix"], "cf");
+    assert_eq!(list["quipu.token"], "(unset)");
+    assert_eq!(sb.json(&["config", "get", "project.prefix"])["value"], "cf");
+    assert_eq!(code(&sb.run(&["config", "get", "no.such.key"])), 2);
+    let path = sb.json(&["config", "path"]);
+    assert_eq!(path["project"]["exists"], true);
+    // A token in the environment and in a token file: shown as set, never printed.
+    let secret = "s3cr3t-token-value-7788";
+    std::fs::write(sb.root.join("home/tok"), secret).unwrap();
+    std::fs::create_dir_all(sb.root.join("home/.config/seeds")).unwrap();
+    std::fs::write(
+        sb.root.join("home/.config/seeds/config.toml"),
+        "[quipu]\ntoken_file = \"~/tok\"\n",
+    )
+    .unwrap();
+    let from_file = sb.ok(&["config", "list", "--json"]);
+    assert!(from_file.contains("(set: token_file)") && !from_file.contains(secret));
+    let o = sb
+        .cmd(&sb.work(), &["config", "list"])
+        .env("SEEDS_QUIPU_TOKEN", secret)
+        .output()
+        .unwrap();
+    let text = String::from_utf8_lossy(&o.stdout);
+    assert!(text.contains("(set: SEEDS_QUIPU_TOKEN)") && !text.contains(secret));
+    // Writing is not built, and says which file to edit.
+    let o = sb.run(&["config", "set", "project.prefix", "zz"]);
+    assert_eq!(code(&o), 20);
+    assert!(String::from_utf8_lossy(&o.stderr).contains("config.toml"));
+}
