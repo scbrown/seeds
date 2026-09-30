@@ -91,6 +91,8 @@ pub enum Command {
         /// The seed
         id: String,
     },
+    /// Closed seeds since a date, tag or commit, grouped by type
+    Changelog(ChangelogArgs),
     /// Count seeds (open ones by default)
     Count(CountArgs),
     /// Update fields on one or more seeds
@@ -477,6 +479,20 @@ pub struct GraphArgs {
     pub dot: bool,
 }
 
+/// `sd changelog`.
+#[derive(Debug, Args)]
+pub struct ChangelogArgs {
+    /// Start: YYYY-MM-DD, an RFC 3339 instant, or +7d/+2w/+12h (the last span)
+    #[arg(long, conflicts_with_all = ["since_tag", "since_commit"])]
+    pub since: Option<String>,
+    /// Start from a git tag's commit date
+    #[arg(long, conflicts_with = "since_commit")]
+    pub since_tag: Option<String>,
+    /// Start from a git commit's date
+    #[arg(long)]
+    pub since_commit: Option<String>,
+}
+
 /// `sd count`.
 #[derive(Debug, Args)]
 pub struct CountArgs {
@@ -796,6 +812,7 @@ impl Command {
             | Command::Ready(_)
             | Command::Blocked(_)
             | Command::Stale(_)
+            | Command::Changelog(_)
             | Command::History { .. }
             | Command::Graph(_)
             | Command::Stats(_)
@@ -819,6 +836,7 @@ impl Command {
             Command::Ready(_) => "ready",
             Command::Blocked(_) => "blocked",
             Command::Stale(_) => "stale",
+            Command::Changelog(_) => "changelog",
             Command::History { .. } => "history",
             Command::Graph(_) => "graph",
             Command::Stats(_) => "stats",
@@ -881,6 +899,7 @@ mod tests {
         (&["list", "--status", "open", "--limit", "0"], "list", false),
         (&["ready", "--json", "--limit", "5"], "ready", false),
         (&["count", "--by", "status"], "count", false),
+        (&["changelog", "--since", "+7d"], "changelog", false),
         (&["history", "s-1"], "history", false),
         (
             &["graph", "s-1", "--dependencies", "--compact"],

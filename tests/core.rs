@@ -1802,3 +1802,62 @@ fn history_finds_the_exact_tx_of_every_version_amid_other_writes() {
         ErrorKind::NotFound
     );
 }
+
+#[test]
+fn changelog_groups_closed_seeds_by_type_newest_first_since_a_date() {
+    let mut b = backend();
+    let mk_ty = |b: &mut QuipuBackend, t: &str, ty: &str| {
+        engine::create(
+            b,
+            &at_time("2026-09-01T00:00:00Z"),
+            &CreateReq {
+                title: t.into(),
+                issue_type: Some(ty.into()),
+                ..CreateReq::default()
+            },
+        )
+        .unwrap()
+        .0
+        .id
+    };
+    let (bug_old, bug_new, task, open) = (
+        mk_ty(&mut b, "old bug", "bug"),
+        mk_ty(&mut b, "new bug", "bug"),
+        mk_ty(&mut b, "task", "task"),
+        mk_ty(&mut b, "open", "task"),
+    );
+    let close_at = |b: &mut QuipuBackend, id: &str, when: &str| {
+        engine::close(b, &at_time(when), &[id.to_string()], Some("done"), false).unwrap();
+    };
+    close_at(&mut b, &bug_old, "2026-09-10T00:00:00Z");
+    close_at(&mut b, &bug_new, "2026-09-20T00:00:00Z");
+    close_at(&mut b, &task, "2026-09-15T00:00:00Z");
+    let all = engine::changelog(&b, None, None).unwrap();
+    assert_eq!(
+        all.iter().map(|g| g.label.as_str()).collect::<Vec<_>>(),
+        ["Bugs", "Tasks"]
+    );
+    assert_eq!(
+        all[0]
+            .issues
+            .iter()
+            .map(|s| s.id.clone())
+            .collect::<Vec<_>>(),
+        [bug_new.clone(), bug_old]
+    );
+    assert!(!all.iter().flat_map(|g| &g.issues).any(|s| s.id == open));
+    let since = engine::parse_since("2026-09-14", "2026-09-30T00:00:00Z").unwrap();
+    let recent = engine::changelog(&b, Some(&since), None).unwrap();
+    assert_eq!(recent.iter().map(|g| g.issues.len()).sum::<usize>(), 2);
+    assert_eq!(
+        engine::parse_since("+7d", "2026-09-30T00:00:00Z").unwrap(),
+        "2026-09-23T00:00:00Z",
+        "br's relative form means the last span"
+    );
+    assert_eq!(
+        engine::parse_since("soon", "2026-09-30T00:00:00Z")
+            .unwrap_err()
+            .kind,
+        ErrorKind::Usage
+    );
+}
