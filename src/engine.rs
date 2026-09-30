@@ -376,6 +376,44 @@ pub fn search(b: &dyn Backend, req: &SearchReq, at: Option<u64>) -> Result<Searc
     })
 }
 
+/// `sd stale`: seeds not updated for at least `days` days, oldest first.
+/// Closed seeds are left out unless `statuses` names `closed` (br). `statuses`
+/// entries may be comma-separated.
+pub fn stale(
+    b: &dyn Backend,
+    ctx: &Ctx,
+    days: u32,
+    statuses: &[String],
+    at: Option<u64>,
+) -> Result<Vec<Seed>> {
+    let statuses = statuses
+        .iter()
+        .flat_map(|s| s.split(','))
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(model::parse_status)
+        .collect::<Result<BTreeSet<_>>>()?;
+    let now = parse_instant(&ctx.now)
+        .ok_or_else(|| SdError::failed(format!("unreadable clock {:?}", ctx.now)))?;
+    let cutoff = format_instant(now - i64::from(days) * 86_400);
+    let snap = b.snapshot(at)?;
+    let mut seeds: Vec<Seed> = snap
+        .seeds
+        .values()
+        .filter(|s| {
+            if statuses.is_empty() {
+                s.status != "closed"
+            } else {
+                statuses.contains(&s.status)
+            }
+        })
+        .filter(|s| s.updated_at.as_str() <= cutoff.as_str())
+        .cloned()
+        .collect();
+    seeds.sort_by(|a, b| (&a.updated_at, &a.id).cmp(&(&b.updated_at, &b.id)));
+    Ok(seeds)
+}
+
 /// `sd blocked`. Repeated types and priorities are alternatives; labels must
 /// all match (br's semantics).
 #[derive(Debug, Clone, Default)]

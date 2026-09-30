@@ -710,6 +710,19 @@ fn dispatch(cli: &Cli, ctx: &Ctx, b: &mut dyn Backend) -> Result<Outcome> {
                 vec![],
             ))
         }
+        Command::Stale(a) => {
+            let seeds = engine::stale(b, ctx, a.days, &a.status, at)?;
+            let text = if seeds.is_empty() {
+                format!("no seeds untouched for {} days", a.days)
+            } else {
+                seeds
+                    .iter()
+                    .map(|s| format!("{}  (updated {})", output::seed_line(s), s.updated_at))
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            };
+            Ok(ok(json, output::seeds_json(&seeds), text, vec![]))
+        }
         Command::Blocked(a) => {
             let req = engine::BlockedReq {
                 types: a.issue_type.clone(),

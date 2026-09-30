@@ -1257,3 +1257,57 @@ fn search_matches_id_title_description_and_comments_but_not_notes() {
     let err = engine::search(&b, &engine::SearchReq::default(), None).unwrap_err();
     assert_eq!(err.kind, ErrorKind::Usage);
 }
+
+fn at_time(now: &str) -> Ctx {
+    Ctx {
+        now: now.into(),
+        ..ctx(0)
+    }
+}
+
+#[test]
+fn stale_lists_untouched_non_closed_seeds_oldest_first() {
+    let mut b = backend();
+    let make = |b: &mut QuipuBackend, t: &str, now: &str| {
+        engine::create(
+            b,
+            &at_time(now),
+            &CreateReq {
+                title: t.into(),
+                ..CreateReq::default()
+            },
+        )
+        .unwrap()
+        .0
+        .id
+    };
+    let old = make(&mut b, "old", "2026-08-01T00:00:00Z");
+    let older = make(&mut b, "older", "2026-07-01T00:00:00Z");
+    let fresh = make(&mut b, "fresh", "2026-09-29T00:00:00Z");
+    let gone = make(&mut b, "gone", "2026-06-01T00:00:00Z");
+    engine::close(
+        &mut b,
+        &at_time("2026-06-02T00:00:00Z"),
+        std::slice::from_ref(&gone),
+        Some("done"),
+        false,
+    )
+    .unwrap();
+    let now = at_time("2026-09-30T00:00:00Z");
+    let ids = |v: Vec<seeds::model::Seed>| v.into_iter().map(|s| s.id).collect::<Vec<_>>();
+    assert_eq!(
+        ids(engine::stale(&b, &now, 30, &[], None).unwrap()),
+        [older.clone(), old.clone()]
+    );
+    assert_eq!(
+        ids(engine::stale(&b, &now, 0, &[], None).unwrap()),
+        [older.clone(), old.clone(), fresh]
+    );
+    // Closed only when asked for, and statuses may be comma-separated.
+    assert_eq!(
+        ids(engine::stale(&b, &now, 30, &["closed,open".into()], None).unwrap()),
+        [gone, older, old]
+    );
+    let err = engine::stale(&b, &now, 30, &["nope".into()], None).unwrap_err();
+    assert_eq!(err.kind, ErrorKind::Usage);
+}

@@ -20,6 +20,7 @@ STEPS = [
     ("list", ["list"]),
     ("ready", ["ready"]),
     ("count", ["count"]),
+    ("stale", ["stale", "--days", "0"]),
     ("search", ["search", "parity"]),
     ("update", ["update", "{A}", "--status", "in_progress", "--assignee", "probe"]),
     ("dep add", ["dep", "add", "{B}", "{A}"]),
