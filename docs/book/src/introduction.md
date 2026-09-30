@@ -13,7 +13,7 @@ have to learn anything new.
 
 ## The name
 
-A *khipukamayuq*, the keeper of the quipus, did arithmetic on a *yupana*, a
+A *quipucamayoc*, the keeper of the quipus, did arithmetic on a *yupana*, a
 counting board of compartments, by moving seeds or pebbles across it. When the
 count was settled it was knotted into the quipu, the permanent record.
 

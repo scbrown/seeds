@@ -24,7 +24,7 @@ rows in a versioned database. It is a CLI that answers the `bd`/`br` verbs
 agents already type (`create`, `show`, `ready`, `close`, …) with `--json` in the
 same shape. It is an experiment that tests one design question, fact-level
 versus snapshot versioning, and not a competing beads implementation.** The
-name comes from the counting board: a quipu keeper moved seeds across a
+name comes from the counting board: a *quipucamayoc* moved seeds across a
 *yupana* to count, then knotted the result into the quipu.
 
 ## Why you would want it
