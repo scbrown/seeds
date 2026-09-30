@@ -254,7 +254,14 @@ pub enum KeyCommand {
 #[derive(Debug, Subcommand)]
 pub enum ConfigCommand {
     /// Every resolved setting (a token is shown as set/unset, never its value)
-    List,
+    List {
+        /// Only what the project file (.seeds/config.toml) itself sets
+        #[arg(long, conflicts_with = "user")]
+        project: bool,
+        /// Only what the user file (~/.config/seeds/config.toml) itself sets
+        #[arg(long)]
+        user: bool,
+    },
     /// One resolved setting
     Get {
         /// The key, e.g. project.prefix
@@ -1187,7 +1194,7 @@ impl Command {
             Command::Schema { .. } => "schema",
             Command::Capabilities { .. } => "capabilities",
             Command::Config { command } => match command {
-                ConfigCommand::List => "config list",
+                ConfigCommand::List { .. } => "config list",
                 ConfigCommand::Get { .. } => "config get",
                 ConfigCommand::Path => "config path",
                 ConfigCommand::Set { .. } => "config set",

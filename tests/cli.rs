@@ -1261,3 +1261,40 @@ fn close_suggest_next_lists_only_seeds_the_close_fully_unblocked() {
     // Without the flag the --json shape is unchanged: a bare array.
     assert!(sb.json(&["close", &a]).is_array());
 }
+
+#[test]
+fn config_list_project_and_user_show_only_what_that_file_sets() {
+    let sb = Sandbox::new("config-scope");
+    std::fs::create_dir_all(sb.work().join(".seeds")).unwrap();
+    std::fs::write(
+        sb.work().join(".seeds/config.toml"),
+        "[project]\nprefix = \"zz\"\n",
+    )
+    .unwrap();
+    // Control: the resolved list shows both the file's key and defaults.
+    let all = sb.ok(&["config", "list"]);
+    assert!(
+        all.contains("project.prefix = zz") && all.contains("quipu.url"),
+        "{all}"
+    );
+    assert_eq!(
+        sb.ok(&["config", "list", "--project"]).trim(),
+        "project.prefix = zz"
+    );
+    // No user file yet: it sets nothing (not an error).
+    assert!(sb
+        .ok(&["config", "list", "--user"])
+        .contains("sets nothing"));
+    std::fs::create_dir_all(sb.root.join("home/.config/seeds")).unwrap();
+    std::fs::write(
+        sb.root.join("home/.config/seeds/config.toml"),
+        "[quipu]\ntrusted_hosts = [\"h.example\"]\n",
+    )
+    .unwrap();
+    let user = sb.json(&["config", "list", "--user"]);
+    assert_eq!(
+        user,
+        serde_json::json!({"quipu.trusted_hosts": ["h.example"]})
+    );
+    assert_eq!(code(&sb.run(&["config", "list", "--project", "--user"])), 2);
+}
