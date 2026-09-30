@@ -197,6 +197,10 @@ jobs:
   checksums:
     name: Generate checksums
     needs: build
+    # `always()` + an explicit result check: build's own dependency
+    # (release-please) is SKIPPED on the tag and workflow_dispatch arms, and a
+    # skipped ancestor would otherwise skip this job even when build succeeded.
+    if: always() && needs.build.result == 'success'
     runs-on: ubuntu-latest
     steps:
       - name: Download all artifacts
