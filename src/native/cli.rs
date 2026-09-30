@@ -951,6 +951,9 @@ pub enum DepCommand {
         /// down: what it depends on; up: what depends on it
         #[arg(long, default_value = "down", value_parser = ["down", "up"])]
         direction: String,
+        /// Only edges of this type (blocks, related, parent-child, discovered-from)
+        #[arg(short = 't', long = "type")]
+        dep_type: Option<String>,
     },
 }
 
@@ -967,7 +970,7 @@ pub enum CommentsCommand {
         #[arg(short, long)]
         file: Option<String>,
         /// Comment text (flag form)
-        #[arg(short, long, alias = "content")]
+        #[arg(short, long, visible_alias = "content")]
         message: Option<String>,
         /// Author (default: the actor)
         #[arg(long)]
