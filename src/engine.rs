@@ -1308,6 +1308,8 @@ pub struct BlockedPage {
     pub page: Page,
     /// Open `blocks` targets by seed id, for every seed on the page.
     pub blocked_by: BTreeMap<String, Vec<String>>,
+    /// Those blockers themselves, by id (for `blocked --detailed`).
+    pub blockers: BTreeMap<String, Seed>,
 }
 
 /// `sd blocked`: seeds that are not closed and have at least one open `blocks`
@@ -1346,7 +1348,16 @@ pub fn blocked(b: &dyn Backend, req: &BlockedReq, at: Option<u64>) -> Result<Blo
     sort_seeds(&mut seeds, None)?;
     let page = page(seeds, req.limit.unwrap_or(DEFAULT_LIST_LIMIT), &snap);
     blocked_by.retain(|id, _| page.issues.iter().any(|s| &s.id == id));
-    Ok(BlockedPage { page, blocked_by })
+    let blockers = blocked_by
+        .values()
+        .flatten()
+        .filter_map(|id| snap.seeds.get(id).map(|s| (id.clone(), s.clone())))
+        .collect();
+    Ok(BlockedPage {
+        page,
+        blocked_by,
+        blockers,
+    })
 }
 
 /// `sd ready`.

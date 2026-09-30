@@ -609,6 +609,9 @@ pub struct BlockedArgs {
     /// Only seeds with this label (repeatable; all must match)
     #[arg(short, long)]
     pub label: Vec<String>,
+    /// Text: each blocker with its title, priority and status (br's --detailed)
+    #[arg(long)]
+    pub detailed: bool,
 }
 
 /// `sd stale`.

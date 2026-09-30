@@ -1160,3 +1160,34 @@ fn dep_list_type_filters_edges_and_comments_content_is_visible() {
     sb.ok(&["comments", "add", &c, "--content", "via content"]);
     assert!(sb.ok(&["comments", "list", &c]).contains("via content"));
 }
+
+// br's blocked --detailed, measured on a br scratch store: each blocker on its
+// own line with title, priority and status.
+#[test]
+fn blocked_detailed_lists_each_blocker_with_title_priority_and_status() {
+    let sb = Sandbox::new("blocked-detailed");
+    let a = sb
+        .ok(&["create", "blocked one", "--silent"])
+        .trim()
+        .to_string();
+    let b = sb
+        .ok(&["create", "the blocker", "-p", "1", "--silent"])
+        .trim()
+        .to_string();
+    sb.ok(&["dep", "add", &a, &b]);
+    // Control: the short form names the blocker only by id.
+    let short = sb.ok(&["blocked"]);
+    assert!(
+        short.contains(&format!("blocked by 1 open: {b}")),
+        "{short}"
+    );
+    assert!(!short.contains("the blocker"), "{short}");
+    let detailed = sb.ok(&["blocked", "--detailed"]);
+    assert!(
+        detailed.contains(&format!(
+            "  blocked by:\n    • {b}: the blocker [P1] [open]"
+        )),
+        "{detailed}"
+    );
+    assert_eq!(code(&sb.run(&["blocked", "--detailed", "--json"])), 2);
+}
