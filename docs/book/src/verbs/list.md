@@ -32,4 +32,8 @@ issue is a seed object with these keys:
 `close_reason`, `defer_until`, `parent`, `dependency_count`, `workflow_run`,
 `revision`.
 
+In `list`, `search` and `blocked` envelopes each issue also carries br's
+`dependent_count`: how many seeds declare any dependency on it (blocks,
+parent-child, related or discovered-from).
+
 `revision` is the compare-and-set token (1 at create, +1 per write).
