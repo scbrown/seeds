@@ -5,7 +5,9 @@ edition = "2021"
 description = "An experiment: beads-shaped work items stored as facts in a quipu knowledge graph"
 license = "MIT"
 repository = "https://github.com/scbrown/seeds"
-rust-version = "1.85"
+# 1.89 for `std::fs::File::lock`, the cross-process write lock the native
+# store takes (see src/native/store.rs). quipu-ai itself needs 1.85.
+rust-version = "1.89"
 readme = "README.md"
 homepage = "https://github.com/scbrown/seeds"
 keywords = ["ai-agents", "issue-tracker", "knowledge-graph", "quipu", "beads"]
@@ -18,6 +20,36 @@ path = "src/lib.rs"
 [[bin]]
 name = "sd"
 path = "src/main.rs"
+required-features = ["native"]
+
+[features]
+# `native` is the `sd` CLI: argument parsing, TOML config resolution, the local
+# store file and its lock, and the system clock. Everything outside it is the
+# core, which builds for wasm32-unknown-unknown with `--no-default-features`
+# (see `just wasm`).
+default = ["native"]
+native = ["dep:clap", "dep:toml", "dep:ureq", "shacl"]
+# Validate every write against the WorkItem shapes (camayoc's, plus the seeds
+# shape). quipu's SHACL engine is not part of quipu's own wasm32 gate, so the
+# wasm build leaves it out and says so rather than claiming a check it did not
+# run.
+shacl = ["quipu/shacl", "dep:shacl-pin"]
 
 [dependencies]
-clap = { version = "4.5", features = ["derive", "env"] }
+quipu = { package = "quipu-ai", version = "0.9", default-features = false }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.151"
+sha2 = "0.10"
+clap = { version = "4.5", features = ["derive", "env"], optional = true }
+toml = { version = "0.8", optional = true }
+# The shared-server backend (native only): quipu over HTTP.
+ureq = { version = "2", optional = true }
+# quipu-ai 0.9 declares `shacl = "^0.3.16"`, but shacl 0.3.24 changed
+# `ShaclProcessor::validate`'s arity and quipu-ai 0.9.1 no longer compiles
+# against it. Pin the version quipu's own lockfile builds with, so an unlocked
+# `cargo install seeds-ai` resolves to a working tree too. Remove once quipu
+# ships a release that builds against the newer shacl.
+shacl-pin = { package = "shacl", version = "=0.3.16", optional = true }
+
+[target.'cfg(target_arch = "wasm32")'.dev-dependencies]
+wasm-bindgen-test = "0.3"

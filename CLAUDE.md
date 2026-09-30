@@ -22,13 +22,31 @@ structure), scbrown/bobbin (retrieval).
   that means on a graph store.
 - **Flags follow `br`.** When a verb exists in `br`, match its flag names and
   short forms, and match the `bd` JSON output shape.
-- **Exit codes are a contract.** Each verb has its own code (see
-  `docs/book/src/reference.md`). Exit 2 is reserved for usage errors. Do not
-  reuse or renumber a code; add a test when you add one.
-- **Reads before writes.** Reads go to quipu `/query`; writes go to quipu
-  `/knot`, into the sandbox named graph unless configured otherwise.
-- **Definitions live in camayoc.** "ready", "blocked" and a worker's plate are
-  stored queries next to the shapes, not logic hardcoded here.
+- **Exit codes are a contract** (`src/error.rs`, `docs/book/src/reference.md`).
+  Exit 2 is reserved for usage errors; 10-18 are retired. Do not reuse or
+  renumber a code; add a test when you add one.
+- **`--json` is a contract.** Key sets are pinned in `tests/json_schema.rs`;
+  every documented key is always present.
+- **The core stays wasm-clean.** Everything outside `src/native/` is the core:
+  it must not read a clock, file, environment variable, process, thread or
+  network. Time arrives in `Ctx`, storage as a `Backend`. `clippy.toml`
+  enforces it and only `src/native/` opts out; `just wasm` and
+  `just wasm-test` prove the build and the tests on wasm32.
+- **Storage is embedded quipu.** A project is one named graph in a quipu store
+  (a local file by default); one write is one quipu transaction, revision-checked.
+  Read `docs/book/src/storage.md` before changing the model.
+- **Configuration lives in `src/native/config.rs`.** Flags, then env, then
+  `.seeds/config.toml` (walking up), then the user file, then a local default.
+- **No file format of our own.** A ledger on disk is a quipu pendant (share):
+  `export.nt` + `shapes.ttl` + manifests (`src/pendant.rs`). Storage modes are
+  in `docs/book/src/storage-modes.md`.
+- **Conflicts are reported, never resolved by picking a side.** Import, sync,
+  the merge driver and pendant loading all list what disagrees and write nothing.
+- **Formulas are shuttle's.** Do not build a workflow engine here; a seed links
+  to its shuttle run (`seeds:workflowRun`). See `docs/book/src/formulas.md`.
+- **Definitions belong in camayoc.** "ready" is a SPARQL query
+  (`vocab::ready_query`) written to move into camayoc as a stored query; the
+  WorkItem vocabulary and shape are camayoc's.
 - **Public-safe.** No internal hostnames, private IP addresses, home paths or
   personal names in code, docs, tests or commit messages. Endpoints are
   configuration (`--quipu`, `SEEDS_QUIPU_URL`), never literals.
@@ -40,7 +58,10 @@ structure), scbrown/bobbin (retrieval).
 ```bash
 just build           # cargo build
 just test            # cargo test
-just check           # fmt --check, clippy -D warnings, test, mdbook build (what CI runs)
+just check           # fmt --check, clippy -D warnings, tests (with and without default features), mdbook build
+just wasm            # build + lint the core for wasm32, link the demo, print its size
+just wasm-test       # tests/core.rs on wasm32 under node
+just ci              # check + wasm + wasm-test: what CI runs
 just book            # build the mdBook
 ```
 

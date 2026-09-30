@@ -16,12 +16,12 @@ else rewinds.
 ## The demo
 
 ```bash
-sd create "Ship the parser" -p 1 --json      # -> s-7, written in tx 1042
-sd update s-7 --status in_progress           # tx 1043
-sd update s-7 --title "Ship the streaming parser" -p 0   # tx 1051
+sd create "Ship the parser" -p 1            # created sd-k2x ... (tx 1042)
+sd update sd-k2x --status in_progress        # (tx 1043)
+sd update sd-k2x --title "Ship the streaming parser" -p 0   # (tx 1051)
 
-sd show s-7                  # today: P0, "Ship the streaming parser", in_progress
-sd show s-7 --at 1042        # the pin: P1, "Ship the parser", open
+sd show sd-k2x               # today: P0, "Ship the streaming parser", in_progress
+sd show sd-k2x --at 1042     # the pin: P1, "Ship the parser", open
 sd ready --json              # the project has moved on without it
 ```
 
@@ -42,5 +42,11 @@ ledger, without either team exposing the rest of its history.
 
 ## Status
 
-`--at <tx>` is accepted by the v0 parser on every verb. Resolving it is not
-implemented yet.
+`--at <tx>` works on every read (`show`, `list`, `ready`, `count`,
+`dep list`, `comments list`). Every write prints its transaction as `(tx N)`.
+A write with `--at` is refused (exit 2): a write always applies to the current
+state. `tests/core.rs` (`at_pins_a_seed_to_an_earlier_transaction`) and
+`tests/cli.rs` run the demo above.
+
+The cross-team pin (payload hash plus transaction plus IRI) depends on qpack
+sharing and is not built yet.

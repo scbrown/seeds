@@ -1,35 +1,64 @@
 # Reference
 
-The command is `sd` (crate `seeds-ai`).
+The command is `sd` (crate `seeds-ai`). Each verb has its own page under
+[The verbs](verbs/README.md); this page is the summary.
 
 ## Global options
 
-These are accepted on every verb.
+Accepted on every verb.
 
 | option | meaning |
 |---|---|
-| `--json` | output as JSON, in the `bd` output shape |
-| `--actor <NAME>` | actor for attribution (env `SEEDS_ACTOR`) |
-| `--quipu <URL>` | base URL of the quipu server (env `SEEDS_QUIPU_URL`) |
-| `--graph <IRI>` | named graph (project) to read and write (env `SEEDS_GRAPH`) |
-| `--at <TX>` | resolve reads as of this transaction (a [pin](pinning.md)) |
+| `--json` | output as JSON, in br's output shape |
+| `--actor <NAME>` | actor recorded on writes and used by `--claim` (env `SEEDS_ACTOR`, else `$USER`) |
+| `--store <PATH>` | use this local quipu store file ([configuration](config.md)) |
+| `--quipu <URL>` | use this quipu server ([mode 2](storage-modes.md#mode-2-a-quipu-server)) |
+| `--graph <IRI>` | the project's named graph ([configuration](config.md)) |
+| `--at <TX>` | read as of this transaction (a [pin](pinning.md)); refused on writes |
 | `-h`, `--help` / `-V`, `--version` | help and version |
 
-## Verbs and exit codes
+## Verbs
 
-In v0 every verb parses its flags, prints
-`seeds: <verb> not yet implemented (see docs/book)` to stderr, and exits with
-its own code. Exit **2** is reserved for usage errors (an unknown verb or a bad
-flag), so a caller can tell "you called me wrong" from "not built yet".
+| verb | flags (a br-compatible subset) |
+|---|---|
+| [`create [TITLE]`](verbs/create.md) | `--title`, `-t/--type`, `-p/--priority`, `-d/--description`, `--description-file`, `-a/--assignee`, `-l/--labels`, `--parent`, `--deps`, `--dry-run`, `--silent` |
+| [`show <ID>...`](verbs/show.md) | |
+| [`list`](verbs/list.md) | `-s/--status`, `-t/--type`, `--assignee`, `--unassigned`, `-l/--label`, `-p/--priority`, `-a/--all`, `--limit` (default 50, 0 = all), `--sort` |
+| [`ready`](verbs/ready.md) | `--limit` (default: none), `--assignee [NAME]`, `--unassigned`, `-l/--label`, `-t/--type`, `-p/--priority`, `--parent` |
+| [`count`](verbs/count.md) | `--by`, `--status`, `--type`, `--assignee`, `--include-closed` |
+| [`update <ID>...`](verbs/update.md) | `--title`, `-d/--description`, `--notes`, `-s/--status`, `-p/--priority`, `--assignee`, `--claim`, `--add-label`, `--remove-label`, `--defer` |
+| [`close <ID>...`](verbs/close.md) | `-r/--reason`, `-f/--force` |
+| [`dep add <ISSUE> <DEPENDS_ON>`](verbs/dep.md) | `-t/--type` (default `blocks`) |
+| [`dep remove <ISSUE> <DEPENDS_ON>`](verbs/dep.md) | `-t/--type` (default `blocks`) |
+| [`dep list <ID>`](verbs/dep.md) | `--direction down\|up` |
+| [`comments add <ID> [TEXT]...`](verbs/comments.md) | `-f/--file`, `-m/--message` (alias `--content`), `--author` |
+| [`comments list <ID>`](verbs/comments.md) | |
+| [`export`](verbs/sync.md#sd-export) | `--to <DIR>` |
+| [`import <DIR>`](verbs/sync.md#sd-import) | `--prefer pendant\|store`, `--replace` |
+| [`sync`](verbs/sync.md#sd-sync) | `--remote <URL>`, `--allow-remote-deletes` |
+| [`merge-driver <BASE> <OURS> <THEIRS>`](verbs/sync.md#sd-merge-driver) | |
 
-| verb | flags accepted (subset of `br`) | v0 exit |
-|---|---|---|
-| `create [TITLE]` | `--title`, `-t/--type`, `-p/--priority`, `-d/--description`, `--description-file`, `-a/--assignee`, `-l/--labels`, `--parent`, `--deps`, `--dry-run`, `--silent` | 10 |
-| `show <ID>...` | | 11 |
-| `list` | `-s/--status`, `-t/--type`, `--assignee`, `--unassigned`, `-l/--label`, `-p/--priority`, `-a/--all`, `--limit`, `--sort` | 12 |
-| `ready` | `--limit`, `--assignee [NAME]`, `--unassigned`, `-l/--label`, `-t/--type`, `-p/--priority`, `--parent` | 13 |
-| `count` | `--by`, `--status`, `--type`, `--assignee`, `--include-closed` | 14 |
-| `update <ID>...` | `--title`, `-d/--description`, `--notes`, `-s/--status`, `-p/--priority`, `--assignee`, `--claim`, `--add-label`, `--remove-label`, `--defer` | 15 |
-| `close <ID>...` | `-r/--reason`, `-f/--force` | 16 |
-| `dep add <ISSUE> <DEPENDS_ON>` | `-t/--type` (default `blocks`) | 17 |
-| `comments add <ID> [TEXT]...` | `-f/--file`, `-m/--message` (alias `--content`), `--author` | 18 |
+`create` and `update` also take `--workflow-run <RUN>` ([Formulas](formulas.md)).
+
+## Exit codes
+
+Exit codes are a contract. A code is never reused or renumbered.
+
+| code | meaning |
+|---|---|
+| 0 | success |
+| 1 | failed: store I/O or anything without a more specific code |
+| 2 | usage: an unknown verb, a bad flag or value, `--at` on a write |
+| 3 | not found: an unknown id, dependency or comment |
+| 4 | conflict: a lost `--claim`, the seed changed since it was read, or two ledgers disagree (import, sync, merge-driver, a pendant that changed alongside the store); nothing was written |
+| 5 | refused: the shapes rejected the write, a dependency cycle, closing a seed with open blockers without `--force` |
+| 6 | configuration: contradictory or unreadable config (for example `store` and `url` both set) |
+| 7 | unreachable: the configured quipu server cannot be reached (seeds never falls back to a local store) |
+| 8 | indeterminate: a remote write's response was lost and a read-back does not show it; it may still land. Check the named ids before doing anything; do not simply retry |
+| 10-18 | **retired**: the v0 shell's per-verb "not yet implemented" codes. Never reused. |
+| 20 | not built: reserved for a configured capability that exists in the design but not in this build (no verb returns it today) |
+
+In `--json` mode an error prints `{"error": {"code": "<NAME>", "message":
+"..."}}` on stdout, where `<NAME>` is `FAILED`, `USAGE`, `NOT_FOUND`,
+`CONFLICT`, `REFUSED`, `CONFIG`, `UNREACHABLE`, `INDETERMINATE` or `NOT_BUILT`. The message
+always goes to stderr as well.
