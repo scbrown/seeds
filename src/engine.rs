@@ -14,7 +14,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::backend::{Backend, Ctx, SeedWrite, WriteBatch};
-use crate::error::{Result, SdError};
+use crate::error::{ErrorKind, Result, SdError};
 use crate::ids;
 use crate::model::{self, Comment, Seed, Snapshot};
 use crate::vocab;
@@ -49,6 +49,12 @@ pub struct CreateReq {
     pub deps: Vec<String>,
     /// The shuttle run that creates or drives this seed (an IRI or a bare run id).
     pub workflow_run: Option<String>,
+    /// The workflow step creating this seed. With `workflow_run`, the seed's
+    /// id is derived from (run, step, visit) and the create is idempotent: if
+    /// that seed exists it is returned unchanged (transaction 0).
+    pub step: Option<String>,
+    /// Which entry into `step` this is (1 when absent).
+    pub visit: Option<u32>,
     /// Compute and return the seed without writing it.
     pub dry_run: bool,
 }
@@ -60,12 +66,40 @@ pub fn create(b: &mut dyn Backend, ctx: &Ctx, req: &CreateReq) -> Result<(Seed, 
         return Err(SdError::usage("a seed needs a non-empty title"));
     }
     let snap = b.snapshot(None)?;
-    let id = match &req.parent {
-        Some(p) => {
+    let run = non_empty(req.workflow_run.as_deref()).map(|r| vocab::run_iri(&r));
+    let keyed = match (non_empty(req.step.as_deref()), &run) {
+        (Some(step), Some(run)) => {
+            if req.parent.is_some() {
+                return Err(SdError::usage(
+                    "--step mints the id from the run and step, so it cannot take --parent",
+                ));
+            }
+            let visit = req.visit.unwrap_or(1);
+            if visit == 0 {
+                return Err(SdError::usage("--visit counts from 1"));
+            }
+            Some(ids::keyed(&ctx.prefix, run, &step, visit))
+        }
+        (Some(_), None) => {
+            return Err(SdError::usage("--step needs --workflow-run"));
+        }
+        (None, _) if req.visit.is_some() => {
+            return Err(SdError::usage("--visit needs --step"));
+        }
+        (None, _) => None,
+    };
+    if let Some(id) = &keyed {
+        if let Some(existing) = existing_keyed(&snap, id, run.as_deref())? {
+            return Ok((existing, 0));
+        }
+    }
+    let id = match (&keyed, &req.parent) {
+        (Some(id), _) => id.clone(),
+        (None, Some(p)) => {
             snap.get(p)?;
             ids::child(p, |c| snap.seeds.contains_key(c))
         }
-        None => ids::mint(&ctx.prefix, title, &ctx.now, |c| snap.seeds.contains_key(c)),
+        (None, None) => ids::mint(&ctx.prefix, title, &ctx.now, |c| snap.seeds.contains_key(c)),
     };
     let mut seed = Seed {
         id,
@@ -86,7 +120,7 @@ pub fn create(b: &mut dyn Backend, ctx: &Ctx, req: &CreateReq) -> Result<(Seed, 
         created_by: non_empty(Some(&ctx.actor)),
         updated_at: ctx.now.clone(),
         parent: req.parent.clone(),
-        workflow_run: non_empty(req.workflow_run.as_deref()).map(|r| vocab::run_iri(&r)),
+        workflow_run: run.clone(),
         revision: 1,
         ..Seed::default()
     };
@@ -98,7 +132,7 @@ pub fn create(b: &mut dyn Backend, ctx: &Ctx, req: &CreateReq) -> Result<(Seed, 
     if req.dry_run {
         return Ok((seed, 0));
     }
-    let tx = b.commit(
+    let written = b.commit(
         &WriteBatch {
             seeds: vec![SeedWrite {
                 seed: seed.clone(),
@@ -109,8 +143,38 @@ pub fn create(b: &mut dyn Backend, ctx: &Ctx, req: &CreateReq) -> Result<(Seed, 
             ..WriteBatch::default()
         },
         ctx,
-    )?;
-    Ok((seed, tx))
+    );
+    match (written, &keyed) {
+        (Ok(tx), _) => Ok((seed, tx)),
+        // A keyed create that lost a race: the other writer created the same
+        // seed between our read and our write, and the compare-and-set refused
+        // ours. That is the idempotent outcome, not a failure.
+        (Err(e), Some(id)) if e.kind == ErrorKind::Conflict => {
+            let snap = b.snapshot(None)?;
+            match existing_keyed(&snap, id, run.as_deref())? {
+                Some(existing) => Ok((existing, 0)),
+                None => Err(e),
+            }
+        }
+        (Err(e), _) => Err(e),
+    }
+}
+
+/// The seed a keyed create names, if it already exists. A seed with that id
+/// but a different run is refused rather than returned: it is not the seed
+/// this step asked for.
+fn existing_keyed(snap: &Snapshot, id: &str, run: Option<&str>) -> Result<Option<Seed>> {
+    let Some(existing) = snap.seeds.get(id) else {
+        return Ok(None);
+    };
+    if existing.workflow_run.as_deref() != run {
+        return Err(SdError::refused(format!(
+            "{id} exists but belongs to a different workflow run ({}), so it is not the seed \
+             this step names",
+            existing.workflow_run.as_deref().unwrap_or("none")
+        )));
+    }
+    Ok(Some(existing.clone()))
 }
 
 /// br's `--deps` element: `id` means `blocks`, `type:id` names the type.
@@ -1236,6 +1300,16 @@ fn claim(snap: &Snapshot, s: &mut Seed, actor: &str) -> Result<()> {
 }
 
 fn set_status(s: &mut Seed, status: &str, now: &str, reason: Option<&str>) {
+    set_status_as(s, status, now, reason, None);
+}
+
+fn set_status_as(
+    s: &mut Seed,
+    status: &str,
+    now: &str,
+    reason: Option<&str>,
+    outcome: Option<&str>,
+) {
     if status == "closed" {
         if s.status != "closed" {
             s.closed_at = Some(now.to_string());
@@ -1243,9 +1317,16 @@ fn set_status(s: &mut Seed, status: &str, now: &str, reason: Option<&str>) {
         if let Some(r) = reason {
             s.close_reason = non_empty(Some(r));
         }
+        s.outcome = Some(
+            outcome
+                .map(str::to_string)
+                .or_else(|| s.outcome.clone())
+                .unwrap_or_else(|| "done".into()),
+        );
     } else {
         s.closed_at = None;
         s.close_reason = None;
+        s.outcome = None;
     }
     s.status = status.to_string();
 }
@@ -1259,6 +1340,20 @@ pub fn close(
     reason: Option<&str>,
     force: bool,
 ) -> Result<(Vec<Seed>, u64, Warnings)> {
+    close_as(b, ctx, ids, reason, None, force)
+}
+
+/// [`close`] with an explicit outcome (one of [`model::OUTCOMES`]; `done`
+/// when `None`).
+pub fn close_as(
+    b: &mut dyn Backend,
+    ctx: &Ctx,
+    ids: &[String],
+    reason: Option<&str>,
+    outcome: Option<&str>,
+    force: bool,
+) -> Result<(Vec<Seed>, u64, Warnings)> {
+    let outcome = outcome.map(model::parse_outcome).transpose()?;
     let mut warnings = Vec::new();
     let reason = reason.map(str::trim).filter(|r| !r.is_empty());
     if reason.is_none() {
@@ -1285,7 +1380,7 @@ pub fn close(
             )));
         }
         let mut s = before.clone();
-        set_status(&mut s, "closed", &ctx.now, reason);
+        set_status_as(&mut s, "closed", &ctx.now, reason, outcome.as_deref());
         s.updated_at = ctx.now.clone();
         s.revision = before.revision + 1;
         writes.push(SeedWrite {
