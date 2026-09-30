@@ -17,6 +17,7 @@
   - [show](verbs/show.md)
   - [list](verbs/list.md)
   - [ready](verbs/ready.md)
+  - [search](verbs/search.md)
   - [count](verbs/count.md)
   - [update](verbs/update.md)
   - [close](verbs/close.md)

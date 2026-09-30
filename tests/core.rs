@@ -1192,3 +1192,68 @@ fn until_accepts_brs_forms_and_rolls_over_months_and_years() {
         );
     }
 }
+
+fn found(b: &QuipuBackend, q: &str, all: bool) -> (usize, usize) {
+    let r = engine::search(
+        b,
+        &engine::SearchReq {
+            query: q.into(),
+            all,
+            ..engine::SearchReq::default()
+        },
+        None,
+    )
+    .unwrap();
+    (r.page.issues.len(), r.hidden_closed)
+}
+
+#[test]
+fn search_matches_id_title_description_and_comments_but_not_notes() {
+    let mut b = backend();
+    let (seed, _) = engine::create(
+        &mut b,
+        &ctx(1),
+        &CreateReq {
+            title: "Parser handles UTF-8".into(),
+            description: Some("the lexer chokes on multibyte input".into()),
+            ..CreateReq::default()
+        },
+    )
+    .unwrap();
+    let id = seed.id;
+    engine::comment_add(&mut b, &ctx(2), &id, "zebra in a comment", None).unwrap();
+    engine::update(
+        &mut b,
+        &ctx(3),
+        std::slice::from_ref(&id),
+        &UpdateReq {
+            notes: Some("quokka in the notes".into()),
+            ..UpdateReq::default()
+        },
+    )
+    .unwrap();
+    for q in ["parser", "CHOKES ON", "zebra", &id[..4]] {
+        assert_eq!(found(&b, q, false), (1, 0), "{q}");
+    }
+    assert_eq!(
+        found(&b, "quokka", false),
+        (0, 0),
+        "notes are not searched, as in br"
+    );
+    engine::close(
+        &mut b,
+        &ctx(4),
+        std::slice::from_ref(&id),
+        Some("done"),
+        false,
+    )
+    .unwrap();
+    assert_eq!(
+        found(&b, "parser", false),
+        (0, 1),
+        "closed hits are hidden and counted"
+    );
+    assert_eq!(found(&b, "parser", true), (1, 0));
+    let err = engine::search(&b, &engine::SearchReq::default(), None).unwrap_err();
+    assert_eq!(err.kind, ErrorKind::Usage);
+}

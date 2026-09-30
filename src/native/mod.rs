@@ -685,6 +685,30 @@ fn dispatch(cli: &Cli, ctx: &Ctx, b: &mut dyn Backend) -> Result<Outcome> {
                 warnings,
             ))
         }
+        Command::Search(a) => {
+            let req = engine::SearchReq {
+                query: a.query.clone(),
+                filter: Filter {
+                    status: a.status.clone(),
+                    issue_type: a.issue_type.clone(),
+                    assignee: a.assignee.clone(),
+                    unassigned: a.unassigned,
+                    labels: a.label.clone(),
+                    priority: a.priority.clone(),
+                    parent: None,
+                },
+                all: a.all,
+                limit: a.limit,
+                sort: a.sort.clone(),
+            };
+            let r = engine::search(b, &req, at)?;
+            Ok(ok(
+                json,
+                output::search_json(&r),
+                output::search_text(&r, &a.query),
+                vec![],
+            ))
+        }
         Command::Blocked(a) => {
             let req = engine::BlockedReq {
                 types: a.issue_type.clone(),

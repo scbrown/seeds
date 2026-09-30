@@ -20,6 +20,7 @@ STEPS = [
     ("list", ["list"]),
     ("ready", ["ready"]),
     ("count", ["count"]),
+    ("search", ["search", "parity"]),
     ("update", ["update", "{A}", "--status", "in_progress", "--assignee", "probe"]),
     ("dep add", ["dep", "add", "{B}", "{A}"]),
     ("dep list", ["dep", "list", "{B}"]),
@@ -36,6 +37,7 @@ STEPS = [
     ("reopen", ["reopen", "{A}", "-r", "not done"]),
     ("defer", ["defer", "{A}", "--until", "+1d"]),
     ("undefer", ["undefer", "{A}"]),
+    ("search closed", ["search", "parity A"]),
     ("list all", ["list", "--all"]),
 ]
 
