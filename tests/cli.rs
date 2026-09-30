@@ -621,6 +621,11 @@ fn version_where_and_info_describe_the_ledger_without_creating_it() {
     let sb = Sandbox::new("about");
     let v = sb.json(&["version"]);
     assert_eq!(v["version"], env!("CARGO_PKG_VERSION"));
+    // chmln/sd also prints "sd <ver>"; these tell seeds apart (aegis-1i5h1j).
+    assert_eq!(v["tool"], "seeds");
+    let ver = format!("sd {} (seeds)", env!("CARGO_PKG_VERSION"));
+    assert_eq!(sb.ok(&["--version"]).trim(), ver);
+    assert_eq!(sb.ok(&["version"]).trim(), ver);
     assert!(
         v["commit"].is_null(),
         "not embedded, so null rather than guessed"

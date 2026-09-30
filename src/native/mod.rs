@@ -137,6 +137,7 @@ fn version(json: bool, short: bool) -> Outcome {
         features.push("shacl");
     }
     let value = serde_json::json!({
+        "tool": "seeds",
         "version": v,
         "build": if cfg!(debug_assertions) { "debug" } else { "release" },
         "commit": null, "branch": null, "rust_version": null,
@@ -146,7 +147,7 @@ fn version(json: bool, short: bool) -> Outcome {
     let text = if short {
         v.to_string()
     } else {
-        format!("sd {v}")
+        format!("sd {v} (seeds)")
     };
     ok(json, value, text, vec![])
 }
