@@ -8,7 +8,7 @@
 
 use serde_json::{json, Value as Json};
 
-use crate::engine::{Count, DepChange, DepRow, Page, SeedView};
+use crate::engine::{BlockedPage, Count, DepChange, DepRow, Page, SeedView};
 use crate::model::{Comment, Seed};
 
 /// `show --json`: an array of full seed objects.
@@ -50,6 +50,46 @@ pub fn list_json(p: &Page) -> Json {
         "offset": 0,
         "has_more": p.has_more,
     })
+}
+
+/// `blocked --json`: the list envelope; each seed also carries br's
+/// `blocked_by` (open blocker ids) and `blocked_by_count`.
+pub fn blocked_json(b: &BlockedPage) -> Json {
+    let mut o = list_json(&b.page);
+    if let Some(issues) = o["issues"].as_array_mut() {
+        for issue in issues {
+            let by = issue["id"]
+                .as_str()
+                .and_then(|id| b.blocked_by.get(id))
+                .cloned()
+                .unwrap_or_default();
+            issue["blocked_by_count"] = json!(by.len());
+            issue["blocked_by"] = json!(by);
+        }
+    }
+    o
+}
+
+/// `blocked` as text: each seed and what blocks it; says when cut short.
+pub fn blocked_text(b: &BlockedPage) -> String {
+    let p = &b.page;
+    if p.issues.is_empty() {
+        return "no blocked seeds".to_string();
+    }
+    let mut lines = vec![format!("blocked seeds ({}):", p.total)];
+    for s in &p.issues {
+        let by = b.blocked_by.get(&s.id).cloned().unwrap_or_default();
+        lines.push(seed_line(s));
+        lines.push(format!("  blocked by {} open: {}", by.len(), by.join(", ")));
+    }
+    if p.has_more {
+        lines.push(format!(
+            "showing {} of {} (--limit 0 for all)",
+            p.issues.len(),
+            p.total
+        ));
+    }
+    lines.join("\n")
 }
 
 /// `ready --json`, `update --json`, `close --json`, `create --json` (one

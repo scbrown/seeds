@@ -685,6 +685,21 @@ fn dispatch(cli: &Cli, ctx: &Ctx, b: &mut dyn Backend) -> Result<Outcome> {
                 warnings,
             ))
         }
+        Command::Blocked(a) => {
+            let req = engine::BlockedReq {
+                types: a.issue_type.clone(),
+                priorities: a.priority.clone(),
+                labels: a.label.clone(),
+                limit: a.limit,
+            };
+            let page = engine::blocked(b, &req, at)?;
+            Ok(ok(
+                json,
+                output::blocked_json(&page),
+                output::blocked_text(&page),
+                vec![],
+            ))
+        }
         Command::Count(a) => {
             let req = engine::CountReq {
                 filter: Filter {

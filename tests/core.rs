@@ -1057,3 +1057,57 @@ fn label_list_and_counts_include_closed_seeds_and_rename_moves_every_carrier() {
     let (n, _) = engine::label_rename(&mut b, &ctx(7), "absent", "z").unwrap();
     assert_eq!(n, 0);
 }
+
+#[test]
+fn blocked_lists_open_blockers_and_ignores_a_blocked_status_alone() {
+    let mut b = backend();
+    let (x, y, z) = (
+        mk(&mut b, "blocker", 1),
+        mk(&mut b, "blocked", 2),
+        mk(&mut b, "status only", 3),
+    );
+    engine::dep_add(&mut b, &ctx(4), &y, &x, "blocks").unwrap();
+    engine::update(
+        &mut b,
+        &ctx(5),
+        std::slice::from_ref(&z),
+        &UpdateReq {
+            status: Some("blocked".into()),
+            ..UpdateReq::default()
+        },
+    )
+    .unwrap();
+    let page = engine::blocked(&b, &engine::BlockedReq::default(), None).unwrap();
+    assert_eq!(
+        page.page
+            .issues
+            .iter()
+            .map(|s| s.id.clone())
+            .collect::<Vec<_>>(),
+        [y.as_str()]
+    );
+    assert_eq!(page.blocked_by[&y], [x.as_str()]);
+    // A type filter that excludes it, then closing the blocker, both empty the list.
+    let bugs = engine::BlockedReq {
+        types: vec!["bug".into()],
+        ..engine::BlockedReq::default()
+    };
+    assert!(engine::blocked(&b, &bugs, None)
+        .unwrap()
+        .page
+        .issues
+        .is_empty());
+    engine::close(
+        &mut b,
+        &ctx(6),
+        std::slice::from_ref(&x),
+        Some("done"),
+        false,
+    )
+    .unwrap();
+    assert!(engine::blocked(&b, &engine::BlockedReq::default(), None)
+        .unwrap()
+        .page
+        .issues
+        .is_empty());
+}
