@@ -2116,3 +2116,80 @@ fn list_filters_paginate_reverse_and_hide_deferred_like_br() {
         (1, 1, 3, true)
     );
 }
+
+#[test]
+fn transition_comments_land_in_the_same_tx_and_only_on_changed_seeds() {
+    let mut b = backend();
+    let (x, y) = (mk(&mut b, "x", 1), mk(&mut b, "y", 2));
+    engine::close(
+        &mut b,
+        &ctx(3),
+        std::slice::from_ref(&y),
+        Some("done"),
+        false,
+    )
+    .unwrap();
+    // close: x changes and gets the comment; y is already closed and gets none.
+    let (_, tx, _) = engine::close_as(
+        &mut b,
+        &ctx(4),
+        &[x.clone(), y.clone()],
+        Some("shipped"),
+        None,
+        false,
+        Some("closing with the release"),
+    )
+    .unwrap();
+    let last = |b: &QuipuBackend, id: &str, at: Option<u64>| {
+        engine::comment_list(b, id, at)
+            .unwrap()
+            .last()
+            .map(|c| c.text.clone())
+    };
+    assert_eq!(
+        last(&b, &x, None).as_deref(),
+        Some("closing with the release")
+    );
+    assert_eq!(
+        last(&b, &x, Some(tx - 1)),
+        None,
+        "same transaction as the close"
+    );
+    assert_eq!(
+        last(&b, &y, None),
+        None,
+        "an unchanged seed gets no comment"
+    );
+    // defer / undefer / update carry it too.
+    let z = mk(&mut b, "z", 5);
+    engine::defer_with(
+        &mut b,
+        &ctx(6),
+        std::slice::from_ref(&z),
+        None,
+        Some("waiting on vendor"),
+    )
+    .unwrap();
+    assert_eq!(last(&b, &z, None).as_deref(), Some("waiting on vendor"));
+    engine::undefer_with(
+        &mut b,
+        &ctx(7),
+        std::slice::from_ref(&z),
+        Some("vendor replied"),
+    )
+    .unwrap();
+    assert_eq!(last(&b, &z, None).as_deref(), Some("vendor replied"));
+    engine::update(
+        &mut b,
+        &ctx(8),
+        std::slice::from_ref(&z),
+        &UpdateReq {
+            priority: Some("0".into()),
+            transition_comment: Some("escalated".into()),
+            ..UpdateReq::default()
+        },
+    )
+    .unwrap();
+    assert_eq!(last(&b, &z, None).as_deref(), Some("escalated"));
+    assert_eq!(engine::comment_list(&b, &z, None).unwrap().len(), 3);
+}

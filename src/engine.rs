@@ -754,6 +754,15 @@ pub fn epic_close_eligible(
     b: &mut dyn Backend,
     ctx: &Ctx,
 ) -> Result<(Vec<Seed>, Vec<Skipped>, u64)> {
+    epic_close_eligible_with(b, ctx, None)
+}
+
+/// [`epic_close_eligible`] with a comment on each closed epic, in the same tx.
+pub fn epic_close_eligible_with(
+    b: &mut dyn Backend,
+    ctx: &Ctx,
+    comment: Option<&str>,
+) -> Result<(Vec<Seed>, Vec<Skipped>, u64)> {
     let snap = b.snapshot(None)?;
     let (mut ids, mut skipped) = (Vec::new(), Vec::new());
     for st in epic_status(b, true, None)? {
@@ -770,7 +779,15 @@ pub fn epic_close_eligible(
     if ids.is_empty() {
         return Ok((vec![], skipped, snap.tx));
     }
-    let (closed, tx, _) = close(b, ctx, &ids, Some("All children completed"), false)?;
+    let (closed, tx, _) = close_as(
+        b,
+        ctx,
+        &ids,
+        Some("All children completed"),
+        None,
+        false,
+        comment,
+    )?;
     Ok((closed, skipped, tx))
 }
 
@@ -1407,6 +1424,8 @@ pub struct UpdateReq {
     pub defer: Option<String>,
     /// The shuttle run driving the seed (an IRI or a bare run id); empty clears it.
     pub workflow_run: Option<String>,
+    /// A comment written with the change, in the same transaction.
+    pub transition_comment: Option<String>,
 }
 
 /// `sd update`: all named seeds change in one transaction, or none do.
@@ -1488,7 +1507,15 @@ pub fn update(
             expected_revision: Some(before.revision),
         });
     }
-    finish(b, ctx, &snap, ids, writes, "seeds:update")
+    finish_with(
+        b,
+        ctx,
+        &snap,
+        ids,
+        writes,
+        "seeds:update",
+        req.transition_comment.as_deref(),
+    )
 }
 
 // ---------------------------------------------------------------- labels
@@ -1761,6 +1788,17 @@ pub fn defer(
     ids: &[String],
     until: Option<&str>,
 ) -> Result<Transitions> {
+    defer_with(b, ctx, ids, until, None)
+}
+
+/// `sd defer --transition-comment`: [`defer`] with a comment in the same tx.
+pub fn defer_with(
+    b: &mut dyn Backend,
+    ctx: &Ctx,
+    ids: &[String],
+    until: Option<&str>,
+    comment: Option<&str>,
+) -> Result<Transitions> {
     let until = until.map(|u| parse_until(u, &ctx.now)).transpose()?;
     transition(
         b,
@@ -1776,12 +1814,22 @@ pub fn defer(
             s.status = "deferred".into();
             s.defer_until = until.clone();
         },
-        None,
+        comment,
     )
 }
 
 /// `sd undefer`: deferred seeds become open and lose their defer date.
 pub fn undefer(b: &mut dyn Backend, ctx: &Ctx, ids: &[String]) -> Result<Transitions> {
+    undefer_with(b, ctx, ids, None)
+}
+
+/// `sd undefer --transition-comment`: [`undefer`] with a comment in the same tx.
+pub fn undefer_with(
+    b: &mut dyn Backend,
+    ctx: &Ctx,
+    ids: &[String],
+    comment: Option<&str>,
+) -> Result<Transitions> {
     transition(
         b,
         ctx,
@@ -1792,7 +1840,7 @@ pub fn undefer(b: &mut dyn Backend, ctx: &Ctx, ids: &[String]) -> Result<Transit
             s.status = "open".into();
             s.defer_until = None;
         },
-        None,
+        comment,
     )
 }
 
@@ -2112,7 +2160,7 @@ pub fn close(
     reason: Option<&str>,
     force: bool,
 ) -> Result<(Vec<Seed>, u64, Warnings)> {
-    close_as(b, ctx, ids, reason, None, force)
+    close_as(b, ctx, ids, reason, None, force, None)
 }
 
 /// [`close`] with an explicit outcome (one of [`model::OUTCOMES`]; `done`
@@ -2124,6 +2172,7 @@ pub fn close_as(
     reason: Option<&str>,
     outcome: Option<&str>,
     force: bool,
+    transition_comment: Option<&str>,
 ) -> Result<(Vec<Seed>, u64, Warnings)> {
     let outcome = outcome.map(model::parse_outcome).transpose()?;
     let mut warnings = Vec::new();
@@ -2160,7 +2209,15 @@ pub fn close_as(
             expected_revision: Some(before.revision),
         });
     }
-    let (seeds, tx) = finish(b, ctx, &snap, ids, writes, "seeds:close")?;
+    let (seeds, tx) = finish_with(
+        b,
+        ctx,
+        &snap,
+        ids,
+        writes,
+        "seeds:close",
+        transition_comment,
+    )?;
     Ok((seeds, tx, warnings))
 }
 
@@ -2172,6 +2229,48 @@ fn finish(
     writes: Vec<SeedWrite>,
     source: &str,
 ) -> Result<(Vec<Seed>, u64)> {
+    finish_with(b, ctx, snap, ids, writes, source, None)
+}
+
+/// One comment per seed a write actually changes, all in the write's own
+/// transaction (br's `--transition-comment`). Seeds left unchanged get none.
+fn transition_comments(
+    snap: &Snapshot,
+    ctx: &Ctx,
+    writes: &[SeedWrite],
+    text: Option<&str>,
+) -> Vec<Comment> {
+    let Some(text) = text.map(str::trim).filter(|t| !t.is_empty()) else {
+        return Vec::new();
+    };
+    writes
+        .iter()
+        .map(|w| Comment {
+            seed: w.seed.id.clone(),
+            index: snap
+                .comments_on(&w.seed.id)
+                .iter()
+                .map(|c| c.index)
+                .max()
+                .unwrap_or(0)
+                + 1,
+            author: ctx.actor.clone(),
+            text: text.to_string(),
+            created_at: ctx.now.clone(),
+        })
+        .collect()
+}
+
+fn finish_with(
+    b: &mut dyn Backend,
+    ctx: &Ctx,
+    snap: &Snapshot,
+    ids: &[String],
+    writes: Vec<SeedWrite>,
+    source: &str,
+    transition_comment: Option<&str>,
+) -> Result<(Vec<Seed>, u64)> {
+    let comments = transition_comments(snap, ctx, &writes, transition_comment);
     let mut out: BTreeMap<String, Seed> = BTreeMap::new();
     for w in &writes {
         out.insert(w.seed.id.clone(), w.seed.clone());
@@ -2182,7 +2281,7 @@ fn finish(
         b.commit(
             &WriteBatch {
                 seeds: writes,
-                comments: vec![],
+                comments,
                 source: source.into(),
                 ..WriteBatch::default()
             },
