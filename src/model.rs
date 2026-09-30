@@ -96,6 +96,9 @@ pub struct Seed {
     pub description: Option<String>,
     /// Free-form notes.
     pub notes: Option<String>,
+    /// Who owns the work (br's `owner`, usually an email); distinct from the
+    /// assignee, who is doing it now.
+    pub owner: Option<String>,
     /// One of [`STATUSES`].
     pub status: String,
     /// 0 (highest) to 4.
@@ -190,6 +193,7 @@ impl Seed {
         };
         opt(&mut f, term::description(), &self.description);
         opt(&mut f, term::notes(), &self.notes);
+        opt(&mut f, term::owner(), &self.owner);
         opt(&mut f, term::created_by(), &self.created_by);
         opt(&mut f, term::closed_at(), &self.closed_at);
         opt(&mut f, term::close_reason(), &self.close_reason);
@@ -281,6 +285,7 @@ impl Seed {
             title: s(vocab::RDFS_LABEL.into()).unwrap_or_default(),
             description: s(term::description()),
             notes: s(term::notes()),
+            owner: s(term::owner()),
             status: s(term::status()).unwrap_or_else(|| "open".into()),
             priority: i(term::priority())
                 .and_then(|p| u8::try_from(p).ok())
@@ -390,6 +395,7 @@ impl Seed {
             "title": self.title,
             "description": self.description,
             "notes": self.notes,
+            "owner": self.owner,
             "status": self.status,
             "priority": self.priority,
             "issue_type": self.issue_type,

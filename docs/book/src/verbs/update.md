@@ -16,6 +16,7 @@ sd update sd-a3f --defer 2026-10-15      # hide from ready until then
 | `-s, --status` | `open`, `in_progress`, `blocked`, `deferred`, `closed` |
 | `-p, --priority` | `0`-`4` or `P0`-`P4` |
 | `--assignee NAME` | set the assignee (`""` clears it) |
+| `--owner WHO` | set the owner (`""` clears it) |
 | `--claim` | set assignee to the actor and status to `in_progress`, only if the seed is open, unclaimed and unblocked |
 | `--add-label`, `--remove-label` | repeatable |
 | `--defer DATE` | hide from `ready` until this date or instant (`""` clears it) |

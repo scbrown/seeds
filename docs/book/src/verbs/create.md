@@ -15,6 +15,7 @@ sd create "Blocked work" --deps sd-a3f,related:sd-b7c
 | `-p, --priority` | `0`-`4` or `P0`-`P4` (default 2) |
 | `-d, --description` / `--description-file PATH` | the description |
 | `-a, --assignee` | assignee |
+| `--owner` | who owns the work (br's `owner`, usually an email) |
 | `-l, --labels` | comma-separated labels |
 | `--parent ID` | parent seed; the new id is `<parent>.<n>` |
 | `--deps` | comma-separated: `ID` (a `blocks` dependency) or `TYPE:ID` |

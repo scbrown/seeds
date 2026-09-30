@@ -40,6 +40,8 @@ pub struct CreateReq {
     /// Priority; 2 when absent.
     pub priority: Option<String>,
     /// Assignee.
+    /// Owner (br's `owner`, usually an email).
+    pub owner: Option<String>,
     pub assignee: Option<String>,
     /// Labels.
     pub labels: Vec<String>,
@@ -115,6 +117,7 @@ pub fn create(b: &mut dyn Backend, ctx: &Ctx, req: &CreateReq) -> Result<(Seed, 
             None => "task".into(),
         },
         assignee: non_empty(req.assignee.as_deref().map(str::trim)),
+        owner: non_empty(req.owner.as_deref().map(str::trim)),
         labels: clean_labels(&req.labels),
         created_at: ctx.now.clone(),
         created_by: non_empty(Some(&ctx.actor)),
@@ -855,6 +858,8 @@ pub struct UpdateReq {
     pub description: Option<String>,
     /// New notes.
     pub notes: Option<String>,
+    /// New owner; empty clears it.
+    pub owner: Option<String>,
     /// New status.
     pub status: Option<String>,
     /// New priority.
@@ -912,6 +917,9 @@ pub fn update(
         }
         if let Some(n) = &req.notes {
             s.notes = non_empty(Some(n));
+        }
+        if let Some(o) = &req.owner {
+            s.owner = non_empty(Some(o.trim()));
         }
         if let Some(p) = priority {
             s.priority = p;
