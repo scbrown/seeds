@@ -204,7 +204,11 @@ fn a_repo_local_pendant_is_written_on_every_change_and_a_copy_is_the_board() {
 
     // A change in the clone moves only the lines that changed.
     let old = std::fs::read_to_string(clone.join(".seeds/pendant/export.nt")).unwrap();
-    env.ok(&clone, &["close", &g, "--reason", "done"], &[]);
+    env.ok(
+        &clone,
+        &["close", &g, "--reason", "done", "--outcome", "abandoned"],
+        &[],
+    );
     let new = std::fs::read_to_string(clone.join(".seeds/pendant/export.nt")).unwrap();
     let removed = old.lines().filter(|l| !new.contains(l)).count();
     let added = new.lines().filter(|l| !old.contains(l)).count();
@@ -218,6 +222,12 @@ fn a_repo_local_pendant_is_written_on_every_change_and_a_copy_is_the_board() {
     let o = env.sd(&repo, &["ready", "--json"], &[]);
     assert!(String::from_utf8_lossy(&o.stderr).contains("loaded the pendant"));
     assert_eq!(env.ready(&repo, &[]), vec![a]);
+    // The close outcome travels in the pendant, not only the status.
+    let shown = env.ok(&repo, &["show", &g, "--json"], &[]);
+    assert!(
+        shown.contains("\"outcome\": \"abandoned\"") || shown.contains("\"outcome\":\"abandoned\""),
+        "{shown}"
+    );
 }
 
 #[test]

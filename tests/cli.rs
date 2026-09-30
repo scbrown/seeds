@@ -268,6 +268,39 @@ fn concurrent_creates_of_one_workflow_step_make_one_seed() {
 }
 
 #[test]
+fn close_records_how_a_seed_ended() {
+    let sb = Sandbox::new("outcome");
+    let a = sb.ok(&["create", "a", "--silent"]).trim().to_string();
+    let b = sb.ok(&["create", "b", "--silent"]).trim().to_string();
+    assert_eq!(
+        sb.json(&["show", &a])[0]["outcome"],
+        Value::Null,
+        "open: no outcome"
+    );
+    sb.ok(&["close", &a, "--reason", "shipped"]);
+    assert_eq!(sb.json(&["show", &a])[0]["outcome"], "done", "the default");
+    sb.ok(&[
+        "close",
+        &b,
+        "--reason",
+        "not needed",
+        "--outcome",
+        "abandoned",
+    ]);
+    assert_eq!(sb.json(&["show", &b])[0]["outcome"], "abandoned");
+    // An unknown outcome is a usage error and writes nothing.
+    let c = sb.ok(&["create", "c", "--silent"]).trim().to_string();
+    let bad = sb.run(&["close", &c, "--outcome", "wontdo"]);
+    assert_eq!(bad.status.code(), Some(2));
+    assert_eq!(sb.json(&["show", &c])[0]["status"], "open");
+    // Reopening clears it; closing again without --outcome is done again.
+    sb.ok(&["update", &b, "--status", "open"]);
+    assert_eq!(sb.json(&["show", &b])[0]["outcome"], Value::Null);
+    sb.ok(&["close", &b, "--reason", "after all"]);
+    assert_eq!(sb.json(&["show", &b])[0]["outcome"], "done");
+}
+
+#[test]
 fn concurrent_label_writes_from_separate_processes_lose_nothing() {
     let sb = Sandbox::new("concurrent-labels");
     let id = sb
@@ -575,6 +608,33 @@ fn every_write_reports_its_tx_and_at_reads_that_state_back() {
     assert_eq!(at(t1)["status"], "open");
     // A dry run writes nothing, so it has no tx.
     assert!(sb.json(&["create", "x", "--dry-run"])["tx"].is_null());
+}
+
+#[test]
+fn version_where_and_info_describe_the_ledger_without_creating_it() {
+    let sb = Sandbox::new("about");
+    let v = sb.json(&["version"]);
+    assert_eq!(v["version"], env!("CARGO_PKG_VERSION"));
+    assert!(
+        v["commit"].is_null(),
+        "not embedded, so null rather than guessed"
+    );
+    assert_eq!(
+        sb.ok(&["version", "--short"]).trim(),
+        env!("CARGO_PKG_VERSION")
+    );
+    // where reads configuration only: no store and no project id appear.
+    let w = sb.json(&["where"]);
+    assert_eq!(w["mode"], "local");
+    assert!(w["database_path"].as_str().unwrap().ends_with("seeds.db"));
+    assert!(!sb.work().join(".seeds/project-id").exists());
+    assert!(!sb.work().join(".seeds/seeds.db").exists());
+    sb.json(&["create", "a"]);
+    let i = sb.json(&["info"]);
+    assert_eq!(i["issue_count"], 1);
+    assert_eq!(i["mode"], "local");
+    assert!(i["tx"].as_u64().unwrap() > 0);
+    assert!(i["db_size"].as_u64().unwrap() > 0);
 }
 
 #[test]

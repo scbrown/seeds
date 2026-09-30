@@ -66,6 +66,8 @@ pub enum Command {
     Blocked(BlockedArgs),
     /// List seeds not updated for --days days (default 30), oldest first
     Stale(StaleArgs),
+    /// Summary counts (by status, ready, lead time) with optional breakdowns
+    Stats(StatsArgs),
     /// Count seeds (open ones by default)
     Count(CountArgs),
     /// Update fields on one or more seeds
@@ -78,6 +80,11 @@ pub enum Command {
     Defer(DeferArgs),
     /// Undefer seeds: back to open, defer date cleared
     Undefer(UndeferArgs),
+    /// Epic progress and closing
+    Epic {
+        #[command(subcommand)]
+        command: EpicCommand,
+    },
     /// Manage dependencies
     Dep {
         #[command(subcommand)]
@@ -95,6 +102,12 @@ pub enum Command {
     },
     /// Print a shell completion script (bash, zsh, fish, powershell, elvish)
     Completions(CompletionsArgs),
+    /// Print the version (and how this build was made)
+    Version(VersionArgs),
+    /// Show where the ledger lives: store file or server, graph, prefix, pendant
+    Where,
+    /// Show the ledger's location, mode and size
+    Info,
     /// Write the ledger as a pendant (quipu's share files) to a directory
     Export(ExportArgs),
     /// Read a pendant into the configured store; conflicts are reported, never
@@ -127,6 +140,14 @@ pub struct CompletionsArgs {
     /// Write `<dir>/<file>` for the shell instead of printing to stdout
     #[arg(short, long, value_name = "DIR")]
     pub output: Option<String>,
+}
+
+/// `sd version`.
+#[derive(Debug, Args)]
+pub struct VersionArgs {
+    /// Print only the version number (for scripts)
+    #[arg(short, long)]
+    pub short: bool,
 }
 
 /// `sd export`.
@@ -345,6 +366,23 @@ pub struct StaleArgs {
     pub status: Vec<String>,
 }
 
+/// `sd stats`.
+#[derive(Debug, Args)]
+pub struct StatsArgs {
+    /// Add a breakdown by issue type
+    #[arg(long)]
+    pub by_type: bool,
+    /// Add a breakdown by priority
+    #[arg(long)]
+    pub by_priority: bool,
+    /// Add a breakdown by assignee
+    #[arg(long)]
+    pub by_assignee: bool,
+    /// Add a breakdown by label
+    #[arg(long)]
+    pub by_label: bool,
+}
+
 /// `sd count`.
 #[derive(Debug, Args)]
 pub struct CountArgs {
@@ -416,6 +454,10 @@ pub struct CloseArgs {
     /// Why: what landed and how you know. Closing without one warns.
     #[arg(short, long)]
     pub reason: Option<String>,
+    /// How it ended: done (default), abandoned, superseded or failed. Stored
+    /// as a field, so a workflow can branch on it without parsing the reason
+    #[arg(long, value_name = "OUTCOME")]
+    pub outcome: Option<String>,
     /// Close even if the seed still has open blockers
     #[arg(short, long)]
     pub force: bool,
@@ -450,6 +492,23 @@ pub struct UndeferArgs {
     /// Seed id(s)
     #[arg(required = true)]
     pub ids: Vec<String>,
+}
+
+/// `sd epic ...`.
+#[derive(Debug, Subcommand)]
+pub enum EpicCommand {
+    /// Every epic that is not closed, with child progress and eligibility
+    Status {
+        /// Only epics whose children are all closed
+        #[arg(long)]
+        eligible_only: bool,
+    },
+    /// Close every epic whose children are all closed
+    CloseEligible {
+        /// List what would be closed without writing
+        #[arg(long)]
+        dry_run: bool,
+    },
 }
 
 /// `sd dep ...`.
@@ -576,6 +635,9 @@ impl Command {
             | Command::Defer(_)
             | Command::Undefer(_) => true,
             Command::Dep { command } => !matches!(command, DepCommand::List { .. }),
+            Command::Epic { command } => {
+                matches!(command, EpicCommand::CloseEligible { dry_run: false })
+            }
             Command::Comments { command } => matches!(command, CommentsCommand::Add { .. }),
             Command::Label { command } => matches!(
                 command,
@@ -586,11 +648,15 @@ impl Command {
             Command::Import(_) | Command::Sync(_) | Command::MergeDriver(_) => true,
             Command::Export(_)
             | Command::Completions(_)
+            | Command::Version(_)
+            | Command::Where
+            | Command::Info
             | Command::Show(_)
             | Command::List(_)
             | Command::Ready(_)
             | Command::Blocked(_)
             | Command::Stale(_)
+            | Command::Stats(_)
             | Command::Search(_)
             | Command::Count(_) => false,
         }
@@ -605,6 +671,7 @@ impl Command {
             Command::Ready(_) => "ready",
             Command::Blocked(_) => "blocked",
             Command::Stale(_) => "stale",
+            Command::Stats(_) => "stats",
             Command::Search(_) => "search",
             Command::Count(_) => "count",
             Command::Update(_) => "update",
@@ -612,6 +679,10 @@ impl Command {
             Command::Reopen(_) => "reopen",
             Command::Defer(_) => "defer",
             Command::Undefer(_) => "undefer",
+            Command::Epic { command } => match command {
+                EpicCommand::Status { .. } => "epic status",
+                EpicCommand::CloseEligible { .. } => "epic close-eligible",
+            },
             Command::Dep { command } => match command {
                 DepCommand::Add { .. } => "dep add",
                 DepCommand::Remove { .. } => "dep remove",
@@ -629,6 +700,9 @@ impl Command {
                 LabelCommand::Rename { .. } => "label rename",
             },
             Command::Completions(_) => "completions",
+            Command::Version(_) => "version",
+            Command::Where => "where",
+            Command::Info => "info",
             Command::Export(_) => "export",
             Command::Import(_) => "import",
             Command::Sync(_) => "sync",
@@ -648,6 +722,7 @@ mod tests {
         (&["list", "--status", "open", "--limit", "0"], "list", false),
         (&["ready", "--json", "--limit", "5"], "ready", false),
         (&["count", "--by", "status"], "count", false),
+        (&["stats", "--by-type", "--by-label"], "stats", false),
         (
             &["stale", "--days", "7", "--status", "open,in_progress"],
             "stale",
@@ -671,6 +746,13 @@ mod tests {
         (&["defer", "s-1", "s-2", "--until", "+1d"], "defer", true),
         (&["undefer", "s-1"], "undefer", true),
         (&["dep", "add", "s-1", "s-2"], "dep add", true),
+        (&["epic", "status", "--eligible-only"], "epic status", false),
+        (&["epic", "close-eligible"], "epic close-eligible", true),
+        (
+            &["epic", "close-eligible", "--dry-run"],
+            "epic close-eligible",
+            false,
+        ),
         (
             &["dep", "remove", "s-1", "s-2", "-t", "related"],
             "dep remove",
@@ -695,7 +777,10 @@ mod tests {
         (&["label", "list-all"], "label list-all", false),
         (&["label", "rename", "a", "b"], "label rename", true),
         (&["export", "--to", "p"], "export", false),
+        (&["version", "--short"], "version", false),
         (&["completions", "bash"], "completions", false),
+        (&["where"], "where", false),
+        (&["info"], "info", false),
         (&["import", "p", "--prefer", "store"], "import", true),
         (&["sync"], "sync", true),
         (&["merge-driver", "o", "a", "b"], "merge-driver", true),
