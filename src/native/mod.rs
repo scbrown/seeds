@@ -751,6 +751,18 @@ fn dispatch(cli: &Cli, ctx: &Ctx, b: &mut dyn Backend) -> Result<Outcome> {
                 .join("\n");
             Ok(ok(json, output::seeds_json(&seeds), text, warnings))
         }
+        Command::Reopen(a) => {
+            let r = engine::reopen(b, ctx, &a.ids, a.reason.as_deref())?;
+            Ok(transitions(json, "reopened", "reopened", r))
+        }
+        Command::Defer(a) => {
+            let r = engine::defer(b, ctx, &a.ids, a.until.as_deref())?;
+            Ok(transitions(json, "deferred", "deferred", r))
+        }
+        Command::Undefer(a) => {
+            let r = engine::undefer(b, ctx, &a.ids)?;
+            Ok(transitions(json, "undeferred", "undeferred", r))
+        }
         Command::Dep { command } => match command {
             DepCommand::Add {
                 issue,
@@ -862,6 +874,53 @@ fn dispatch(cli: &Cli, ctx: &Ctx, b: &mut dyn Backend) -> Result<Outcome> {
             }
         },
     }
+}
+
+/// br's envelope for reopen/defer/undefer: `{"<key>": [...], "skipped": [...]}`
+/// (`skipped` only when non-empty), plus the transaction.
+fn transitions(json: bool, key: &str, verb: &str, r: engine::Transitions) -> Outcome {
+    let (done, skipped, tx) = r;
+    let rows: Vec<Json> = done
+        .iter()
+        .map(|t| {
+            let mut o = serde_json::json!({"id": t.seed.id, "title": t.seed.title,
+                                           "previous_status": t.previous_status,
+                                           "status": t.seed.status});
+            if let Some(d) = &t.seed.defer_until {
+                o["defer_until"] = serde_json::json!(d);
+            }
+            o
+        })
+        .collect();
+    let mut value = serde_json::json!({ key: rows, "tx": tx });
+    if !skipped.is_empty() {
+        value["skipped"] = skipped
+            .iter()
+            .map(|s| serde_json::json!({"id": s.id, "reason": s.reason}))
+            .collect();
+    }
+    let mut lines: Vec<String> = done
+        .iter()
+        .map(|t| {
+            let until = t
+                .seed
+                .defer_until
+                .as_deref()
+                .map(|d| format!(" until {d}"))
+                .unwrap_or_default();
+            format!(
+                "{verb} {}{until}{}",
+                output::seed_line(&t.seed),
+                tx_note(tx)
+            )
+        })
+        .collect();
+    lines.extend(
+        skipped
+            .iter()
+            .map(|s| format!("skipped {}: {}", s.id, s.reason)),
+    );
+    ok(json, value, lines.join("\n"), vec![])
 }
 
 fn label(

@@ -67,6 +67,12 @@ pub enum Command {
     Update(UpdateArgs),
     /// Close one or more seeds
     Close(CloseArgs),
+    /// Reopen closed seeds
+    Reopen(ReopenArgs),
+    /// Defer seeds: status deferred, hidden from ready until a date
+    Defer(DeferArgs),
+    /// Undefer seeds: back to open, defer date cleared
+    Undefer(UndeferArgs),
     /// Manage dependencies
     Dep {
         #[command(subcommand)]
@@ -344,6 +350,37 @@ pub struct CloseArgs {
     pub force: bool,
 }
 
+/// `sd reopen`.
+#[derive(Debug, Args)]
+pub struct ReopenArgs {
+    /// Seed id(s)
+    #[arg(required = true)]
+    pub ids: Vec<String>,
+    /// Why (stored as the comment "Reopened: <reason>")
+    #[arg(short, long)]
+    pub reason: Option<String>,
+}
+
+/// `sd defer`.
+#[derive(Debug, Args)]
+pub struct DeferArgs {
+    /// Seed id(s)
+    #[arg(required = true)]
+    pub ids: Vec<String>,
+    /// Until when: +30m, +2h, +1d, +1w, tomorrow, YYYY-MM-DD or an RFC 3339
+    /// instant (none: deferred with no date)
+    #[arg(long)]
+    pub until: Option<String>,
+}
+
+/// `sd undefer`.
+#[derive(Debug, Args)]
+pub struct UndeferArgs {
+    /// Seed id(s)
+    #[arg(required = true)]
+    pub ids: Vec<String>,
+}
+
 /// `sd dep ...`.
 #[derive(Debug, Subcommand)]
 pub enum DepCommand {
@@ -461,7 +498,12 @@ impl Command {
     /// Whether the verb writes (and so takes the store's write lock).
     pub fn writes(&self) -> bool {
         match self {
-            Command::Create(_) | Command::Update(_) | Command::Close(_) => true,
+            Command::Create(_)
+            | Command::Update(_)
+            | Command::Close(_)
+            | Command::Reopen(_)
+            | Command::Defer(_)
+            | Command::Undefer(_) => true,
             Command::Dep { command } => !matches!(command, DepCommand::List { .. }),
             Command::Comments { command } => matches!(command, CommentsCommand::Add { .. }),
             Command::Label { command } => matches!(
@@ -491,6 +533,9 @@ impl Command {
             Command::Count(_) => "count",
             Command::Update(_) => "update",
             Command::Close(_) => "close",
+            Command::Reopen(_) => "reopen",
+            Command::Defer(_) => "defer",
+            Command::Undefer(_) => "undefer",
             Command::Dep { command } => match command {
                 DepCommand::Add { .. } => "dep add",
                 DepCommand::Remove { .. } => "dep remove",
@@ -535,6 +580,9 @@ mod tests {
         ),
         (&["update", "s-1", "--claim", "--json"], "update", true),
         (&["close", "s-1", "--reason", "done"], "close", true),
+        (&["reopen", "s-1", "-r", "not done"], "reopen", true),
+        (&["defer", "s-1", "s-2", "--until", "+1d"], "defer", true),
+        (&["undefer", "s-1"], "undefer", true),
         (&["dep", "add", "s-1", "s-2"], "dep add", true),
         (
             &["dep", "remove", "s-1", "s-2", "-t", "related"],
