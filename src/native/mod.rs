@@ -192,6 +192,7 @@ fn run_remote(cli: &Cli, cfg: &Resolved, ctx: &Ctx, url: &str) -> Result<Outcome
         url,
         cfg.graph(),
         token(cfg, url, cfg.location_from_project)?,
+        &cfg.allow_plain_http_hosts,
     )?;
     match &cli.command {
         Command::Export(a) => {
@@ -411,8 +412,12 @@ fn run_sync(
         notes.extend(store::hydrate(&mut h.backend, path, dir, ctx)?);
     }
     let from_project = a.remote.is_none() && cfg.sync_remote_from_project;
-    let mut remote =
-        remote::RemoteBackend::connect(&url, cfg.graph(), token(cfg, &url, from_project)?)?;
+    let mut remote = remote::RemoteBackend::connect(
+        &url,
+        cfg.graph(),
+        token(cfg, &url, from_project)?,
+        &cfg.allow_plain_http_hosts,
+    )?;
     let base_path = store::sync_base_path(path, &url, cfg.graph());
     let base = match std::fs::read_to_string(&base_path) {
         Ok(nt) => {

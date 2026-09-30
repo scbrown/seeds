@@ -106,6 +106,11 @@ pub struct QuipuSection {
     /// PROJECT file (user-level config only). A URL you set yourself (flag,
     /// environment, user file) is trusted without this.
     pub trusted_hosts: Option<Vec<String>>,
+    /// Hosts the token may be sent to over plain `http://` (user-level config
+    /// only). By default a token goes only over https or to localhost; this
+    /// is the opt-in for a server on a trusted network that has no TLS.
+    /// Matched exactly (host, or host:port), never by suffix.
+    pub allow_plain_http_hosts: Option<Vec<String>>,
 }
 
 /// `[project]`.
@@ -147,6 +152,8 @@ pub struct Resolved {
     pub sync_remote_from_project: bool,
     /// Hosts the user allows the token to go to for project-chosen URLs.
     pub trusted_hosts: Vec<String>,
+    /// Hosts the user allows the token to reach over plain http.
+    pub allow_plain_http_hosts: Vec<String>,
     /// The repo-local pendant directory, when one is configured (mode 1).
     pub pendant: Option<PathBuf>,
     /// The remote `sd sync` exchanges with (mode 3).
@@ -370,10 +377,14 @@ pub fn resolve(inputs: &Inputs) -> Result<Resolved> {
         )));
     }
     if let Some(p) = &project {
-        if p.quipu.token_file.is_some() || p.quipu.trusted_hosts.is_some() {
+        if p.quipu.token_file.is_some()
+            || p.quipu.trusted_hosts.is_some()
+            || p.quipu.allow_plain_http_hosts.is_some()
+        {
             return Err(config_error(format!(
-                "{} sets [quipu] token_file or trusted_hosts; only your user config \
-                 (~/.config/seeds/config.toml) or SEEDS_QUIPU_TOKEN_FILE may, because a \
+                "{} sets [quipu] token_file, trusted_hosts or allow_plain_http_hosts; only your \
+                 user config \
+(~/.config/seeds/config.toml) or SEEDS_QUIPU_TOKEN_FILE may, because a \
                  cloned repository could otherwise send your token to a server it chose",
                 project_file
                     .as_ref()
@@ -431,6 +442,10 @@ pub fn resolve(inputs: &Inputs) -> Result<Resolved> {
         .as_ref()
         .and_then(|c| c.quipu.trusted_hosts.clone())
         .unwrap_or_default();
+    let allow_plain_http_hosts = user
+        .as_ref()
+        .and_then(|c| c.quipu.allow_plain_http_hosts.clone())
+        .unwrap_or_default();
     Ok(Resolved {
         location,
         location_source,
@@ -440,6 +455,7 @@ pub fn resolve(inputs: &Inputs) -> Result<Resolved> {
         location_from_project,
         sync_remote_from_project,
         trusted_hosts,
+        allow_plain_http_hosts,
         pendant,
         sync_remote,
         token: inputs.env_token.clone(),
@@ -786,6 +802,31 @@ mod tests {
         let sb = Sandbox::new("trusted-project");
         sb.project_toml("[quipu]\ntrusted_hosts = [\"evil.example.org\"]\n");
         assert_eq!(resolve(&sb.inputs()).unwrap_err().kind, ErrorKind::Config);
+        let sb = Sandbox::new("plain-http-project");
+        sb.project_toml("[quipu]\nallow_plain_http_hosts = [\"evil.example.org\"]\n");
+        let e = resolve(&sb.inputs()).unwrap_err();
+        assert_eq!(e.kind, ErrorKind::Config);
+        assert!(
+            e.message.contains("allow_plain_http_hosts"),
+            "{}",
+            e.message
+        );
+    }
+
+    #[test]
+    fn plain_http_hosts_come_only_from_the_user_config() {
+        let sb = Sandbox::new("plain-http-user");
+        sb.user_toml("[quipu]\nallow_plain_http_hosts = [\"quipu.internal.example\"]\n");
+        let r = resolve(&sb.inputs()).unwrap();
+        assert_eq!(
+            r.allow_plain_http_hosts,
+            vec!["quipu.internal.example".to_string()]
+        );
+        let sb = Sandbox::new("plain-http-none");
+        assert!(resolve(&sb.inputs())
+            .unwrap()
+            .allow_plain_http_hosts
+            .is_empty());
     }
 
     #[test]

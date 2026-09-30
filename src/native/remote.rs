@@ -76,13 +76,21 @@ fn status_error(what: &str, code: u16, body: &str) -> SdError {
 
 impl RemoteBackend {
     /// Connect to the quipu server at `base` (checked with `GET /health`).
-    pub fn connect(base: &str, graph: &str, token: Option<String>) -> Result<Self> {
-        if token.is_some() && !secure_enough(base) {
+    /// `plain_http_ok` is the user's `allow_plain_http_hosts`: hosts a token
+    /// may reach over plain http.
+    pub fn connect(
+        base: &str,
+        graph: &str,
+        token: Option<String>,
+        plain_http_ok: &[String],
+    ) -> Result<Self> {
+        if token.is_some() && !secure_enough(base) && !plain_http_allowed(base, plain_http_ok) {
             return Err(SdError::new(
                 ErrorKind::Config,
                 format!(
                     "refusing to send a bearer token to {base} over plain http; use https (or a \
-                     localhost server)"
+                     localhost server), or, if you trust the network path to it, add its host to \
+                     [quipu] allow_plain_http_hosts in ~/.config/seeds/config.toml"
                 ),
             ));
         }
@@ -262,6 +270,43 @@ impl RemoteBackend {
         self.graph_registered = true;
         Ok(())
     }
+}
+
+/// The host of an `http://` URL, lowercased: `(host:port, host)`. `None` for
+/// any other scheme.
+fn plain_http_host(url: &str) -> Option<(String, String)> {
+    let u = url.trim().to_ascii_lowercase();
+    let rest = u.strip_prefix("http://")?;
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or_default();
+    let authority = authority
+        .rsplit('@')
+        .next()
+        .unwrap_or(authority)
+        .to_string();
+    let bare = if authority.starts_with('[') {
+        authority
+            .split(']')
+            .next()
+            .map(|h| format!("{h}]"))
+            .unwrap_or_default()
+    } else {
+        authority.split(':').next().unwrap_or_default().to_string()
+    };
+    Some((authority, bare))
+}
+
+/// Whether the user allowed a token to reach `url` over plain http: its host
+/// (or host:port) is listed EXACTLY in `allowed`. Never a suffix match, so
+/// `quipu.internal.example` does not admit `quipu.internal.example.evil.example.org`.
+pub fn plain_http_allowed(url: &str, allowed: &[String]) -> bool {
+    let Some((authority, bare)) = plain_http_host(url) else {
+        return false;
+    };
+    !bare.is_empty()
+        && allowed
+            .iter()
+            .map(|a| a.trim())
+            .any(|a| a.eq_ignore_ascii_case(&authority) || a.eq_ignore_ascii_case(&bare))
 }
 
 /// Whether a bearer may be sent to `url`: https anywhere, http only to this
@@ -566,7 +611,60 @@ mod tests {
         assert!(!secure_enough("http://quipu.example.org"));
         assert!(!secure_enough("http://localhost.evil.example.org"));
         assert!(!secure_enough("http://user@quipu.example.org"));
-        let e = RemoteBackend::connect("http://quipu.example.org", "urn:g", Some("t".into()))
+        let e = RemoteBackend::connect("http://quipu.example.org", "urn:g", Some("t".into()), &[])
+            .err()
+            .unwrap();
+        assert_eq!(e.kind, ErrorKind::Config);
+        assert!(
+            e.message.contains("allow_plain_http_hosts"),
+            "{}",
+            e.message
+        );
+    }
+
+    #[test]
+    fn plain_http_is_allowed_only_to_exactly_listed_hosts() {
+        let ok = vec![
+            "quipu.internal.example".to_string(),
+            "lan.example.org:8080".to_string(),
+        ];
+        assert!(plain_http_allowed("http://quipu.internal.example", &ok));
+        assert!(plain_http_allowed("http://QUIPU.internal.example/x", &ok));
+        assert!(plain_http_allowed("http://quipu.internal.example:80/", &ok));
+        assert!(plain_http_allowed("http://lan.example.org:8080/q", &ok));
+        // host:port entries admit only that port
+        assert!(!plain_http_allowed("http://lan.example.org:9090", &ok));
+        assert!(!plain_http_allowed("http://lan.example.org", &ok));
+        // never a suffix or prefix match
+        assert!(!plain_http_allowed(
+            "http://quipu.internal.example.evil.example.org",
+            &ok
+        ));
+        assert!(!plain_http_allowed(
+            "http://evilquipu.internal.example",
+            &ok
+        ));
+        // userinfo cannot smuggle a listed host
+        assert!(!plain_http_allowed(
+            "http://quipu.internal.example@evil.example.org",
+            &ok
+        ));
+        assert!(!plain_http_allowed("http://other.example.org", &ok));
+        assert!(!plain_http_allowed("http://quipu.internal.example", &[]));
+        // not an http URL: this allowance is not what decides
+        assert!(!plain_http_allowed("ftp://quipu.internal.example", &ok));
+    }
+
+    #[test]
+    fn a_listed_host_passes_the_token_check_and_an_unlisted_one_is_refused() {
+        // Port 9 on the loopback-free TEST-NET: the token check runs first, so
+        // a refusal is Config and a pass reaches the health check (Unreachable).
+        let ok = vec!["192.0.2.1:9".to_string()];
+        let e = RemoteBackend::connect("http://192.0.2.1:9", "urn:g", Some("t".into()), &ok)
+            .err()
+            .unwrap();
+        assert_ne!(e.kind, ErrorKind::Config, "{}", e.message);
+        let e = RemoteBackend::connect("http://192.0.2.2:9", "urn:g", Some("t".into()), &ok)
             .err()
             .unwrap();
         assert_eq!(e.kind, ErrorKind::Config);
