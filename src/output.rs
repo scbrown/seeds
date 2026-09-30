@@ -2,7 +2,8 @@
 //!
 //! The JSON shapes follow br's, key for key, with two additions: every seed
 //! object carries `revision` (the compare-and-set token) and `dependency_count`,
-//! and `dep add`/`dep remove` carry the transaction id as `tx`. Every
+//! and every write's output carries the transaction id as `tx` (on the object,
+//! or on each seed of a bare array) so a script can pass it to `--at`. Every
 //! documented key is always present; absent values are `null`, never a missing
 //! key. `tests/json_schema.rs` pins the key sets.
 
@@ -50,6 +51,24 @@ pub fn list_json(p: &Page) -> Json {
         "offset": 0,
         "has_more": p.has_more,
     })
+}
+
+/// Stamp a write's transaction on its `--json` output: on an object, or on each
+/// object of a bare array (br's shape for update/close stays an array).
+pub fn with_tx(mut value: Json, tx: Option<u64>) -> Json {
+    let tx = json!(tx);
+    match &mut value {
+        Json::Object(o) => {
+            o.insert("tx".into(), tx);
+        }
+        Json::Array(items) => {
+            for item in items.iter_mut().filter_map(Json::as_object_mut) {
+                item.insert("tx".into(), tx.clone());
+            }
+        }
+        _ => {}
+    }
+    value
 }
 
 /// `blocked --json`: the list envelope; each seed also carries br's

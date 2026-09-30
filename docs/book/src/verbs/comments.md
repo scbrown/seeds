@@ -12,4 +12,4 @@ else the actor. Comments are append-only and numbered 1, 2, 3 per seed; the
 number is the comment's `id`.
 
 **`--json`**: one comment (add) or an array (list), each `{id, issue_id,
-author, text, created_at}`.
+author, text, created_at}`; `add` also carries `tx`.

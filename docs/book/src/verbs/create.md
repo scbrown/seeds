@@ -28,7 +28,8 @@ title, the creation instant and an attempt counter. A collision tries the next
 attempt, and the hash grows by one character every four collisions, so ids stay
 short and unique. No randomness is involved.
 
-**`--json`**: the new seed object (the keys under [list](list.md)).
+**`--json`**: the new seed object (the keys under [list](list.md)) plus `tx`
+(`null` for `--dry-run`).
 
 **Exit codes**: 0; 2 for a bad flag value; 3 when `--parent` or a `--deps`
 target does not exist; 5 when the shapes refuse the write.
