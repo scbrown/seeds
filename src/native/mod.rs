@@ -20,7 +20,7 @@ use crate::output;
 use crate::pendant;
 use crate::quipu_backend::QuipuBackend;
 use crate::sync;
-use cli::{Cli, Command, CommentsCommand, DepCommand, LabelCommand};
+use cli::{Cli, Command, CommentsCommand, DepCommand, EpicCommand, LabelCommand};
 use config::{Location, Resolved};
 
 /// What a run produced: the exit code and the two streams.
@@ -841,6 +841,50 @@ fn dispatch(cli: &Cli, ctx: &Ctx, b: &mut dyn Backend) -> Result<Outcome> {
             let r = engine::undefer(b, ctx, &a.ids)?;
             Ok(transitions(json, "undeferred", "undeferred", r))
         }
+        Command::Epic { command } => match command {
+            EpicCommand::Status { eligible_only } => {
+                let rows = engine::epic_status(b, *eligible_only, at)?;
+                Ok(ok(
+                    json,
+                    epic_rows_json(&rows),
+                    epic_rows_text(&rows),
+                    vec![],
+                ))
+            }
+            EpicCommand::CloseEligible { dry_run: true } => {
+                let rows = engine::epic_status(b, true, at)?;
+                Ok(ok(
+                    json,
+                    epic_rows_json(&rows),
+                    epic_rows_text(&rows),
+                    vec![],
+                ))
+            }
+            EpicCommand::CloseEligible { dry_run: false } => {
+                let (closed, skipped, tx) = engine::epic_close_eligible(b, ctx)?;
+                let ids: Vec<&str> = closed.iter().map(|s| s.id.as_str()).collect();
+                let mut value = serde_json::json!({"closed": ids, "count": ids.len(), "tx": tx});
+                if !skipped.is_empty() {
+                    value["skipped"] = skipped
+                        .iter()
+                        .map(|s| serde_json::json!({"id": s.id, "reason": s.reason}))
+                        .collect();
+                }
+                let mut lines: Vec<String> = closed
+                    .iter()
+                    .map(|s| format!("closed {}{}", output::seed_line(s), tx_note(tx)))
+                    .collect();
+                lines.extend(
+                    skipped
+                        .iter()
+                        .map(|s| format!("skipped {}: {}", s.id, s.reason)),
+                );
+                if lines.is_empty() {
+                    lines.push("no epics are eligible to close".into());
+                }
+                Ok(ok(json, value, lines.join("\n"), vec![]))
+            }
+        },
         Command::Dep { command } => match command {
             DepCommand::Add {
                 issue,
@@ -1004,6 +1048,42 @@ fn transitions(json: bool, key: &str, verb: &str, r: engine::Transitions) -> Out
             .map(|s| format!("skipped {}: {}", s.id, s.reason)),
     );
     ok(json, value, lines.join("\n"), vec![])
+}
+
+/// `epic status --json`: br's array of `{epic, total_children,
+/// closed_children, eligible_for_close}`.
+fn epic_rows_json(rows: &[engine::EpicStatus]) -> Json {
+    Json::Array(
+        rows.iter()
+            .map(|r| {
+                serde_json::json!({"epic": r.epic.to_json(), "total_children": r.total_children,
+                                   "closed_children": r.closed_children,
+                                   "eligible_for_close": r.eligible_for_close})
+            })
+            .collect(),
+    )
+}
+
+fn epic_rows_text(rows: &[engine::EpicStatus]) -> String {
+    if rows.is_empty() {
+        return "no open epics".to_string();
+    }
+    rows.iter()
+        .map(|r| {
+            format!(
+                "{}  {}/{} children closed{}",
+                output::seed_line(&r.epic),
+                r.closed_children,
+                r.total_children,
+                if r.eligible_for_close {
+                    " · eligible to close"
+                } else {
+                    ""
+                }
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 fn label(

@@ -592,6 +592,78 @@ pub fn stats(b: &dyn Backend, ctx: &Ctx, req: StatsReq, at: Option<u64>) -> Resu
     })
 }
 
+/// One epic's progress, as `sd epic status` reports it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EpicStatus {
+    /// The epic.
+    pub epic: Seed,
+    /// Its children (seeds whose parent it is).
+    pub total_children: usize,
+    /// How many of them are closed.
+    pub closed_children: usize,
+    /// Every child closed, and at least one child (br).
+    pub eligible_for_close: bool,
+}
+
+/// `sd epic status`: every epic that is not closed, with child progress.
+pub fn epic_status(
+    b: &dyn Backend,
+    eligible_only: bool,
+    at: Option<u64>,
+) -> Result<Vec<EpicStatus>> {
+    let snap = b.snapshot(at)?;
+    let mut out = Vec::new();
+    for e in snap
+        .seeds
+        .values()
+        .filter(|e| e.issue_type == "epic" && e.status != "closed")
+    {
+        let kids: Vec<&Seed> = snap
+            .seeds
+            .values()
+            .filter(|c| c.parent.as_deref() == Some(e.id.as_str()))
+            .collect();
+        let closed = kids.iter().filter(|c| c.status == "closed").count();
+        let eligible = !kids.is_empty() && closed == kids.len();
+        if eligible || !eligible_only {
+            out.push(EpicStatus {
+                epic: e.clone(),
+                total_children: kids.len(),
+                closed_children: closed,
+                eligible_for_close: eligible,
+            });
+        }
+    }
+    Ok(out)
+}
+
+/// `sd epic close-eligible`: close every eligible epic in one transaction with
+/// br's reason. An eligible epic that still has an open blocker of its own is
+/// left open and reported, never force-closed.
+pub fn epic_close_eligible(
+    b: &mut dyn Backend,
+    ctx: &Ctx,
+) -> Result<(Vec<Seed>, Vec<Skipped>, u64)> {
+    let snap = b.snapshot(None)?;
+    let (mut ids, mut skipped) = (Vec::new(), Vec::new());
+    for st in epic_status(b, true, None)? {
+        let blockers = snap.open_blockers(&st.epic);
+        if blockers.is_empty() {
+            ids.push(st.epic.id);
+        } else {
+            skipped.push(Skipped {
+                id: st.epic.id,
+                reason: format!("blocked by {}", blockers.join(", ")),
+            });
+        }
+    }
+    if ids.is_empty() {
+        return Ok((vec![], skipped, snap.tx));
+    }
+    let (closed, tx, _) = close(b, ctx, &ids, Some("All children completed"), false)?;
+    Ok((closed, skipped, tx))
+}
+
 /// `sd blocked`. Repeated types and priorities are alternatives; labels must
 /// all match (br's semantics).
 #[derive(Debug, Clone, Default)]
