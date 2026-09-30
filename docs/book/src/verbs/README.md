@@ -7,6 +7,7 @@
 | `list` | no | [list](list.md) |
 | `ready` | no | [ready](ready.md) |
 | `search` | no | [search](search.md) |
+| `stale` | no | [stale](stale.md) |
 | `count` | no | [count](count.md) |
 | `update` | yes | [update](update.md) |
 | `close` | yes | [close](close.md) |

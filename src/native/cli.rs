@@ -64,6 +64,8 @@ pub enum Command {
     /// List seeds that are not closed and have an open blocker (50 at a time,
     /// --limit 0 for all; the output says when it was cut short)
     Blocked(BlockedArgs),
+    /// List seeds not updated for --days days (default 30), oldest first
+    Stale(StaleArgs),
     /// Count seeds (open ones by default)
     Count(CountArgs),
     /// Update fields on one or more seeds
@@ -311,6 +313,17 @@ pub struct BlockedArgs {
     pub label: Vec<String>,
 }
 
+/// `sd stale`.
+#[derive(Debug, Args)]
+pub struct StaleArgs {
+    /// Minimum days since the last update
+    #[arg(long, default_value_t = 30)]
+    pub days: u32,
+    /// Only this status (repeatable or comma-separated; closed only if named)
+    #[arg(long)]
+    pub status: Vec<String>,
+}
+
 /// `sd count`.
 #[derive(Debug, Args)]
 pub struct CountArgs {
@@ -555,6 +568,7 @@ impl Command {
             | Command::List(_)
             | Command::Ready(_)
             | Command::Blocked(_)
+            | Command::Stale(_)
             | Command::Search(_)
             | Command::Count(_) => false,
         }
@@ -568,6 +582,7 @@ impl Command {
             Command::List(_) => "list",
             Command::Ready(_) => "ready",
             Command::Blocked(_) => "blocked",
+            Command::Stale(_) => "stale",
             Command::Search(_) => "search",
             Command::Count(_) => "count",
             Command::Update(_) => "update",
@@ -610,6 +625,11 @@ mod tests {
         (&["list", "--status", "open", "--limit", "0"], "list", false),
         (&["ready", "--json", "--limit", "5"], "ready", false),
         (&["count", "--by", "status"], "count", false),
+        (
+            &["stale", "--days", "7", "--status", "open,in_progress"],
+            "stale",
+            false,
+        ),
         (
             &["search", "lexer", "-a", "--limit", "0", "-l", "x"],
             "search",
