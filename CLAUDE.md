@@ -10,6 +10,10 @@ database. The command is `sd`; the project, repository and prose name are
 "seeds"; the crate is `seeds-ai`. Read `docs/book/src/why-facts.md` for the
 storage design before changing its scope.
 
+seeds tracks its own backlog in seeds: the ledger is the committed pendant in
+`.seeds/pendant/` (mode 1). Use `sd ready`, `sd create`, `sd close` in this repo
+and commit the pendant changes with the work that closes them.
+
 Sibling repos: scbrown/quipu (governed store), scbrown/camayoc (shapes and
 stored queries), scbrown/caboodle (installer and verify),
 scbrown/desire-path (the `bd` -> `sd` redirect), scbrown/yupana (code
