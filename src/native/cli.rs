@@ -844,6 +844,10 @@ pub struct CloseArgs {
     /// A comment committed with the change, in the same transaction
     #[arg(long)]
     pub transition_comment: Option<String>,
+    /// After closing, list the seeds this close unblocked (one id only; br's
+    /// --json shape then becomes {"closed": [...], "unblocked": [...]})
+    #[arg(long)]
+    pub suggest_next: bool,
 }
 
 /// `sd delete`.

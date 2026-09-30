@@ -1219,3 +1219,45 @@ fn delete_from_file_reads_ids_skipping_blanks_and_comments() {
     // No ids and no file at all is a usage error, as before.
     assert_eq!(code(&sb.run(&["delete"])), 2);
 }
+
+// br's close --suggest-next, measured on a br scratch store with this board:
+// closing the gate frees the seed that waited only on it, not the one that
+// also waits on something else; --json becomes {closed, unblocked}; more than
+// one id is refused.
+#[test]
+fn close_suggest_next_lists_only_seeds_the_close_fully_unblocked() {
+    let sb = Sandbox::new("suggest-next");
+    let id = |t: &str| sb.ok(&["create", t, "--silent"]).trim().to_string();
+    let (gate, other) = (id("gate"), id("other"));
+    let y = sb
+        .ok(&["create", "waits on gate", "--deps", &gate, "--silent"])
+        .trim()
+        .to_string();
+    let z = sb
+        .ok(&[
+            "create",
+            "waits on both",
+            "--deps",
+            &format!("{gate},{other}"),
+            "--silent",
+        ])
+        .trim()
+        .to_string();
+    let v = sb.json(&["close", &gate, "--suggest-next"]);
+    assert_eq!(v["closed"][0]["id"], gate.as_str());
+    let freed: Vec<&str> = v["unblocked"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|s| s["id"].as_str().unwrap())
+        .collect();
+    assert_eq!(freed, [y.as_str()], "z still waits on other");
+    assert!(!freed.contains(&z.as_str()));
+    let text = sb.ok(&["close", &other, "--suggest-next"]);
+    assert!(text.contains("unblocked 1:") && text.contains(&z), "{text}");
+    let a = id("a");
+    let b = id("b");
+    assert_eq!(code(&sb.run(&["close", &a, &b, "--suggest-next"])), 2);
+    // Without the flag the --json shape is unchanged: a bare array.
+    assert!(sb.json(&["close", &a]).is_array());
+}

@@ -2671,6 +2671,23 @@ pub struct DepRow {
     pub other: Option<Seed>,
 }
 
+/// Seeds that `id` was blocking and that now have no open blocker at all, as
+/// of the current state (br's `close --suggest-next`). A seed still blocked by
+/// something else is not listed.
+pub fn unblocked_by(b: &dyn Backend, id: &str) -> Result<Vec<Seed>> {
+    let snap = b.snapshot(None)?;
+    let mut out: Vec<Seed> = snap
+        .seeds
+        .values()
+        .filter(|s| s.blocked_on.contains(id))
+        .filter(|s| s.status != "closed" && !s.is_tombstone())
+        .filter(|s| snap.open_blockers(s).is_empty())
+        .cloned()
+        .collect();
+    sort_seeds(&mut out, Some("priority"))?;
+    Ok(out)
+}
+
 /// `sd dep list <id>`: what `id` depends on (`up == false`) or what depends
 /// on it (`up == true`), as of `at`.
 pub fn dep_list(b: &dyn Backend, id: &str, up: bool, at: Option<u64>) -> Result<Vec<DepRow>> {
