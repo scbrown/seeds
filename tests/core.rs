@@ -1937,3 +1937,51 @@ fn lint_reports_brs_template_sections_per_type() {
         1
     );
 }
+
+#[test]
+fn orphans_match_whole_ids_newest_commit_first_and_only_open_seeds() {
+    let mut b = backend();
+    let a = mk(&mut b, "a", 1);
+    let child = engine::create(
+        &mut b,
+        &ctx(2),
+        &CreateReq {
+            title: "child".into(),
+            parent: Some(a.clone()),
+            ..CreateReq::default()
+        },
+    )
+    .unwrap()
+    .0
+    .id;
+    let done = mk(&mut b, "done", 3);
+    engine::close(
+        &mut b,
+        &ctx(4),
+        std::slice::from_ref(&done),
+        Some("ok"),
+        false,
+    )
+    .unwrap();
+    let c = |h: &str, s: &str| (h.to_string(), s.to_string(), String::new());
+    let commits = vec![
+        c("new1", &format!("fix: finish {child}.")),
+        c("old1", &format!("wip ({a}); also {done}")),
+        c("old0", &format!("start {a}")),
+    ];
+    let found = engine::orphans(&b, &commits, None).unwrap();
+    let got: Vec<(String, String)> = found
+        .iter()
+        .map(|(s, c)| (s.id.clone(), c.0.clone()))
+        .collect();
+    // `child` (sd-x.1) does not also count as its parent; the parent's newest
+    // mention is old1; the closed seed is not an orphan.
+    let mut want = vec![
+        (a.clone(), "old1".to_string()),
+        (child.clone(), "new1".to_string()),
+    ];
+    want.sort();
+    let mut got_sorted = got.clone();
+    got_sorted.sort();
+    assert_eq!(got_sorted, want);
+}
