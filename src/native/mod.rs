@@ -2071,7 +2071,20 @@ fn dispatch(cli: &Cli, cfg: &Resolved, ctx: &Ctx, b: &mut dyn Backend) -> Result
             ))
         }
         Command::Delete(a) => {
-            let r = engine::delete(b, ctx, &a.ids, &a.reason, a.cascade, a.force, a.dry_run)?;
+            let mut ids = a.ids.clone();
+            if let Some(path) = &a.from_file {
+                ids.extend(
+                    read_text(path)?
+                        .lines()
+                        .map(|l| l.split('#').next().unwrap_or("").trim())
+                        .filter(|l| !l.is_empty())
+                        .map(str::to_string),
+                );
+            }
+            if ids.is_empty() {
+                return Err(SdError::usage("delete: no ids given (the --from-file file has none)"));
+            }
+            let r = engine::delete(b, ctx, &ids, &a.reason, a.cascade, a.force, a.dry_run)?;
             let value = if r.preview {
                 serde_json::json!({"preview": true, "would_delete": r.deleted,
                                    "cascade_delete": r.cascade,

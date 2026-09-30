@@ -1191,3 +1191,31 @@ fn blocked_detailed_lists_each_blocker_with_title_priority_and_status() {
     );
     assert_eq!(code(&sb.run(&["blocked", "--detailed", "--json"])), 2);
 }
+
+#[test]
+fn delete_from_file_reads_ids_skipping_blanks_and_comments() {
+    let sb = Sandbox::new("delete-from-file");
+    let a = sb.ok(&["create", "a", "--silent"]).trim().to_string();
+    let b = sb.ok(&["create", "b", "--silent"]).trim().to_string();
+    let keep = sb.ok(&["create", "keep", "--silent"]).trim().to_string();
+    let f = sb.root.join("ids.txt");
+    std::fs::write(&f, format!("# to delete\n{a}\n\n{b}  # trailing note\n")).unwrap();
+    sb.ok(&["delete", "--from-file", f.to_str().unwrap()]);
+    let left: Vec<String> = sb
+        .json(&["ready"])
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|s| s["id"].as_str().unwrap().to_string())
+        .collect();
+    assert_eq!(left, [keep], "a and b deleted, keep untouched");
+    // A file with no ids refuses instead of deleting nothing silently.
+    let empty = sb.root.join("empty.txt");
+    std::fs::write(&empty, "# nothing\n\n").unwrap();
+    assert_eq!(
+        code(&sb.run(&["delete", "--from-file", empty.to_str().unwrap()])),
+        2
+    );
+    // No ids and no file at all is a usage error, as before.
+    assert_eq!(code(&sb.run(&["delete"])), 2);
+}

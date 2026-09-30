@@ -850,8 +850,12 @@ pub struct CloseArgs {
 #[derive(Debug, Args)]
 pub struct DeleteArgs {
     /// Seed id(s)
-    #[arg(required = true)]
+    #[arg(required_unless_present = "from_file")]
     pub ids: Vec<String>,
+    /// Also read ids from this file (`-` for stdin): one per line; blank lines
+    /// and anything after `#` are ignored
+    #[arg(long, value_name = "PATH")]
+    pub from_file: Option<String>,
     /// Why (stored as the comment "Deleted: <reason>")
     #[arg(long, default_value = "delete")]
     pub reason: String,
