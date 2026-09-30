@@ -1258,6 +1258,62 @@ fn search_matches_id_title_description_and_comments_but_not_notes() {
     assert_eq!(err.kind, ErrorKind::Usage);
 }
 
+/// A backend whose FIRST commit is preceded by another writer's commit of
+/// the same batch: the race a keyed create must survive, made deterministic.
+/// The inner store's own compare-and-set is what refuses the second write.
+struct RacedBackend {
+    inner: QuipuBackend,
+    raced: bool,
+}
+
+impl Backend for RacedBackend {
+    fn snapshot(&self, at: Option<u64>) -> seeds::error::Result<seeds::model::Snapshot> {
+        self.inner.snapshot(at)
+    }
+    fn ready_ids(&self, at: Option<u64>) -> seeds::error::Result<Vec<String>> {
+        self.inner.ready_ids(at)
+    }
+    fn commit(&mut self, batch: &WriteBatch, ctx: &Ctx) -> seeds::error::Result<u64> {
+        if !self.raced {
+            self.raced = true;
+            self.inner.commit(batch, ctx)?; // the other writer wins
+        }
+        self.inner.commit(batch, ctx)
+    }
+}
+
+#[test]
+fn a_keyed_create_that_loses_the_race_returns_the_winners_seed() {
+    let req = CreateReq {
+        title: "raced".into(),
+        workflow_run: Some("r1".into()),
+        step: Some("s".into()),
+        ..CreateReq::default()
+    };
+    let mut b = RacedBackend {
+        inner: backend(),
+        raced: false,
+    };
+    let (seed, tx) = engine::create(&mut b, &ctx(1), &req).unwrap();
+    assert_eq!(tx, 0, "our write was refused; the seed is the winner's");
+    let snap = b.snapshot(None).unwrap();
+    assert_eq!(snap.seeds.len(), 1);
+    assert!(snap.seeds.contains_key(&seed.id));
+
+    // CONTROL: an UNKEYED create under the same race is not idempotent. It
+    // must surface the conflict, so the test above is not passing vacuously.
+    let mut b = RacedBackend {
+        inner: backend(),
+        raced: false,
+    };
+    let plain = CreateReq {
+        title: "raced".into(),
+        ..CreateReq::default()
+    };
+    let e = engine::create(&mut b, &ctx(1), &plain).unwrap_err();
+    assert_eq!(e.kind, ErrorKind::Conflict);
+}
+
 fn at_time(now: &str) -> Ctx {
     Ctx {
         now: now.into(),
@@ -1310,6 +1366,67 @@ fn stale_lists_untouched_non_closed_seeds_oldest_first() {
     );
     let err = engine::stale(&b, &now, 30, &["nope".into()], None).unwrap_err();
     assert_eq!(err.kind, ErrorKind::Usage);
+}
+
+#[test]
+fn stats_counts_statuses_ready_lead_time_epics_and_breakdowns() {
+    let mut b = backend();
+    let mk_at = |b: &mut QuipuBackend, t: &str, ty: &str, parent: Option<&str>, now: &str| {
+        engine::create(
+            b,
+            &at_time(now),
+            &CreateReq {
+                title: t.into(),
+                issue_type: Some(ty.into()),
+                parent: parent.map(str::to_string),
+                labels: if t == "a" { vec!["ops".into()] } else { vec![] },
+                ..CreateReq::default()
+            },
+        )
+        .unwrap()
+        .0
+        .id
+    };
+    let epic = mk_at(&mut b, "epic", "epic", None, "2026-09-01T00:00:00Z");
+    let child = mk_at(&mut b, "child", "task", Some(&epic), "2026-09-01T00:00:00Z");
+    let a = mk_at(&mut b, "a", "bug", None, "2026-09-01T00:00:00Z");
+    // Child closed 10h after creation: the epic becomes eligible, lead time 10h.
+    engine::close(
+        &mut b,
+        &at_time("2026-09-01T10:00:00Z"),
+        std::slice::from_ref(&child),
+        Some("done"),
+        false,
+    )
+    .unwrap();
+    let st = engine::stats(
+        &b,
+        &at_time("2026-09-02T00:00:00Z"),
+        engine::StatsReq {
+            by_type: true,
+            by_label: true,
+            ..engine::StatsReq::default()
+        },
+        None,
+    )
+    .unwrap();
+    assert_eq!((st.total, st.open, st.closed, st.ready), (3, 2, 1, 2));
+    assert_eq!(st.epics_eligible_for_closure, 1);
+    assert!((st.average_lead_time_hours - 10.0).abs() < 1e-9);
+    assert_eq!(st.breakdowns[0].0, "type");
+    assert_eq!(
+        st.breakdowns[0].1,
+        [
+            ("bug".to_string(), 1),
+            ("epic".to_string(), 1),
+            ("task".to_string(), 1)
+        ]
+    );
+    assert_eq!(
+        st.breakdowns[1].1,
+        [("(no labels)".to_string(), 2), ("ops".to_string(), 1)]
+    );
+    let _ = a;
 }
 
 #[test]

@@ -19,6 +19,7 @@
   - [ready](verbs/ready.md)
   - [search](verbs/search.md)
   - [stale](verbs/stale.md)
+  - [stats](verbs/stats.md)
   - [count](verbs/count.md)
   - [update](verbs/update.md)
   - [close](verbs/close.md)

@@ -66,6 +66,8 @@ pub enum Command {
     Blocked(BlockedArgs),
     /// List seeds not updated for --days days (default 30), oldest first
     Stale(StaleArgs),
+    /// Summary counts (by status, ready, lead time) with optional breakdowns
+    Stats(StatsArgs),
     /// Count seeds (open ones by default)
     Count(CountArgs),
     /// Update fields on one or more seeds
@@ -192,6 +194,15 @@ pub struct CreateArgs {
     /// a bare run id (becomes urn:shuttle:run:<id>)
     #[arg(long = "workflow-run", value_name = "RUN")]
     pub workflow_run: Option<String>,
+    /// The workflow step creating this seed (needs --workflow-run). The id is
+    /// derived from run, step and visit, so repeating the create returns the
+    /// same seed instead of a duplicate
+    #[arg(long, value_name = "STEP")]
+    pub step: Option<String>,
+    /// Which entry into --step this is, counting from 1 (default 1). A step the
+    /// run enters again gets a new seed
+    #[arg(long, value_name = "N")]
+    pub visit: Option<u32>,
     /// Print what would be created without writing it
     #[arg(long)]
     pub dry_run: bool,
@@ -329,6 +340,23 @@ pub struct StaleArgs {
     pub status: Vec<String>,
 }
 
+/// `sd stats`.
+#[derive(Debug, Args)]
+pub struct StatsArgs {
+    /// Add a breakdown by issue type
+    #[arg(long)]
+    pub by_type: bool,
+    /// Add a breakdown by priority
+    #[arg(long)]
+    pub by_priority: bool,
+    /// Add a breakdown by assignee
+    #[arg(long)]
+    pub by_assignee: bool,
+    /// Add a breakdown by label
+    #[arg(long)]
+    pub by_label: bool,
+}
+
 /// `sd count`.
 #[derive(Debug, Args)]
 pub struct CountArgs {
@@ -400,6 +428,10 @@ pub struct CloseArgs {
     /// Why: what landed and how you know. Closing without one warns.
     #[arg(short, long)]
     pub reason: Option<String>,
+    /// How it ended: done (default), abandoned, superseded or failed. Stored
+    /// as a field, so a workflow can branch on it without parsing the reason
+    #[arg(long, value_name = "OUTCOME")]
+    pub outcome: Option<String>,
     /// Close even if the seed still has open blockers
     #[arg(short, long)]
     pub force: bool,
@@ -594,6 +626,7 @@ impl Command {
             | Command::Ready(_)
             | Command::Blocked(_)
             | Command::Stale(_)
+            | Command::Stats(_)
             | Command::Search(_)
             | Command::Count(_) => false,
         }
@@ -608,6 +641,7 @@ impl Command {
             Command::Ready(_) => "ready",
             Command::Blocked(_) => "blocked",
             Command::Stale(_) => "stale",
+            Command::Stats(_) => "stats",
             Command::Search(_) => "search",
             Command::Count(_) => "count",
             Command::Update(_) => "update",
@@ -654,6 +688,7 @@ mod tests {
         (&["list", "--status", "open", "--limit", "0"], "list", false),
         (&["ready", "--json", "--limit", "5"], "ready", false),
         (&["count", "--by", "status"], "count", false),
+        (&["stats", "--by-type", "--by-label"], "stats", false),
         (
             &["stale", "--days", "7", "--status", "open,in_progress"],
             "stale",

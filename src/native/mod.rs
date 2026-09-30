@@ -600,6 +600,8 @@ fn dispatch(cli: &Cli, ctx: &Ctx, b: &mut dyn Backend) -> Result<Outcome> {
                 parent: a.parent.clone(),
                 deps: split_csv(&a.deps),
                 workflow_run: a.workflow_run.clone(),
+                step: a.step.clone(),
+                visit: a.visit,
                 dry_run: a.dry_run,
             };
             let (seed, tx) = engine::create(b, ctx, &req)?;
@@ -607,10 +609,17 @@ fn dispatch(cli: &Cli, ctx: &Ctx, b: &mut dyn Backend) -> Result<Outcome> {
                 seed.id.clone()
             } else if a.dry_run {
                 format!("would create {}", output::seed_line(&seed))
+            } else if tx == 0 {
+                format!(
+                    "exists {} (this run and step already created it)",
+                    output::seed_line(&seed)
+                )
             } else {
                 format!("created {}{}", output::seed_line(&seed), tx_note(tx))
             };
-            let tx = (!a.dry_run).then_some(tx);
+            // null when nothing was written: a dry run, or a keyed create whose
+            // seed already existed (tx 0 is not a transaction to pin with --at).
+            let tx = (!a.dry_run && tx != 0).then_some(tx);
             Ok(ok(json, output::with_tx(seed.to_json(), tx), text, vec![]))
         }
         Command::Show(a) => {
@@ -710,6 +719,21 @@ fn dispatch(cli: &Cli, ctx: &Ctx, b: &mut dyn Backend) -> Result<Outcome> {
                 vec![],
             ))
         }
+        Command::Stats(a) => {
+            let req = engine::StatsReq {
+                by_type: a.by_type,
+                by_priority: a.by_priority,
+                by_assignee: a.by_assignee,
+                by_label: a.by_label,
+            };
+            let st = engine::stats(b, ctx, req, at)?;
+            Ok(ok(
+                json,
+                output::stats_json(&st),
+                output::stats_text(&st),
+                vec![],
+            ))
+        }
         Command::Stale(a) => {
             let seeds = engine::stale(b, ctx, a.days, &a.status, at)?;
             let text = if seeds.is_empty() {
@@ -785,8 +809,14 @@ fn dispatch(cli: &Cli, ctx: &Ctx, b: &mut dyn Backend) -> Result<Outcome> {
             ))
         }
         Command::Close(a) => {
-            let (seeds, tx, warnings) =
-                engine::close(b, ctx, &a.ids, a.reason.as_deref(), a.force)?;
+            let (seeds, tx, warnings) = engine::close_as(
+                b,
+                ctx,
+                &a.ids,
+                a.reason.as_deref(),
+                a.outcome.as_deref(),
+                a.force,
+            )?;
             let text = seeds
                 .iter()
                 .map(|s| format!("closed {}{}", output::seed_line(s), tx_note(tx)))

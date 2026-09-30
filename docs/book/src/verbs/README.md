@@ -8,6 +8,7 @@
 | `ready` | no | [ready](ready.md) |
 | `search` | no | [search](search.md) |
 | `stale` | no | [stale](stale.md) |
+| `stats` | no | [stats](stats.md) |
 | `count` | no | [count](count.md) |
 | `update` | yes | [update](update.md) |
 | `close` | yes | [close](close.md) |
