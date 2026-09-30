@@ -21,6 +21,7 @@ STEPS = [
     ("ready", ["ready"]),
     ("count", ["count"]),
     ("stale", ["stale", "--days", "0"]),
+    ("stats", ["stats", "--by-type", "--by-priority", "--by-assignee", "--by-label"]),
     ("search", ["search", "parity"]),
     ("update", ["update", "{A}", "--status", "in_progress", "--assignee", "probe"]),
     ("dep add", ["dep", "add", "{B}", "{A}"]),
