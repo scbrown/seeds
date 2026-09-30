@@ -18,8 +18,8 @@ use clap::{Args, Parser, Subcommand};
                   a local store at .seeds/seeds.db, created on first write."
 )]
 pub struct Cli {
-    /// Output as JSON, in bd's output shape
-    #[arg(long, global = true)]
+    /// Output as JSON, in bd's output shape (--robot is br's alias for it)
+    #[arg(long, global = true, visible_alias = "robot")]
     pub json: bool,
 
     /// Actor name recorded on writes and used by --claim (default: $USER)
@@ -842,7 +842,7 @@ impl Cli {
                 | Command::Gate(a)
                 | Command::Scheduler(a)
                 | Command::Audit(a)
-                | Command::RobotDocs(a) => a.rest.iter().any(|r| r == "--json"),
+                | Command::RobotDocs(a) => a.rest.iter().any(|r| r == "--json" || r == "--robot"),
                 _ => false,
             }
     }
@@ -1155,6 +1155,15 @@ mod tests {
         );
         assert_eq!(split(&v(&["s-1"]), &None), None);
         assert_eq!(split(&[], &Some("l".into())), None);
+    }
+
+    #[test]
+    fn robot_is_an_alias_of_json_on_every_verb() {
+        for (args, _, _) in CASES {
+            let mut with: Vec<&str> = args.iter().copied().filter(|a| *a != "--json").collect();
+            with.push("--robot");
+            assert!(parse(&with).wants_json(), "{args:?}");
+        }
     }
 
     #[test]
