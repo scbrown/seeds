@@ -44,11 +44,11 @@ The full case, and exactly what it is and is not:
 
 The command is `sd`; the project and crate are **seeds** / `seeds-ai`.
 Prebuilt `sd` binaries for Linux x86_64/arm64 and macOS arm64/x86_64 are
-attached to each [GitHub release](https://github.com/scbrown/seeds/releases),
-with a `SHA256SUMS.txt`. The first release has not been cut yet.
+attached to each [GitHub release](https://github.com/scbrown/seeds/releases)
+(tags `seeds-ai-v<version>`), with a `SHA256SUMS.txt`.
 
 ```bash
-V=v0.1.0 T=x86_64-unknown-linux-gnu   # or aarch64-unknown-linux-gnu, aarch64-apple-darwin, x86_64-apple-darwin
+V=seeds-ai-v0.0.2 T=x86_64-unknown-linux-gnu   # or aarch64-unknown-linux-gnu, aarch64-apple-darwin, x86_64-apple-darwin
 curl -fsSLO "https://github.com/scbrown/seeds/releases/download/$V/sd-$V-$T.tar.gz"
 curl -fsSLO "https://github.com/scbrown/seeds/releases/download/$V/SHA256SUMS.txt"
 sha256sum --ignore-missing -c SHA256SUMS.txt     # macOS: shasum -a 256 --ignore-missing -c SHA256SUMS.txt

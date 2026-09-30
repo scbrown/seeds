@@ -5,10 +5,10 @@
 The command is `sd`. The project is **seeds** and the crate is `seeds-ai`.
 
 - **Prebuilt binaries.** Each [GitHub release](https://github.com/scbrown/seeds/releases)
-  carries `sd-<version>-<target>.tar.gz` for `x86_64-unknown-linux-gnu`,
+  (tag `seeds-ai-v<version>`) carries `sd-<tag>-<target>.tar.gz` for `x86_64-unknown-linux-gnu`,
   `aarch64-unknown-linux-gnu`, `aarch64-apple-darwin` and
   `x86_64-apple-darwin`, plus a `SHA256SUMS.txt` covering every archive.
-  Verify before you extract. The first release has not been cut yet.
+  Verify before you extract. The recipe is in the README's Install section.
 - **crates.io**, once the first version is published:
   `cargo install seeds-ai --locked` (Rust 1.89 or newer).
 - **From source:** `cargo install --git https://github.com/scbrown/seeds --locked`.
@@ -18,7 +18,7 @@ sd --version
 ```
 
 ```text
-sd 0.0.1
+sd 0.0.2
 ```
 
 ### If you already have chmln/sd
