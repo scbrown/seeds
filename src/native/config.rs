@@ -111,6 +111,14 @@ pub struct QuipuSection {
     /// is the opt-in for a server on a trusted network that has no TLS.
     /// Matched exactly (host, or host:port), never by suffix.
     pub allow_plain_http_hosts: Option<Vec<String>>,
+    /// A file holding this user's Ed25519 signing key (`sd key init` writes
+    /// it). When set, writes quipu accepts signed carry an attestation instead
+    /// of the bearer (aegis-bys8d1). USER-LEVEL config only, like token_file.
+    pub signing_key_file: Option<String>,
+    /// The session the key is registered under (`quipu attest register --session`).
+    pub signing_session: Option<String>,
+    /// The introducer that registered it (`quipu attest register --introducer`).
+    pub signing_introducer: Option<String>,
 }
 
 /// `[project]`.
@@ -162,6 +170,16 @@ pub struct Resolved {
     pub token: Option<String>,
     /// A file to read the bearer token from, if configured.
     pub token_file: Option<PathBuf>,
+    /// The signing key file, session and introducer, if configured.
+    pub signing: Option<Signing>,
+}
+
+/// A configured signing identity (user-level only).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Signing {
+    pub key_file: PathBuf,
+    pub session: String,
+    pub introducer: String,
 }
 
 /// Everything resolution reads, passed in so tests control all of it.
@@ -391,9 +409,12 @@ pub fn resolve(inputs: &Inputs) -> Result<Resolved> {
         if p.quipu.token_file.is_some()
             || p.quipu.trusted_hosts.is_some()
             || p.quipu.allow_plain_http_hosts.is_some()
+            || p.quipu.signing_key_file.is_some()
+            || p.quipu.signing_session.is_some()
+            || p.quipu.signing_introducer.is_some()
         {
             return Err(config_error(format!(
-                "{} sets [quipu] token_file, trusted_hosts or allow_plain_http_hosts; only your \
+                "{} sets [quipu] token_file, trusted_hosts, allow_plain_http_hosts or signing_*; only your \
                  user config \
 (~/.config/seeds/config.toml) or SEEDS_QUIPU_TOKEN_FILE may, because a \
                  cloned repository could otherwise send your token to a server it chose",
@@ -457,6 +478,28 @@ pub fn resolve(inputs: &Inputs) -> Result<Resolved> {
         .as_ref()
         .and_then(|c| c.quipu.allow_plain_http_hosts.clone())
         .unwrap_or_default();
+    let signing = match user.as_ref().map(|c| &c.quipu) {
+        Some(q) => match (
+            &q.signing_key_file,
+            &q.signing_session,
+            &q.signing_introducer,
+        ) {
+            (None, None, None) => None,
+            (Some(f), Some(s), Some(i)) => Some(Signing {
+                key_file: expand(f, &user_base, home),
+                session: s.clone(),
+                introducer: i.clone(),
+            }),
+            _ => {
+                return Err(config_error(
+                    "[quipu] signing_key_file, signing_session and signing_introducer go \
+                     together; set all three (sd key init prints them) or none"
+                        .into(),
+                ));
+            }
+        },
+        None => None,
+    };
     Ok(Resolved {
         location,
         location_source,
@@ -471,6 +514,7 @@ pub fn resolve(inputs: &Inputs) -> Result<Resolved> {
         sync_remote,
         token: inputs.env_token.clone(),
         token_file,
+        signing,
     })
 }
 
