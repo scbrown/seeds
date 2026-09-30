@@ -1,4 +1,4 @@
-# seeds — work items as facts in a quipu graph (experiment)
+# seeds — the beads-compatible tracker for the quipu stack: work items as facts in a quipu graph
 
 default:
     @just --list

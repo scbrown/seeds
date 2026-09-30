@@ -41,8 +41,9 @@ is what a work item is: something in motion that ends up in the record.
   queries that define "ready" travel together as a qpack.
   See [Sharing a ledger](qpack-sharing.md).
 
-## What it is not
+## Where it fits
 
-It is not a replacement for beads, and it does not try to be. It is an
-experiment built to answer one design question. Read
-[An experiment, not a competing beads](experiment.md) before anything else.
+seeds is the beads replacement for the quipu stack: `bd` callers are
+redirected to `sd` by desire-path, and the verbs they type answer with
+`--json` in the same shape. [Why facts, not snapshots](why-facts.md) explains
+the storage design the features above rest on.
