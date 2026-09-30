@@ -8,10 +8,9 @@ The command is `sd`. The project is **seeds** and the crate is `seeds-ai`.
   carries `sd-<version>-<target>.tar.gz` for `x86_64-unknown-linux-gnu`,
   `aarch64-unknown-linux-gnu`, `aarch64-apple-darwin` and
   `x86_64-apple-darwin`, plus a `SHA256SUMS.txt` covering every archive.
-  Verify before you extract. v0 is a shell; the first release has not been
-  cut yet.
+  Verify before you extract. The first release has not been cut yet.
 - **crates.io**, once the first version is published:
-  `cargo install seeds-ai --locked` (Rust 1.85 or newer).
+  `cargo install seeds-ai --locked` (Rust 1.89 or newer).
 - **From source:** `cargo install --git https://github.com/scbrown/seeds --locked`.
 
 ```bash
@@ -34,29 +33,36 @@ tool whose command is also `sd` (crates.io `sd`, Homebrew `sd`).
 - To keep both, install the seeds binary under another name (for example
   `seeds`) and point the desire-path alias at that name.
 
-## What v0 does
+## A first session
 
-Every verb parses a `bd`/`br`-compatible subset of flags, prints one line to
-stderr and exits with its own non-zero code:
+No server and no configuration are needed: the first write creates a local
+store at `.seeds/seeds.db`.
 
 ```bash
-sd ready --json
-echo "exit $?"
+sd create "Write the parser" -p 1          # created ○ sd-k2x [P1] [task] Write the parser (tx 1)
+sd create "Design the grammar"             # created ○ sd-7mf ... (tx 2)
+sd dep add sd-k2x sd-7mf                   # sd-k2x is blocked by sd-7mf
+sd ready                                   # only sd-7mf
+sd update sd-7mf --claim                   # take it (exit 4 if someone else has)
+sd close sd-7mf --reason "grammar in docs/grammar.md"
+sd ready                                   # now sd-k2x
+sd show sd-k2x --at 2                      # sd-k2x as it stood at transaction 2
 ```
 
-```text
-seeds: ready not yet implemented (see docs/book)
-exit 13
-```
-
-That is deliberate. With `bd` redirected to seeds through
-[desire-path](https://github.com/scbrown/desire-path), each refused call is
-recorded, and the list of recorded calls tells us which verb to build next.
+Add `--json` to any of them for br-shaped output. To keep the store somewhere
+else, or to change the id prefix, see [Configuration](config.md).
 
 ## Troubleshooting
 
-- **`error: unrecognized subcommand`, exit 2.** That verb is not in the v0
-  surface at all. Exit 2 is always a usage error; "not yet" codes start at 10.
+- **`error: unrecognized subcommand`, exit 2.** That verb is not in seeds.
+  Exit 2 is always a usage error. Every code is in
+  [Reference](reference.md#exit-codes).
+- **`no seeds store at … yet`** on a read. Nothing has been written in this
+  project (or the configuration points somewhere new); the answer is empty
+  because the store is, not because nothing matched.
+- **Exit 7 or 20 with a URL in the message.** A quipu server URL is configured
+  (`[quipu] url` or `SEEDS_QUIPU_URL`). The server backend is not built yet;
+  use a local store. See [Configuration](config.md).
 - **An older version prints.** Another copy is earlier on your `PATH`:
   `which -a sd`. If `sd --version` does not print `sd <version>`, it is
   a different `sd`.

@@ -4,51 +4,51 @@
   agent types `bd ready --json`
           │
           ▼
-  desire-path  (dp alias --cmd bd --replace sd)
+  desire-path  (dp alias --cmd bd --replace sd)        [not built yet]
           │ rewritten to `sd ready --json`
           ▼
-  seeds CLI ──── reads ────▶ quipu  POST /query   (SPARQL)
-          │                    ▲
-          └───── writes ───────┘  POST /knot    (bearer-authenticated)
-                               │
-               shapes + stored queries from camayoc
+  sd (native CLI)   config: flags > env > .seeds/config.toml > ~/.config/seeds > default
+          │         clock, store file, write lock
+          ▼
+  seeds core        verbs, ready, JSON         ◀── also builds for wasm32
+          │  Backend trait
+          ▼
+  QuipuBackend ──── quipu (embedded library) ── .seeds/seeds.db
+                    one project = one named graph; one write = one transaction
+                    shapes: camayoc WorkItem + seeds
 ```
 
 ## The pieces
 
-- **seeds CLI** (this repo). A Rust binary whose clap definitions follow
-  `br`, so the flags match what agents already type. It turns each verb into a
-  SPARQL query or a knot and prints results in the `bd` JSON shape.
-- **quipu** is the store. Reads go through its SPARQL `/query` endpoint.
-  Writes go through `/knot`, which validates them against the loaded SHACL
-  shapes and records each one as a transaction.
-- **camayoc** owns what a seed *means*: the `WorkItem` shapes, and the
-  competency queries (`ready`, `blocked`, a worker's plate) stored as named
-  queries, so every caller shares one definition.
-- **A crew harness** can treat seeds as one more work-item tracker. A
-  `SeedsTracker` implements the same three-method tracker protocol (get,
-  update, create) as the harness's other trackers.
-- **caboodle** installs seeds and asserts it in `caboodle verify` with a
-  functional round trip.
-- **desire-path** redirects `bd` to seeds with a pre-tool-use rewrite
-  (`dp alias --cmd bd --replace sd`). Callers that need real beads pass
-  through unchanged. Every `bd` verb seeds rejects is recorded, so
-  `dp paths` becomes the seeds backlog.
-
-## Reading existing work from day one
-
-quipu already ingests bead lifecycle events as `WorkItem` records. seeds reads
-those, so `list`, `show` and `ready` work over existing data before any write
-path exists. Reads first, writes second.
+- **seeds core** (this repo, `src/` outside `src/native/`). The work-item
+  model, the verbs, the ready computation and the JSON output. It reads no
+  clock, file or environment: time arrives in a `Ctx`, storage as a `Backend`.
+  That is what lets it build for wasm32. See [WebAssembly](wasm.md).
+- **`sd`, the native CLI** (`src/native/`). Its clap definitions follow `br`,
+  so the flags match what agents already type. It resolves
+  [configuration](config.md), opens the store file under a write lock, reads
+  the system clock, and prints results in the `bd` JSON shape.
+- **quipu** is the store, embedded as a library. Reads are SPARQL
+  (`ready` runs a query) and fact scans; each write is one transaction of
+  retractions and assertions. See [The storage model](storage.md), including
+  why seeds embeds quipu rather than calling a quipu server.
+- **camayoc** owns what a work item *means*: seeds reuses its `WorkItem`
+  vocabulary and validates every write against its shape. The ready query is
+  written to become a camayoc stored query.
+- **A crew harness** can treat seeds as one more work-item tracker: the
+  `--json` shapes are br's, so a tracker adapter written for br reads them.
+- **caboodle** and **desire-path** integration (install and verify; the `bd`
+  redirect) are not built yet. See [What is built](status.md).
 
 ## Where writes go
 
-Writes land in a sandbox named graph, `seeds`, not on any live board. A seed's
-IRI lives in that graph, and the graph IRI is the project's identity.
+To the project's named graph in the configured store: by default a local file,
+`.seeds/seeds.db`, created on first write. The graph IRI is the project's
+identity.
 
 ## Why there is no commit verb
 
-Every knot is a transaction. The transaction id is the cursor a caller keeps,
-and "what changed since my cursor" is a query. There is no staging area, no
-dirty state and nothing to commit. See [Pinning](pinning.md) for what that
-buys.
+Every write is a transaction. The transaction id is the cursor a caller keeps,
+and "what did this look like then" is a read with `--at`. There is no staging
+area, no dirty state and nothing to commit. See [Pinning](pinning.md) for what
+that buys.

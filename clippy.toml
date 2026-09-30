@@ -1,0 +1,25 @@
+# The core must stay wasm-clean: no clock, filesystem, environment, process,
+# thread or network access outside src/native/ (which opts out with
+# #![allow(clippy::disallowed_methods, clippy::disallowed_types)]). These
+# compile on wasm32 but panic or fail at run time there, so the wasm build
+# alone would not catch them. Time and storage are injected instead.
+disallowed-methods = [
+    { path = "std::time::SystemTime::now", reason = "the core takes time from Ctx.now" },
+    { path = "std::time::Instant::now", reason = "the core takes time from Ctx.now" },
+    { path = "std::env::var", reason = "configuration is resolved in src/native" },
+    { path = "std::env::vars", reason = "configuration is resolved in src/native" },
+    { path = "std::env::current_dir", reason = "configuration is resolved in src/native" },
+    { path = "std::fs::read_to_string", reason = "the core never touches the filesystem" },
+    { path = "std::fs::write", reason = "the core never touches the filesystem" },
+    { path = "std::fs::create_dir_all", reason = "the core never touches the filesystem" },
+    { path = "std::thread::spawn", reason = "the core is single-threaded (wasm32)" },
+    { path = "quipu::store::Store::open", reason = "the core is handed a store; files are opened in src/native" },
+    { path = "quipu::store::Store::open_read_only", reason = "the core is handed a store; files are opened in src/native" },
+    { path = "quipu::time::now_iso", reason = "the core takes time from Ctx.now" },
+]
+disallowed-types = [
+    { path = "std::fs::File", reason = "the core never touches the filesystem" },
+    { path = "std::fs::OpenOptions", reason = "the core never touches the filesystem" },
+    { path = "std::process::Command", reason = "the core never spawns processes" },
+    { path = "std::net::TcpStream", reason = "the core never opens a network connection" },
+]

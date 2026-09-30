@@ -1,0 +1,7 @@
+# wasm32 only; native builds are unaffected.
+[target.wasm32-unknown-unknown]
+# getrandom's wasm backend is opt-in; quipu's own wasm gate uses the same
+# cfg (quipu docs/design/wasm-support.md).
+rustflags = ['--cfg', 'getrandom_backend="wasm_js"']
+# `cargo test --target wasm32-unknown-unknown` runs tests/core.rs under node.
+runner = "wasm-bindgen-test-runner"

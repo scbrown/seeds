@@ -53,5 +53,18 @@ live as stored queries next to the shapes (in camayoc), so the definition of
 ## The verbs
 
 The CLI verbs cover what agents type directly: `create`, `show`, `list`,
-`ready`, `count`, `update`, `close`, `dep add` and `comments add`, each with
-`--json` in the `bd` output shape. See [Reference](reference.md).
+`ready`, `count`, `update`, `close`, `dep add|remove|list` and
+`comments add|list`, each with `--json` in the `bd` output shape. See
+[Reference](reference.md).
+
+## Where each intent stands
+
+| # | intent | status |
+|---|---|---|
+| 1 | conditional claim / release | `update --claim` is built (a compare-and-set, exit 4 on a lost claim); `release --if-assignee` is not |
+| 2 | project identity | built: one project is one named graph |
+| 3 | commit / cursor | built: every write prints its transaction, and `--at` reads from it |
+| 4 | capability probe | not built |
+| 5 | health / liveness | nothing to build locally; the store is a file |
+| 6 | maintenance | nothing to build |
+| 7 | read projections | built: `count`, `list` and `ready` (ready is a SPARQL query) |

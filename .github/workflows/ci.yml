@@ -22,17 +22,63 @@ jobs:
       - run: cargo fmt --check
       - run: cargo clippy --all-targets -- -D warnings
       - run: cargo test
+      # The core without the CLI or SHACL (the feature set the wasm build uses),
+      # natively: exercises the non-SHACL validation path.
+      - run: cargo test --no-default-features
       - name: Publishing guard refuses what it must
         run: bash scripts/ci/crates-publish-guard.sh --selftest
-      - name: Prove the built binary starts and refuses with its not-yet code
+      - name: Prove the built binary round-trips create -> dep add -> ready -> close
         run: |
           set -euo pipefail
           cargo build
-          ./target/debug/sd --version
-          rc=0
-          ./target/debug/sd ready --json 2> ready.err || rc=$?
-          test "$rc" -eq 13 || { echo "expected exit 13, got $rc" >&2; exit 1; }
-          grep -qx 'seeds: ready not yet implemented (see docs/book)' ready.err
+          SD="$PWD/target/debug/sd"
+          "$SD" --version
+          work=$(mktemp -d) && cd "$work"
+          export SEEDS_ACTOR=ci HOME="$work" XDG_CONFIG_HOME="$work/.config"
+          a=$("$SD" create "Write the parser" -p 1 --silent)
+          b=$("$SD" create "Design the grammar" --silent)
+          "$SD" dep add "$a" "$b"
+          test "$("$SD" ready --json | jq -r '[.[].id] | join(",")')" = "$b"
+          "$SD" close "$b" --reason "ci round trip"
+          test "$("$SD" ready --json | jq -r '[.[].id] | join(",")')" = "$a"
+          test -f .seeds/seeds.db
+
+  # The core on wasm32 (seeds must compile to wasm). Mirrors
+  # `just wasm` and `just wasm-test`: the library builds and lints for
+  # wasm32-unknown-unknown with no default features, the create -> dep ->
+  # ready demo links, and tests/core.rs runs under node.
+  wasm:
+    name: Wasm (core)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install wasm-bindgen-test-runner at the locked wasm-bindgen version
+        run: |
+          set -euo pipefail
+          V=$(grep -A1 '^name = "wasm-bindgen"$' Cargo.lock | grep '^version' | cut -d'"' -f2)
+          if ! command -v wasm-bindgen-test-runner >/dev/null || ! wasm-bindgen --version | grep -qF "$V"; then
+            cargo install wasm-bindgen-cli --version "$V" --locked --force
+          fi
+      - name: Build the core for wasm32
+        run: cargo build --target wasm32-unknown-unknown --lib --no-default-features --release
+      - name: Lint the core for wasm32
+        run: cargo clippy --target wasm32-unknown-unknown --no-default-features --all-targets -- -D warnings
+      - name: Link the demo and report its size
+        run: |
+          set -euo pipefail
+          cargo build --target wasm32-unknown-unknown --no-default-features --release --example ready_demo
+          f=target/wasm32-unknown-unknown/release/examples/ready_demo.wasm
+          echo "ready_demo.wasm: $(stat -c %s "$f") bytes" | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Core tests on wasm32 (node)
+        run: cargo test --target wasm32-unknown-unknown --no-default-features --test core
 
   book:
     runs-on: ubuntu-latest

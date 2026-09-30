@@ -3,13 +3,14 @@
 **seeds** is an issue tracker for AI coding agents that stores each work item
 ("a seed") as facts in a [quipu](https://github.com/scbrown/quipu) knowledge
 graph. It answers the verbs agents already type against `bd` and `br`
-(`create`, `show`, `list`, `ready`, `count`, `update`, `close`, `dep add`,
-`comments add`), with `--json` output in the same shape, so an agent does not
+(`create`, `show`, `list`, `ready`, `count`, `update`, `close`, `dep`,
+`comments`), with `--json` output in the same shape, so an agent does not
 have to learn anything new.
 
-> **Status: v0 is a shell.** Every verb parses its flags and exits with a
-> distinct "not yet" code. This book describes the design the code will grow
-> into. See [Reference](reference.md) for exactly what runs today.
+> **Status: the v0.1 core runs.** Every verb works against a local quipu
+> store, the core builds for WebAssembly, and `--at` pins work. A shared quipu
+> server, beads sync and qpack sharing are not built yet. See
+> [What is built](status.md) for exactly what runs today.
 
 ## The name
 
@@ -32,8 +33,9 @@ is what a work item is: something in motion that ends up in the record.
   no garbage collection to schedule and no SQL server to start and stop.
 - **Identity is built in.** A project is a named graph, and its IRI is its
   identity. There is no separate project-id row to drift out of sync.
-- **Governed writes.** quipu validates writes against SHACL shapes, so a seed
-  with an unknown status or a malformed dependency is refused at the door.
+- **Governed writes.** Every write is validated against camayoc's WorkItem
+  shape and seeds' own, so a seed with an unknown status or a dependency on
+  nothing is refused at the door. See [The storage model](storage.md).
 - **Share a ledger like a package.** A project's graph, its shapes and the
   queries that define "ready" travel together as a qpack.
   See [Sharing a ledger](qpack-sharing.md).

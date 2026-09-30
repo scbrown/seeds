@@ -13,8 +13,12 @@ A qpack carries:
   the ledger's identity;
 - `shapes.ttl`: the shapes the data conforms to.
 
-Stored queries travel with it, so the recipient receives the definition of
-"ready" along with the data, not just the data.
+The standard share carries data and shapes only, **not** stored queries.
+Queries travel in quipu's older SQLite pack (`quipu pack --queries`) and in
+the full reconstruction share. So for a recipient to get the definition of
+"ready" along with the data, seeds' ready query has to be shipped as a camayoc
+stored query installed separately, or quipu's standard share has to learn to
+carry queries.
 
 ## Incremental share
 

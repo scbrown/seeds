@@ -35,7 +35,8 @@ name comes from the counting board: a *quipucamayoc* moved seeds across a
 - **No commit step, no server to babysit.** The transaction id is the cursor;
   there is no dirty state, no garbage collection and no SQL server lifecycle.
 - **Share a ledger like a package.** A project is one named graph, and a quipu
-  qpack carries it, its shapes and its stored queries to another team.
+  qpack carries it and its shapes to another team (seeds-side sharing is not
+  built yet).
 
 The full case, and exactly what it is and is not:
 [Introduction](docs/book/src/introduction.md).
@@ -45,8 +46,7 @@ The full case, and exactly what it is and is not:
 The command is `sd`; the project and crate are **seeds** / `seeds-ai`.
 Prebuilt `sd` binaries for Linux x86_64/arm64 and macOS arm64/x86_64 are
 attached to each [GitHub release](https://github.com/scbrown/seeds/releases),
-with a `SHA256SUMS.txt`. v0 is a shell, and the first release has not been cut
-yet.
+with a `SHA256SUMS.txt`. The first release has not been cut yet.
 
 ```bash
 V=v0.1.0 T=x86_64-unknown-linux-gnu   # or aarch64-unknown-linux-gnu, aarch64-apple-darwin, x86_64-apple-darwin
@@ -56,7 +56,7 @@ sha256sum --ignore-missing -c SHA256SUMS.txt     # macOS: shasum -a 256 --ignore
 tar xzf "sd-$V-$T.tar.gz" && install "sd-$V-$T/sd" ~/.local/bin/
 ```
 
-Or from crates.io, once the first version is published (needs Rust 1.85+):
+Or from crates.io, once the first version is published (needs Rust 1.89+):
 
 ```bash
 cargo install seeds-ai --locked
@@ -89,32 +89,35 @@ a different `sd`.
 
 ## First success in three commands
 
+No server and no configuration: the first write creates a local quipu store at
+`.seeds/seeds.db`.
+
 ```bash
-sd --version
+sd create "Write the parser" -p 1
 sd ready --json
 echo "exit $?"
 ```
 
 ```text
-sd 0.0.1
-seeds: ready not yet implemented (see docs/book)
-exit 13
+created ○ sd-k2x [P1] [task] Write the parser (tx 1)
+[{"assignee":null, … ,"id":"sd-k2x","issue_type":"task", … ,"priority":1,"revision":1,"status":"open","title":"Write the parser", … }]
+exit 0
 ```
-
-Every verb parses its flags and then refuses with its own exit code, so a
-wrapper can tell which verb was asked for and record the demand.
 
 ## On your own code
 
-| you want to… | run (once implemented) |
+| you want to… | run |
 |---|---|
-| see what is ready to work on | `sd ready --json` |
+| see what is ready to work on (never silently truncated) | `sd ready --json` |
 | open a work item | `sd create "title" -p 1 -t task` |
-| claim it | `sd update <id> --claim` |
+| claim it (exactly one caller wins; the rest exit 4) | `sd update <id> --claim` |
 | record that one blocks another | `sd dep add <id> <depends-on>` |
+| close it, saying what landed | `sd close <id> --reason "…"` |
 | read an item as it was | `sd show <id> --at <tx>` |
 
-Every verb, flag and exit code: [Reference](docs/book/src/reference.md).
+Every verb, flag and exit code: [Reference](docs/book/src/reference.md). Where
+the store lives and how to point it elsewhere:
+[Configuration](docs/book/src/config.md).
 
 ## Wire it into your agent
 
@@ -125,10 +128,15 @@ rewrites that to seeds before the tool call runs:
 dp alias --cmd bd --replace sd
 ```
 
-A `bd` verb seeds rejects is recorded, so `dp paths` becomes the seeds backlog.
-Reads go to quipu SPARQL (`/query`) and writes to quipu knots (`/knot`); a
-crew harness can use seeds as one more work-item tracker. How the pieces fit:
-[Architecture](docs/book/src/architecture.md).
+A `bd` verb seeds rejects is recorded, so `dp paths` becomes the seeds backlog
+(the alias itself lives in desire-path and is not wired up yet). seeds embeds
+quipu as a library: every write is one quipu transaction in the project's
+named graph, validated against camayoc's WorkItem shape. How the pieces fit:
+[Architecture](docs/book/src/architecture.md) and
+[The storage model](docs/book/src/storage.md).
+
+The core (verbs, ready, JSON) also builds for WebAssembly:
+[WebAssembly](docs/book/src/wasm.md).
 
 ## Before you start
 
@@ -136,13 +144,16 @@ crew harness can use seeds as one more work-item tracker. How the pieces fit:
 |---|---|---|---|---|
 | seeds | build | build | build | build |
 
-Rust 1.85 or newer. A reachable quipu server once the verbs are implemented.
+Rust 1.89 or newer to build. No quipu server: the store is a local file by
+default. A shared quipu server is configurable but not built yet
+([What is built](docs/book/src/status.md)).
 
 ## What's next
 
 - [The seeds book](docs/book/src/introduction.md): start here to go deeper
 - [Docs map](docs/book/src/docs-map.md): every document in this repo, routed
 - [The bd intent map](docs/book/src/intent-map.md): what seeds must provide, and what goes away
+- [What is built, and what is not](docs/book/src/status.md)
 
 ## 🧺 The stack
 
@@ -158,8 +169,8 @@ Caboodle installs these together and proves each one works; every tool also stan
 | [desire-path](https://github.com/scbrown/desire-path) | the tool calls your agents get wrong, so you can fix them |
 
 seeds is an experiment built on top of these, not a member of the six:
-quipu stores it, camayoc supplies its shapes and stored queries, caboodle
-will install and verify it, and desire-path redirects `bd` to it.
+quipu stores it, camayoc supplies its WorkItem vocabulary and shape, caboodle
+will install and verify it, and desire-path will redirect `bd` to it.
 [How seeds fits the stack](docs/book/src/stack.md).
 
 ## Contributing
