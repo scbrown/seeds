@@ -1,16 +1,22 @@
 [package]
-name = "seeds"
+name = "seeds-ai"
 version = "0.0.1"
 edition = "2021"
 description = "An experiment: beads-shaped work items stored as facts in a quipu knowledge graph"
 license = "MIT"
 repository = "https://github.com/scbrown/seeds"
 rust-version = "1.85"
-# An experiment, not a distribution. Refuse an accidental `cargo publish`.
-publish = false
+readme = "README.md"
+homepage = "https://github.com/scbrown/seeds"
+keywords = ["ai-agents", "issue-tracker", "knowledge-graph", "quipu", "beads"]
+categories = ["command-line-utilities", "development-tools"]
+
+[lib]
+name = "seeds"
+path = "src/lib.rs"
 
 [[bin]]
-name = "seeds"
+name = "sd"
 path = "src/main.rs"
 
 [dependencies]

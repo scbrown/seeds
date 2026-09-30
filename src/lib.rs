@@ -13,7 +13,7 @@ pub fn not_yet_message(verb: &str) -> String {
 
 #[derive(Debug, Parser)]
 #[command(
-    name = "seeds",
+    name = "sd",
     version,
     about = "Beads-shaped work items as facts in a quipu graph (experiment)",
     long_about = "seeds is an experiment testing fact-level versus snapshot versioning \
