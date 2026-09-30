@@ -14,6 +14,7 @@ store = ".seeds/seeds.db"            # a local quipu store file (the default)
 # url = "https://quipu.example.org"  # OR a shared quipu server
 # token_file = "~/.config/seeds/quipu-token"   # bearer for writes: USER config only
 # trusted_hosts = ["quipu.example.org"]       # USER config only: see below
+# allow_plain_http_hosts = ["quipu.internal.example"]      # USER config only: see below
 
 [project]
 prefix = "sd"                        # id prefix for new seeds (default sd)
@@ -77,13 +78,17 @@ down, because the two would then hold different ledgers.
 A cloned repository's `.seeds/config.toml` is not yours, so it is not trusted
 with your token:
 
-- `token_file` and `trusted_hosts` are honoured only in your **user** config
-  (or `SEEDS_QUIPU_TOKEN_FILE` / `SEEDS_QUIPU_TOKEN`); a project file that
-  sets either is refused.
+- `token_file`, `trusted_hosts` and `allow_plain_http_hosts` are honoured
+  only in your **user** config (or `SEEDS_QUIPU_TOKEN_FILE` /
+  `SEEDS_QUIPU_TOKEN`); a project file that sets any of them is refused.
 - A server URL that came from a **project** file gets your token only if its
   host is in your `trusted_hosts`. A URL you chose (flag, environment, user
   file) always does.
-- A token is never sent over plain `http://`, except to localhost.
+- A token is never sent over plain `http://`, except to localhost or to a
+  host your user config lists in `allow_plain_http_hosts`. That list is for a
+  server on a network you trust that has no TLS. An entry matches exactly: a
+  bare host (`quipu.internal.example`) admits any port on that host, `host:port` admits only
+  that port, and nothing is matched by suffix.
 
 ## The project id
 

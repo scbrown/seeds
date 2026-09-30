@@ -169,7 +169,8 @@ which exports and snapshots never read.
 `SEEDS_QUIPU_TOKEN`, `SEEDS_QUIPU_TOKEN_FILE` or your user config's
 `token_file`; a project file may not name one) is sent to a server URL from a
 project file only if your user config lists its host in `trusted_hosts`, and
-never over plain `http://` except to localhost.
+never over plain `http://` except to localhost or to a host your user config
+lists in `allow_plain_http_hosts`.
 
 ## Mode 3: sync
 
