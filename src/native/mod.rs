@@ -719,6 +719,21 @@ fn dispatch(cli: &Cli, ctx: &Ctx, b: &mut dyn Backend) -> Result<Outcome> {
                 vec![],
             ))
         }
+        Command::Stats(a) => {
+            let req = engine::StatsReq {
+                by_type: a.by_type,
+                by_priority: a.by_priority,
+                by_assignee: a.by_assignee,
+                by_label: a.by_label,
+            };
+            let st = engine::stats(b, ctx, req, at)?;
+            Ok(ok(
+                json,
+                output::stats_json(&st),
+                output::stats_text(&st),
+                vec![],
+            ))
+        }
         Command::Stale(a) => {
             let seeds = engine::stale(b, ctx, a.days, &a.status, at)?;
             let text = if seeds.is_empty() {

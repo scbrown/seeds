@@ -9,7 +9,7 @@
 
 use serde_json::{json, Value as Json};
 
-use crate::engine::{BlockedPage, Count, DepChange, DepRow, Page, SearchPage, SeedView};
+use crate::engine::{BlockedPage, Count, DepChange, DepRow, Page, SearchPage, SeedView, Stats};
 use crate::model::{Comment, Seed};
 
 /// `show --json`: an array of full seed objects.
@@ -90,6 +90,55 @@ pub fn with_tx(mut value: Json, tx: Option<u64>) -> Json {
         _ => {}
     }
     value
+}
+
+/// `stats --json`: br's `{summary, breakdowns?}`. seeds has no drafts,
+/// tombstones or pins, so those counts are always 0.
+pub fn stats_json(st: &Stats) -> Json {
+    let mut o = json!({"summary": {
+        "total_issues": st.total,
+        "open_issues": st.open,
+        "in_progress_issues": st.in_progress,
+        "closed_issues": st.closed,
+        "blocked_issues": st.blocked,
+        "deferred_issues": st.deferred,
+        "draft_issues": 0,
+        "ready_issues": st.ready,
+        "tombstone_issues": 0,
+        "pinned_issues": 0,
+        "epics_eligible_for_closure": st.epics_eligible_for_closure,
+        "average_lead_time_hours": st.average_lead_time_hours,
+    }});
+    if !st.breakdowns.is_empty() {
+        o["breakdowns"] = st
+            .breakdowns
+            .iter()
+            .map(|(dim, counts)| {
+                json!({"dimension": dim, "counts": counts.iter()
+                    .map(|(k, n)| json!({"key": k, "count": n})).collect::<Vec<_>>()})
+            })
+            .collect();
+    }
+    o
+}
+
+/// `stats` as text.
+pub fn stats_text(st: &Stats) -> String {
+    let mut lines = vec![
+        format!("total {}", st.total),
+        format!(
+            "  open {} · in progress {} · blocked {} · deferred {} · closed {}",
+            st.open, st.in_progress, st.blocked, st.deferred, st.closed
+        ),
+        format!("  ready now {}", st.ready),
+        format!("  epics ready to close {}", st.epics_eligible_for_closure),
+        format!("  average lead time {:.1} h", st.average_lead_time_hours),
+    ];
+    for (dim, counts) in &st.breakdowns {
+        lines.push(format!("by {dim}:"));
+        lines.extend(counts.iter().map(|(k, n)| format!("  {k}: {n}")));
+    }
+    lines.join("\n")
 }
 
 /// `blocked --json`: the list envelope; each seed also carries br's

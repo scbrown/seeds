@@ -478,6 +478,120 @@ pub fn stale(
     Ok(seeds)
 }
 
+/// Which breakdowns `sd stats` adds to its summary.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct StatsReq {
+    /// By issue type.
+    pub by_type: bool,
+    /// By priority (`P0`..`P4`).
+    pub by_priority: bool,
+    /// By assignee (`(unassigned)` for none).
+    pub by_assignee: bool,
+    /// By label (`(no labels)` for none).
+    pub by_label: bool,
+}
+
+/// `sd stats`: br's summary counts and optional breakdowns.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Stats {
+    /// Every seed.
+    pub total: usize,
+    /// Seeds by status.
+    pub open: usize,
+    /// In progress.
+    pub in_progress: usize,
+    /// Closed.
+    pub closed: usize,
+    /// Status `blocked` (br counts the status, not the dependency graph).
+    pub blocked: usize,
+    /// Deferred.
+    pub deferred: usize,
+    /// What `sd ready` would list now.
+    pub ready: usize,
+    /// Open epics whose children are all closed.
+    pub epics_eligible_for_closure: usize,
+    /// Mean hours from creation to close, over closed seeds (0 when none).
+    pub average_lead_time_hours: f64,
+    /// (dimension, [(key, count)]) in br's order: type, priority, assignee, label.
+    pub breakdowns: Vec<(&'static str, Vec<(String, usize)>)>,
+}
+
+/// `sd stats`, as of `at`. Breakdowns count every seed, closed included (br).
+pub fn stats(b: &dyn Backend, ctx: &Ctx, req: StatsReq, at: Option<u64>) -> Result<Stats> {
+    let snap = b.snapshot(at)?;
+    let seeds: Vec<&Seed> = snap.seeds.values().collect();
+    let count = |st: &str| seeds.iter().filter(|s| s.status == st).count();
+    let lead: Vec<f64> = seeds
+        .iter()
+        .filter(|s| s.status == "closed")
+        .filter_map(|s| {
+            let closed = parse_instant(s.closed_at.as_deref()?)?;
+            Some((closed - parse_instant(&s.created_at)?) as f64 / 3600.0)
+        })
+        .collect();
+    let eligible = seeds
+        .iter()
+        .filter(|e| e.issue_type == "epic" && e.status != "closed")
+        .filter(|e| {
+            let children: Vec<&&Seed> = seeds
+                .iter()
+                .filter(|c| c.parent.as_deref() == Some(e.id.as_str()))
+                .collect();
+            !children.is_empty() && children.iter().all(|c| c.status == "closed")
+        })
+        .count();
+    let tally = |keys: &dyn Fn(&Seed) -> Vec<String>| {
+        let mut m: BTreeMap<String, usize> = BTreeMap::new();
+        for s in &seeds {
+            for k in keys(s) {
+                *m.entry(k).or_default() += 1;
+            }
+        }
+        m.into_iter().collect::<Vec<_>>()
+    };
+    let mut breakdowns = Vec::new();
+    if req.by_type {
+        breakdowns.push(("type", tally(&|s| vec![s.issue_type.clone()])));
+    }
+    if req.by_priority {
+        breakdowns.push(("priority", tally(&|s| vec![format!("P{}", s.priority)])));
+    }
+    if req.by_assignee {
+        breakdowns.push((
+            "assignee",
+            tally(&|s| vec![s.assignee.clone().unwrap_or_else(|| "(unassigned)".into())]),
+        ));
+    }
+    if req.by_label {
+        breakdowns.push((
+            "label",
+            tally(&|s| {
+                if s.labels.is_empty() {
+                    vec!["(no labels)".into()]
+                } else {
+                    s.labels.iter().cloned().collect()
+                }
+            }),
+        ));
+    }
+    Ok(Stats {
+        total: seeds.len(),
+        open: count("open"),
+        in_progress: count("in_progress"),
+        closed: count("closed"),
+        blocked: count("blocked"),
+        deferred: count("deferred"),
+        ready: ready(b, ctx, &ReadyReq::default(), at)?.total,
+        epics_eligible_for_closure: eligible,
+        average_lead_time_hours: if lead.is_empty() {
+            0.0
+        } else {
+            lead.iter().sum::<f64>() / lead.len() as f64
+        },
+        breakdowns,
+    })
+}
+
 /// `sd blocked`. Repeated types and priorities are alternatives; labels must
 /// all match (br's semantics).
 #[derive(Debug, Clone, Default)]

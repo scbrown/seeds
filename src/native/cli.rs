@@ -66,6 +66,8 @@ pub enum Command {
     Blocked(BlockedArgs),
     /// List seeds not updated for --days days (default 30), oldest first
     Stale(StaleArgs),
+    /// Summary counts (by status, ready, lead time) with optional breakdowns
+    Stats(StatsArgs),
     /// Count seeds (open ones by default)
     Count(CountArgs),
     /// Update fields on one or more seeds
@@ -333,6 +335,23 @@ pub struct StaleArgs {
     pub status: Vec<String>,
 }
 
+/// `sd stats`.
+#[derive(Debug, Args)]
+pub struct StatsArgs {
+    /// Add a breakdown by issue type
+    #[arg(long)]
+    pub by_type: bool,
+    /// Add a breakdown by priority
+    #[arg(long)]
+    pub by_priority: bool,
+    /// Add a breakdown by assignee
+    #[arg(long)]
+    pub by_assignee: bool,
+    /// Add a breakdown by label
+    #[arg(long)]
+    pub by_label: bool,
+}
+
 /// `sd count`.
 #[derive(Debug, Args)]
 pub struct CountArgs {
@@ -582,6 +601,7 @@ impl Command {
             | Command::Ready(_)
             | Command::Blocked(_)
             | Command::Stale(_)
+            | Command::Stats(_)
             | Command::Search(_)
             | Command::Count(_) => false,
         }
@@ -596,6 +616,7 @@ impl Command {
             Command::Ready(_) => "ready",
             Command::Blocked(_) => "blocked",
             Command::Stale(_) => "stale",
+            Command::Stats(_) => "stats",
             Command::Search(_) => "search",
             Command::Count(_) => "count",
             Command::Update(_) => "update",
@@ -638,6 +659,7 @@ mod tests {
         (&["list", "--status", "open", "--limit", "0"], "list", false),
         (&["ready", "--json", "--limit", "5"], "ready", false),
         (&["count", "--by", "status"], "count", false),
+        (&["stats", "--by-type", "--by-label"], "stats", false),
         (
             &["stale", "--days", "7", "--status", "open,in_progress"],
             "stale",
