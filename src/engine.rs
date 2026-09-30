@@ -652,6 +652,25 @@ pub struct StatsReq {
     pub by_assignee: bool,
     /// By label (`(no labels)` for none).
     pub by_label: bool,
+    /// Recent activity over this many hours back from now; `None` skips it.
+    pub activity_hours: Option<u64>,
+}
+
+/// `sd stats` recent activity: what seed timestamps say happened in the
+/// window. sd has no git commits and keeps no reopen record on the seed, so
+/// br's `commit_count` and `issues_reopened` are not tracked (null in JSON).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Activity {
+    /// The window, in hours.
+    pub hours: u64,
+    /// Seeds created in the window.
+    pub created: usize,
+    /// Seeds closed in the window.
+    pub closed: usize,
+    /// Seeds created before the window, changed in it, and not closed in it.
+    pub updated: usize,
+    /// Distinct seeds touched in the window.
+    pub touched: usize,
 }
 
 /// `sd stats`: br's summary counts and optional breakdowns.
@@ -679,6 +698,8 @@ pub struct Stats {
     pub average_lead_time_hours: f64,
     /// (dimension, [(key, count)]) in br's order: type, priority, assignee, label.
     pub breakdowns: Vec<(&'static str, Vec<(String, usize)>)>,
+    /// Recent activity, when asked for.
+    pub activity: Option<Activity>,
 }
 
 /// `sd stats`, as of `at`. Breakdowns count every seed, closed included (br).
@@ -756,6 +777,28 @@ pub fn stats(b: &dyn Backend, ctx: &Ctx, req: StatsReq, at: Option<u64>) -> Resu
             lead.iter().sum::<f64>() / lead.len() as f64
         },
         breakdowns,
+        activity: match req.activity_hours {
+            None => None,
+            Some(h) => {
+                let since = parse_since(&format!("{h}h"), &ctx.now)?;
+                let at_or_after = |t: Option<&str>| t.is_some_and(|t| t >= since.as_str());
+                let created = |s: &&&Seed| at_or_after(Some(&s.created_at));
+                let closed = |s: &&&Seed| at_or_after(s.closed_at.as_deref());
+                Some(Activity {
+                    hours: h,
+                    created: seeds.iter().filter(created).count(),
+                    closed: seeds.iter().filter(closed).count(),
+                    updated: seeds
+                        .iter()
+                        .filter(|s| at_or_after(Some(&s.updated_at)) && !created(s) && !closed(s))
+                        .count(),
+                    touched: seeds
+                        .iter()
+                        .filter(|s| at_or_after(Some(&s.updated_at)))
+                        .count(),
+                })
+            }
+        },
     })
 }
 

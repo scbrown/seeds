@@ -647,6 +647,15 @@ pub struct StatsArgs {
     /// Add a breakdown by label
     #[arg(long)]
     pub by_label: bool,
+    /// Include recent activity (the default; br's --activity)
+    #[arg(long, conflicts_with = "no_activity")]
+    pub activity: bool,
+    /// Skip recent activity
+    #[arg(long)]
+    pub no_activity: bool,
+    /// Recent-activity window in hours (default 24)
+    #[arg(long, value_name = "HOURS", conflicts_with = "no_activity")]
+    pub activity_hours: Option<u64>,
 }
 
 /// `sd q`.

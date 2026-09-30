@@ -124,6 +124,19 @@ pub fn stats_json(st: &Stats) -> Json {
             })
             .collect();
     }
+    if let Some(a) = &st.activity {
+        // br's keys. commit_count and issues_reopened are null, not 0: sd
+        // cannot know them, and a 0 would claim it does.
+        o["recent_activity"] = json!({
+            "hours_tracked": a.hours,
+            "commit_count": null,
+            "issues_created": a.created,
+            "issues_closed": a.closed,
+            "issues_updated": a.updated,
+            "issues_reopened": null,
+            "total_changes": a.touched,
+        });
+    }
     o
 }
 
@@ -142,6 +155,14 @@ pub fn stats_text(st: &Stats) -> String {
     for (dim, counts) in &st.breakdowns {
         lines.push(format!("by {dim}:"));
         lines.extend(counts.iter().map(|(k, n)| format!("  {k}: {n}")));
+    }
+    if let Some(a) = &st.activity {
+        lines.push(format!("recent activity (last {} hours):", a.hours));
+        lines.push(format!(
+            "  created {} · closed {} · updated {} · seeds touched {}",
+            a.created, a.closed, a.updated, a.touched
+        ));
+        lines.push("  reopened and commits: not tracked by sd".into());
     }
     lines.join("\n")
 }

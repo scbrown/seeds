@@ -1727,6 +1727,8 @@ fn dispatch(cli: &Cli, cfg: &Resolved, ctx: &Ctx, b: &mut dyn Backend) -> Result
                 by_priority: a.by_priority,
                 by_assignee: a.by_assignee,
                 by_label: a.by_label,
+                // br: activity is on unless --no-activity.
+                activity_hours: (!a.no_activity).then(|| a.activity_hours.unwrap_or(24)),
             };
             let st = engine::stats(b, ctx, req, at)?;
             Ok(ok(
