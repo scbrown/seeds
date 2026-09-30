@@ -148,8 +148,25 @@ pub fn validate_batch(
             dangling.join("\n  ")
         )));
     }
+    // Targets are context, not writes: they are here so the batch's new
+    // blockedOn edges resolve to WorkItems. Their own edges to seeds outside
+    // this graph were checked when they were written, and keeping them would
+    // make the shapes refuse the target for pointing at a seed not loaded.
+    let loaded: BTreeSet<&str> = written
+        .iter()
+        .copied()
+        .chain(targets.keys().map(String::as_str))
+        .collect();
     for (id, facts) in &targets {
-        push_ntriples(&mut nt, &vocab::item_iri(id), facts);
+        let kept: Vec<Fact> = facts
+            .iter()
+            .filter(|(_, o)| match o {
+                Obj::Iri(t) => vocab::item_id(t).is_none_or(|t| loaded.contains(t.as_str())),
+                _ => true,
+            })
+            .cloned()
+            .collect();
+        push_ntriples(&mut nt, &vocab::item_iri(id), &kept);
     }
     shapes(&nt)
 }
