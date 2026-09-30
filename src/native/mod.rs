@@ -1304,10 +1304,20 @@ fn dispatch(cli: &Cli, cfg: &Resolved, ctx: &Ctx, b: &mut dyn Backend) -> Result
                     labels: a.label.clone(),
                     priority: a.priority.clone(),
                     parent: None,
+                    title_contains: a.title_contains.clone(),
+                    desc_contains: a.desc_contains.clone(),
+                    notes_contains: a.notes_contains.clone(),
+                    labels_any: a.label_any.clone(),
+                    priority_min: a.priority_min.clone(),
+                    priority_max: a.priority_max.clone(),
+                    ids: a.id.clone(),
                 },
                 all: a.all,
                 limit: a.limit,
                 sort: a.sort.clone(),
+                offset: a.offset,
+                reverse: a.reverse,
+                deferred: a.deferred,
             };
             let p = engine::list(b, &req, at)?;
             let mut warnings = vec![];
@@ -1339,6 +1349,8 @@ fn dispatch(cli: &Cli, cfg: &Resolved, ctx: &Ctx, b: &mut dyn Backend) -> Result
                     labels: a.label.clone(),
                     priority: a.priority.clone(),
                     parent: a.parent.clone(),
+                    labels_any: a.label_any.clone(),
+                    ..Filter::default()
                 },
                 limit: a.limit,
             };
@@ -1369,10 +1381,20 @@ fn dispatch(cli: &Cli, cfg: &Resolved, ctx: &Ctx, b: &mut dyn Backend) -> Result
                     labels: a.label.clone(),
                     priority: a.priority.clone(),
                     parent: None,
+                    title_contains: a.title_contains.clone(),
+                    desc_contains: a.desc_contains.clone(),
+                    notes_contains: a.notes_contains.clone(),
+                    labels_any: a.label_any.clone(),
+                    priority_min: a.priority_min.clone(),
+                    priority_max: a.priority_max.clone(),
+                    ids: a.id.clone(),
                 },
                 all: a.all,
                 limit: a.limit,
                 sort: a.sort.clone(),
+                offset: a.offset,
+                reverse: a.reverse,
+                deferred: a.deferred,
             };
             let r = engine::search(b, &req, at)?;
             Ok(ok(
@@ -1672,14 +1694,37 @@ fn dispatch(cli: &Cli, cfg: &Resolved, ctx: &Ctx, b: &mut dyn Backend) -> Result
             ))
         }
         Command::Count(a) => {
+            let shorthands: Vec<&str> = [
+                (a.by_status, "status"),
+                (a.by_priority, "priority"),
+                (a.by_type, "type"),
+                (a.by_assignee, "assignee"),
+                (a.by_label, "label"),
+            ]
+            .iter()
+            .filter(|(on, _)| *on)
+            .map(|(_, by)| *by)
+            .collect();
+            let by = match (a.by.clone(), shorthands.as_slice()) {
+                (by, []) => by,
+                (None, [one]) => Some((*one).to_string()),
+                _ => {
+                    return Err(SdError::usage(
+                        "group by one thing: --by X or a single --by-X flag",
+                    ))
+                }
+            };
             let req = engine::CountReq {
                 filter: Filter {
                     status: a.status.clone(),
                     issue_type: a.issue_type.clone(),
                     assignee: a.assignee.clone(),
+                    unassigned: a.unassigned,
+                    priority: a.priority.clone(),
+                    title_contains: a.title_contains.clone(),
                     ..Filter::default()
                 },
-                by: a.by.clone(),
+                by,
                 include_closed: a.include_closed,
             };
             let c = engine::count(b, &req, at)?;

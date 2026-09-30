@@ -255,6 +255,20 @@ pub struct Filter {
     pub priority: Option<String>,
     /// Only children of this seed.
     pub parent: Option<String>,
+    /// Title contains this (case-insensitive).
+    pub title_contains: Option<String>,
+    /// Description contains this (case-insensitive).
+    pub desc_contains: Option<String>,
+    /// Notes contain this (case-insensitive).
+    pub notes_contains: Option<String>,
+    /// Only seeds carrying ANY of these labels.
+    pub labels_any: Vec<String>,
+    /// Only priority >= this (0 = critical).
+    pub priority_min: Option<String>,
+    /// Only priority <= this.
+    pub priority_max: Option<String>,
+    /// Only these ids.
+    pub ids: Vec<String>,
 }
 
 impl Filter {
@@ -279,6 +293,21 @@ impl Filter {
                 .map(model::parse_priority)
                 .transpose()?,
             parent: self.parent.clone(),
+            title_contains: self.title_contains.as_deref().map(str::to_lowercase),
+            desc_contains: self.desc_contains.as_deref().map(str::to_lowercase),
+            notes_contains: self.notes_contains.as_deref().map(str::to_lowercase),
+            labels_any: clean_labels(&self.labels_any),
+            priority_min: self
+                .priority_min
+                .as_deref()
+                .map(model::parse_priority)
+                .transpose()?,
+            priority_max: self
+                .priority_max
+                .as_deref()
+                .map(model::parse_priority)
+                .transpose()?,
+            ids: self.ids.iter().cloned().collect(),
         })
     }
 }
@@ -291,6 +320,13 @@ struct CompiledFilter {
     labels: BTreeSet<String>,
     priority: Option<u8>,
     parent: Option<String>,
+    title_contains: Option<String>,
+    desc_contains: Option<String>,
+    notes_contains: Option<String>,
+    labels_any: BTreeSet<String>,
+    priority_min: Option<u8>,
+    priority_max: Option<u8>,
+    ids: BTreeSet<String>,
 }
 
 impl CompiledFilter {
@@ -308,7 +344,20 @@ impl CompiledFilter {
                 .parent
                 .as_ref()
                 .is_none_or(|p| s.parent.as_ref() == Some(p))
+            && contains(&self.title_contains, Some(&s.title))
+            && contains(&self.desc_contains, s.description.as_ref())
+            && contains(&self.notes_contains, s.notes.as_ref())
+            && (self.labels_any.is_empty() || !self.labels_any.is_disjoint(&s.labels))
+            && self.priority_min.is_none_or(|p| s.priority >= p)
+            && self.priority_max.is_none_or(|p| s.priority <= p)
+            && (self.ids.is_empty() || self.ids.contains(&s.id))
     }
+}
+
+fn contains(needle: &Option<String>, hay: Option<&String>) -> bool {
+    needle
+        .as_ref()
+        .is_none_or(|n| hay.is_some_and(|h| h.to_lowercase().contains(n)))
 }
 
 /// Sort orders `list --sort` accepts.
@@ -344,6 +393,12 @@ pub struct ListReq {
     pub limit: Option<usize>,
     /// Sort order (one of [`SORTS`]).
     pub sort: Option<String>,
+    /// Skip this many results first (pagination).
+    pub offset: usize,
+    /// Reverse the sort order.
+    pub reverse: bool,
+    /// Include deferred seeds (hidden by default, as br does).
+    pub deferred: bool,
 }
 
 /// A page of seeds and whether it was cut short.
@@ -355,6 +410,8 @@ pub struct Page {
     pub total: usize,
     /// The limit applied (0 = none).
     pub limit: usize,
+    /// How many results were skipped before this page.
+    pub offset: usize,
     /// True when `total > issues.len()`.
     pub has_more: bool,
     /// For each seed on the page, how many seeds declare any dependency on it
@@ -369,16 +426,34 @@ pub fn list(b: &dyn Backend, req: &ListReq, at: Option<u64>) -> Result<Page> {
     let mut seeds: Vec<Seed> = snap
         .seeds
         .values()
-        .filter(|s| f.status.is_some() || (!s.is_tombstone() && (req.all || s.status != "closed")))
+        .filter(|s| {
+            f.status.is_some()
+                || (!s.is_tombstone()
+                    && (req.all || s.status != "closed")
+                    && (req.all || req.deferred || s.status != "deferred"))
+        })
         .filter(|s| f.matches(s))
         .cloned()
         .collect();
     sort_seeds(&mut seeds, req.sort.as_deref())?;
-    Ok(page(seeds, req.limit.unwrap_or(DEFAULT_LIST_LIMIT), &snap))
+    if req.reverse {
+        seeds.reverse();
+    }
+    Ok(page_at(
+        seeds,
+        req.offset,
+        req.limit.unwrap_or(DEFAULT_LIST_LIMIT),
+        &snap,
+    ))
 }
 
-fn page(mut seeds: Vec<Seed>, limit: usize, snap: &Snapshot) -> Page {
+fn page(seeds: Vec<Seed>, limit: usize, snap: &Snapshot) -> Page {
+    page_at(seeds, 0, limit, snap)
+}
+
+fn page_at(mut seeds: Vec<Seed>, offset: usize, limit: usize, snap: &Snapshot) -> Page {
     let total = seeds.len();
+    seeds.drain(..offset.min(seeds.len()));
     if limit > 0 && seeds.len() > limit {
         seeds.truncate(limit);
     }
@@ -387,10 +462,11 @@ fn page(mut seeds: Vec<Seed>, limit: usize, snap: &Snapshot) -> Page {
         .map(|s| (s.id.clone(), snap.dependents(&s.id).len()))
         .collect();
     Page {
-        has_more: seeds.len() < total,
+        has_more: offset + seeds.len() < total,
         issues: seeds,
         total,
         limit,
+        offset,
         dependent_counts,
     }
 }
@@ -408,6 +484,12 @@ pub struct SearchReq {
     pub limit: Option<usize>,
     /// Sort order (one of [`SORTS`]).
     pub sort: Option<String>,
+    /// Skip this many results first (pagination).
+    pub offset: usize,
+    /// Reverse the sort order.
+    pub reverse: bool,
+    /// Include deferred seeds (hidden by default, as br does).
+    pub deferred: bool,
 }
 
 /// A page of search hits and how many closed hits were hidden.
@@ -441,6 +523,7 @@ pub fn search(b: &dyn Backend, req: &SearchReq, at: Option<u64>) -> Result<Searc
         .seeds
         .values()
         .filter(|s| f.matches(s) && hit(s) && (f.status.is_some() || !s.is_tombstone()))
+        .filter(|s| f.status.is_some() || req.all || req.deferred || s.status != "deferred")
     {
         if s.status == "closed" && !show_closed {
             hidden_closed += 1;
@@ -449,8 +532,16 @@ pub fn search(b: &dyn Backend, req: &SearchReq, at: Option<u64>) -> Result<Searc
         }
     }
     sort_seeds(&mut seeds, req.sort.as_deref())?;
+    if req.reverse {
+        seeds.reverse();
+    }
     Ok(SearchPage {
-        page: page(seeds, req.limit.unwrap_or(DEFAULT_LIST_LIMIT), &snap),
+        page: page_at(
+            seeds,
+            req.offset,
+            req.limit.unwrap_or(DEFAULT_LIST_LIMIT),
+            &snap,
+        ),
         hidden_closed,
     })
 }

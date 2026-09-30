@@ -1985,3 +1985,134 @@ fn orphans_match_whole_ids_newest_commit_first_and_only_open_seeds() {
     got_sorted.sort();
     assert_eq!(got_sorted, want);
 }
+
+#[test]
+fn list_filters_paginate_reverse_and_hide_deferred_like_br() {
+    let mut b = backend();
+    let mk_f = |b: &mut QuipuBackend, t: &str, p: &str, d: Option<&str>, l: &[&str], n: u32| {
+        engine::create(
+            b,
+            &ctx(n),
+            &CreateReq {
+                title: t.into(),
+                priority: Some(p.into()),
+                description: d.map(str::to_string),
+                labels: l.iter().map(|x| x.to_string()).collect(),
+                ..CreateReq::default()
+            },
+        )
+        .unwrap()
+        .0
+        .id
+    };
+    let a = mk_f(
+        &mut b,
+        "Parser crash",
+        "0",
+        Some("the LEXER fails"),
+        &["x"],
+        1,
+    );
+    let c = mk_f(&mut b, "docs", "3", None, &["y"], 2);
+    let d = mk_f(&mut b, "later", "2", None, &[], 3);
+    engine::defer(&mut b, &ctx(4), std::slice::from_ref(&d), None).unwrap();
+    let ids = |f: Filter, extra: fn(&mut ListReq)| {
+        let mut req = ListReq {
+            filter: f,
+            limit: Some(0),
+            ..ListReq::default()
+        };
+        extra(&mut req);
+        engine::list(&b, &req, None)
+            .unwrap()
+            .issues
+            .into_iter()
+            .map(|s| s.id)
+            .collect::<Vec<_>>()
+    };
+    let none = |_: &mut ListReq| {};
+    assert_eq!(
+        ids(
+            Filter {
+                title_contains: Some("parser".into()),
+                ..Filter::default()
+            },
+            none
+        ),
+        [a.as_str()]
+    );
+    assert_eq!(
+        ids(
+            Filter {
+                desc_contains: Some("lexer".into()),
+                ..Filter::default()
+            },
+            none
+        ),
+        [a.as_str()]
+    );
+    assert_eq!(
+        ids(
+            Filter {
+                labels_any: vec!["x".into(), "y".into()],
+                ..Filter::default()
+            },
+            none
+        )
+        .len(),
+        2
+    );
+    assert_eq!(
+        ids(
+            Filter {
+                priority_min: Some("1".into()),
+                ..Filter::default()
+            },
+            none
+        ),
+        [c.as_str()]
+    );
+    assert_eq!(
+        ids(
+            Filter {
+                priority_max: Some("P1".into()),
+                ..Filter::default()
+            },
+            none
+        ),
+        [a.as_str()]
+    );
+    assert_eq!(
+        ids(
+            Filter {
+                ids: vec![c.clone()],
+                ..Filter::default()
+            },
+            none
+        ),
+        [c.as_str()]
+    );
+    // Deferred is hidden by default (br), shown with --deferred.
+    assert!(!ids(Filter::default(), none).contains(&d));
+    assert!(ids(Filter::default(), |r| r.deferred = true).contains(&d));
+    // Reverse and offset.
+    assert_eq!(
+        ids(Filter::default(), |r| r.reverse = true),
+        [c.as_str(), a.as_str()]
+    );
+    let p = engine::list(
+        &b,
+        &ListReq {
+            offset: 1,
+            limit: Some(1),
+            deferred: true,
+            ..ListReq::default()
+        },
+        None,
+    )
+    .unwrap();
+    assert_eq!(
+        (p.issues.len(), p.offset, p.total, p.has_more),
+        (1, 1, 3, true)
+    );
+}
