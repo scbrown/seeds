@@ -378,6 +378,36 @@ pub struct ListArgs {
     /// priority (default), created, updated, id or title
     #[arg(long)]
     pub sort: Option<String>,
+    /// Title contains this (case-insensitive)
+    #[arg(long)]
+    pub title_contains: Option<String>,
+    /// Description contains this (case-insensitive)
+    #[arg(long)]
+    pub desc_contains: Option<String>,
+    /// Notes contain this (case-insensitive)
+    #[arg(long)]
+    pub notes_contains: Option<String>,
+    /// Only seeds with ANY of these labels (repeatable)
+    #[arg(long)]
+    pub label_any: Vec<String>,
+    /// Only priority >= this (0-4 or P0-P4)
+    #[arg(long)]
+    pub priority_min: Option<String>,
+    /// Only priority <= this
+    #[arg(long)]
+    pub priority_max: Option<String>,
+    /// Only these ids (repeatable)
+    #[arg(long)]
+    pub id: Vec<String>,
+    /// Skip this many results (pagination)
+    #[arg(long, default_value_t = 0)]
+    pub offset: usize,
+    /// Reverse the sort order
+    #[arg(short, long)]
+    pub reverse: bool,
+    /// Include deferred seeds (hidden by default, as br does)
+    #[arg(long)]
+    pub deferred: bool,
 }
 
 /// `sd search`.
@@ -412,6 +442,36 @@ pub struct SearchArgs {
     /// priority (default), created, updated, id or title
     #[arg(long)]
     pub sort: Option<String>,
+    /// Title contains this (case-insensitive)
+    #[arg(long)]
+    pub title_contains: Option<String>,
+    /// Description contains this (case-insensitive)
+    #[arg(long)]
+    pub desc_contains: Option<String>,
+    /// Notes contain this (case-insensitive)
+    #[arg(long)]
+    pub notes_contains: Option<String>,
+    /// Only seeds with ANY of these labels (repeatable)
+    #[arg(long)]
+    pub label_any: Vec<String>,
+    /// Only priority >= this (0-4 or P0-P4)
+    #[arg(long)]
+    pub priority_min: Option<String>,
+    /// Only priority <= this
+    #[arg(long)]
+    pub priority_max: Option<String>,
+    /// Only these ids (repeatable)
+    #[arg(long)]
+    pub id: Vec<String>,
+    /// Skip this many results (pagination)
+    #[arg(long, default_value_t = 0)]
+    pub offset: usize,
+    /// Reverse the sort order
+    #[arg(short, long)]
+    pub reverse: bool,
+    /// Include deferred seeds (hidden by default, as br does)
+    #[arg(long)]
+    pub deferred: bool,
 }
 
 /// `sd ready`.
@@ -439,6 +499,9 @@ pub struct ReadyArgs {
     /// Only children of this seed
     #[arg(long)]
     pub parent: Option<String>,
+    /// Only seeds with ANY of these labels (repeatable)
+    #[arg(long)]
+    pub label_any: Vec<String>,
 }
 
 /// `sd blocked`.
@@ -583,6 +646,30 @@ pub struct CountArgs {
     /// Count closed seeds too
     #[arg(long)]
     pub include_closed: bool,
+    /// Only this priority
+    #[arg(long)]
+    pub priority: Option<String>,
+    /// Title contains this (case-insensitive)
+    #[arg(long)]
+    pub title_contains: Option<String>,
+    /// Only unassigned seeds
+    #[arg(long)]
+    pub unassigned: bool,
+    /// Group by status (the same as --by status)
+    #[arg(long)]
+    pub by_status: bool,
+    /// Group by priority (the same as --by priority)
+    #[arg(long)]
+    pub by_priority: bool,
+    /// Group by type (the same as --by type)
+    #[arg(long)]
+    pub by_type: bool,
+    /// Group by assignee (the same as --by assignee)
+    #[arg(long)]
+    pub by_assignee: bool,
+    /// Group by label (the same as --by label)
+    #[arg(long)]
+    pub by_label: bool,
 }
 
 /// `sd update`.

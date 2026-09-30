@@ -53,7 +53,7 @@ pub fn list_json(p: &Page) -> Json {
         "issues": p.issues.iter().map(issue).collect::<Vec<_>>(),
         "total": p.total,
         "limit": p.limit,
-        "offset": 0,
+        "offset": p.offset,
         "has_more": p.has_more,
     })
 }

@@ -885,3 +885,17 @@ fn orphans_reads_the_git_log_of_the_current_repo() {
         format!("work on {id}").as_str()
     );
 }
+
+#[test]
+fn count_by_shorthands_equal_by_and_conflicts_are_refused() {
+    let sb = Sandbox::new("count-by");
+    sb.ok(&["create", "a", "-p", "1"]);
+    sb.ok(&["create", "b", "-p", "2"]);
+    assert_eq!(
+        sb.json(&["count", "--by-priority"]),
+        sb.json(&["count", "--by", "priority"])
+    );
+    assert_eq!(sb.json(&["count", "--priority", "1"])["count"], 1);
+    assert_eq!(code(&sb.run(&["count", "--by-status", "--by-type"])), 2);
+    assert_eq!(code(&sb.run(&["count", "--by", "status", "--by-type"])), 2);
+}
