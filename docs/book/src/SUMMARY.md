@@ -42,6 +42,7 @@
   - [capabilities](verbs/capabilities.md)
   - [schema](verbs/schema.md)
   - [doctor](verbs/doctor.md)
+  - [key](verbs/key.md)
   - [completions](verbs/completions.md)
 - [Formulas: shuttle](formulas.md)
 - [Reference](reference.md)

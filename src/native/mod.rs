@@ -6,6 +6,7 @@
 //! [`cli::Cli`] into calls on [`crate::engine`] and prints the result.
 #![allow(clippy::disallowed_methods, clippy::disallowed_types)]
 
+pub mod attest;
 pub mod cli;
 pub mod config;
 pub mod remote;
@@ -103,6 +104,7 @@ pub fn run(cli: &Cli) -> Outcome {
         .and_then(|i| config::resolve(&i).map(|cfg| (i, cfg)))
         .and_then(|(inputs, cfg)| match &cli.command {
             Command::Config { command } => config_outcome(cli.json, &inputs, &cfg, command),
+            Command::Key { command } => key_outcome(cli.json, &inputs, &cfg, command),
             // Reads only the configuration: never creates a project id or a store.
             Command::Where => Ok(where_outcome(cli.json, &cfg)),
             _ => run_with(cli, &cfg),
@@ -576,6 +578,7 @@ fn capabilities(command_path: Option<&str>) -> Result<Json> {
             "a lost response is read back; an unconfirmed write is exit 8, never a blind retry",
             "an unreachable server is exit 7; sd never falls back to a local store",
             "a token is never sent to a project-chosen server unless the user trusts its host",
+            "a signed write carries no bearer, and a key signs only for a server trusted with the token",
             "--at pins any read to a past transaction; writes always apply to now",
             "delete is a tombstone: history is kept, sync carries it without deleting data",
         ],
@@ -797,6 +800,146 @@ fn token(cfg: &Resolved, url: &str, from_project: bool) -> Result<Option<String>
     }
 }
 
+/// `sd key init` / `sd key show` (aegis-bys8d1).
+fn key_outcome(
+    json: bool,
+    inputs: &config::Inputs,
+    cfg: &Resolved,
+    command: &cli::KeyCommand,
+) -> Result<Outcome> {
+    const YEAR: u64 = 365 * 24 * 3600;
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs());
+    let (signer, key_file, agent, created) = match command {
+        cli::KeyCommand::Init {
+            session,
+            introducer,
+            agent,
+        } => {
+            let session = match session {
+                Some(s) => s.clone(),
+                None => default_session()?,
+            };
+            let dir = inputs.user_config_dir.as_ref().ok_or_else(|| {
+                SdError::new(
+                    ErrorKind::Config,
+                    "no user config directory (set XDG_CONFIG_HOME or HOME)",
+                )
+            })?;
+            let file = dir
+                .join("seeds")
+                .join("keys")
+                .join(format!("{session}.key"));
+            if session.contains(['/', '\\']) || session.starts_with('.') {
+                return Err(SdError::usage(format!(
+                    "session {session:?} cannot name a key file"
+                )));
+            }
+            let introducer = introducer.as_deref().ok_or_else(|| {
+                SdError::usage(
+                    "sd key init needs --introducer <who>: the lead or human who will register \
+                     the key on the quipu host (a key is never self-registered)",
+                )
+            })?;
+            attest::generate(&file)?;
+            let signer = attest::Signer::load(&file, &session, introducer)?;
+            let agent = agent.clone().unwrap_or_else(|| session.clone());
+            (signer, file, agent, true)
+        }
+        cli::KeyCommand::Show => {
+            let s = cfg.signing.as_ref().ok_or_else(|| {
+                SdError::new(
+                    ErrorKind::Config,
+                    "no signing key configured: run `sd key init --introducer <who>`",
+                )
+            })?;
+            let signer = attest::Signer::load(&s.key_file, &s.session, &s.introducer)?;
+            (signer, s.key_file.clone(), s.session.clone(), false)
+        }
+    };
+    let register = signer.register_command(&agent, now, now + YEAR);
+    let config_lines = format!(
+        "[quipu]\nsigning_key_file = {}\nsigning_session = {}\nsigning_introducer = {}",
+        toml_str(&key_file.display().to_string()),
+        toml_str(&signer.session),
+        toml_str(&signer.introducer)
+    );
+    let value = serde_json::json!({
+        "created": created,
+        "key_file": key_file.display().to_string(),
+        "session": signer.session,
+        "introducer": signer.introducer,
+        "agent": agent,
+        "public_key": signer.public_key_hex(),
+        "key_id": signer.key_id(),
+        "register_command": register,
+        "config": config_lines,
+    });
+    let mut text = String::new();
+    if created {
+        text.push_str(&format!(
+            "created {} (owner-only; never overwritten)\n\n",
+            key_file.display()
+        ));
+    }
+    text.push_str(&format!(
+        "public key  {}\nkey_id      {}\nsession     {}\n\n",
+        signer.public_key_hex(),
+        signer.key_id(),
+        signer.session
+    ));
+    if created {
+        text.push_str(&format!(
+            "1. add to ~/.config/seeds/config.toml (user config only):\n\n{config_lines}\n\n"
+        ));
+    }
+    text.push_str(&format!(
+        "{}have {} run this ONCE on the quipu host (never self-register):\n\n  {register}\n",
+        if created { "2. " } else { "" },
+        signer.introducer
+    ));
+    Ok(ok(json, value, text.trim_end().to_string(), vec![]))
+}
+
+fn toml_str(s: &str) -> String {
+    toml::Value::String(s.to_string()).to_string()
+}
+
+/// `seeds-<host>-<user>`, from the kernel hostname and $USER.
+fn default_session() -> Result<String> {
+    let host = std::fs::read_to_string("/proc/sys/kernel/hostname")
+        .ok()
+        .or_else(|| std::env::var("HOSTNAME").ok())
+        .map(|h| h.trim().to_string())
+        .filter(|h| !h.is_empty());
+    let user = std::env::var("USER").ok().filter(|u| !u.is_empty());
+    match (host, user) {
+        (Some(h), Some(u)) => Ok(format!("seeds-{h}-{u}")),
+        _ => Err(SdError::usage(
+            "cannot tell this host or user; pass --session",
+        )),
+    }
+}
+
+/// The signing identity for writes to `url`, under the same trust gate as the
+/// token: a signed write names nothing about the server it was meant for, so a
+/// server a cloned project chose could relay it to yours within the clock
+/// window. Sign only for servers you would send your token to.
+fn signer(cfg: &Resolved, url: &str, from_project: bool) -> Result<Option<attest::Signer>> {
+    let Some(s) = &cfg.signing else {
+        return Ok(None);
+    };
+    if !cfg.token_allowed(url, from_project) {
+        eprintln!(
+            "sd: not signing writes for {url}: that URL comes from the project's config. Add its \
+             host to trusted_hosts in ~/.config/seeds/config.toml to allow it."
+        );
+        return Ok(None);
+    }
+    attest::Signer::load(&s.key_file, &s.session, &s.introducer).map(Some)
+}
+
 fn with_notes(mut o: Outcome, notes: Vec<String>) -> Outcome {
     if notes.is_empty() {
         return o;
@@ -815,6 +958,7 @@ fn run_remote(cli: &Cli, cfg: &Resolved, ctx: &Ctx, url: &str) -> Result<Outcome
         url,
         cfg.graph(),
         token(cfg, url, cfg.location_from_project)?,
+        signer(cfg, url, cfg.location_from_project)?,
         &cfg.allow_plain_http_hosts,
     )?;
     match &cli.command {
@@ -1039,6 +1183,7 @@ fn run_sync(
         &url,
         cfg.graph(),
         token(cfg, &url, from_project)?,
+        signer(cfg, &url, from_project)?,
         &cfg.allow_plain_http_hosts,
     )?;
     let base_path = store::sync_base_path(path, &url, cfg.graph());
@@ -1837,6 +1982,7 @@ fn dispatch(cli: &Cli, cfg: &Resolved, ctx: &Ctx, b: &mut dyn Backend) -> Result
         | Command::Schema { .. }
         | Command::Capabilities { .. }
         | Command::Config { .. }
+        | Command::Key { .. }
         | Command::Query(_)
         | Command::Upgrade(_)
         | Command::Gate(_)

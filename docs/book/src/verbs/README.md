@@ -31,6 +31,7 @@
 | `capabilities` | no | [capabilities](capabilities.md) |
 | `schema` | no | [schema](schema.md) |
 | `doctor` | no | [doctor](doctor.md) |
+| `key` | no | [key](key.md) |
 | `completions` | no | [completions](completions.md) |
 | `export`, `import`, `sync`, `merge-driver` | import, sync, merge-driver | [export, import, sync](sync.md) |
 

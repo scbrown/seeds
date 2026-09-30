@@ -15,6 +15,9 @@ store = ".seeds/seeds.db"            # a local quipu store file (the default)
 # token_file = "~/.config/seeds/quipu-token"   # bearer for writes: USER config only
 # trusted_hosts = ["quipu.example.org"]       # USER config only: see below
 # allow_plain_http_hosts = ["quipu.internal.example"]      # USER config only: see below
+# signing_key_file = "~/.config/seeds/keys/<session>.key"  # signed writes: USER config only
+# signing_session = "<session>"
+# signing_introducer = "<who registered it>"
 
 [project]
 prefix = "sd"                        # id prefix for new seeds (default sd)
@@ -89,6 +92,39 @@ with your token:
   server on a network you trust that has no TLS. An entry matches exactly: a
   bare host (`quipu.internal.example`) admits any port on that host, `host:port` admits only
   that port, and nothing is matched by suffix.
+
+### Signed writes: no bearer on the wire
+
+A quipu server that accepts signed writes (`POST /knot`, `/update`, `/episode`)
+does not need your bearer at all. `sd key init` makes an Ed25519 key that never
+leaves your machine; its public half is registered **once** on the server by
+someone else (your lead or a human, never you). After that every write carries
+an `x-quipu-attestation` header: a signature over that one request (method,
+path, content type, body hash) with a single-use nonce. Nothing in it can be
+reused, so plain `http://` is no longer an authentication risk, and the server
+records the write as yours, not as "whoever holds the token".
+
+```toml
+# ~/.config/seeds/config.toml (USER config only; sd key init prints these)
+[quipu]
+signing_key_file = "~/.config/seeds/keys/seeds-myhost-me.key"
+signing_session = "seeds-myhost-me"
+signing_introducer = "wu"
+```
+
+- A signed write never also sends the bearer.
+- A key is used only for a server you would send your token to: a URL from a
+  project file needs its host in `trusted_hosts`. The signature does not name
+  the server, so a server a cloned project chose could otherwise pass your
+  signed write on to yours.
+- `/graph/create` is not signable yet. seeds creates a graph only when the
+  server does not already list it (`GET /graphs`), so a signing-only setup
+  writes to graphs that exist; creating a new one still needs a token.
+- A refusal says which check failed: `skew` (fix this machine's clock),
+  `unbound` (the key is not registered: `sd key show`), `revoked`/`expired`,
+  `replay`, `badsig`.
+
+See [sd key](verbs/key.md).
 
 ## The project id
 
