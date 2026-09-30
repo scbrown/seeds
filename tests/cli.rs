@@ -1126,3 +1126,37 @@ fn list_long_pretty_and_tree_layouts_and_refusals() {
         assert_eq!(code(&sb.run(&bad)), 2, "{bad:?}");
     }
 }
+
+#[test]
+fn dep_list_type_filters_edges_and_comments_content_is_visible() {
+    let sb = Sandbox::new("dep-type");
+    let p = sb.ok(&["create", "epic", "--silent"]).trim().to_string();
+    let b = sb.ok(&["create", "blocker", "--silent"]).trim().to_string();
+    let c = sb
+        .ok(&["create", "child", "--parent", &p, "--deps", &b, "--silent"])
+        .trim()
+        .to_string();
+    let ids = |args: &[&str]| -> Vec<String> {
+        sb.json(args)
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|r| r["depends_on_id"].as_str().unwrap().to_string())
+            .collect()
+    };
+    // Control: unfiltered, the child has both edges.
+    let mut all = ids(&["dep", "list", &c]);
+    all.sort();
+    let mut want = vec![p.clone(), b.clone()];
+    want.sort();
+    assert_eq!(all, want);
+    assert_eq!(ids(&["dep", "list", &c, "--type", "blocks"]), [b]);
+    assert_eq!(ids(&["dep", "list", &c, "-t", "parent-child"]), [p]);
+    // br prints an error but exits 0 on an unknown type; sd exits 2.
+    assert_eq!(code(&sb.run(&["dep", "list", &c, "--type", "bogus"])), 2);
+    assert!(sb
+        .ok(&["comments", "add", "--help"])
+        .contains("[alias: --content]"));
+    sb.ok(&["comments", "add", &c, "--content", "via content"]);
+    assert!(sb.ok(&["comments", "list", &c]).contains("via content"));
+}

@@ -2200,9 +2200,20 @@ fn dispatch(cli: &Cli, cfg: &Resolved, ctx: &Ctx, b: &mut dyn Backend) -> Result
                 );
                 Ok(ok(json, output::dep_change_json(&d), text, vec![]))
             }
-            DepCommand::List { id, direction } => {
+            DepCommand::List {
+                id,
+                direction,
+                dep_type,
+            } => {
                 let up = direction == "up";
-                let rows = engine::dep_list(b, id, up, at)?;
+                let only = dep_type
+                    .as_deref()
+                    .map(crate::model::parse_dep_type)
+                    .transpose()?;
+                let mut rows = engine::dep_list(b, id, up, at)?;
+                if let Some(t) = &only {
+                    rows.retain(|r| r.dep_type == t.as_str());
+                }
                 let text = if rows.is_empty() {
                     format!(
                         "{id} has no {}",
