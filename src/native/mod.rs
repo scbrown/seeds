@@ -1422,6 +1422,23 @@ fn csv_usage(cli: &Cli) -> Result<()> {
     }
 }
 
+/// The text layout `--long`/`--pretty`/`--tree` asked for. They shape text
+/// only, so with `--json` or `--format csv` they would do nothing: refused.
+fn layout_of(cli: &Cli, long: bool, pretty: bool, tree: bool) -> Result<output::Layout> {
+    let layout = match (long, pretty, tree) {
+        (true, _, _) => output::Layout::Long,
+        (_, true, _) => output::Layout::Pretty,
+        (_, _, true) => output::Layout::Tree,
+        _ => return Ok(output::Layout::Line),
+    };
+    if cli.json || cli.format.as_deref() == Some("csv") {
+        return Err(SdError::usage(
+            "--long/--pretty/--tree lay out text output; they do nothing with --json or --format csv",
+        ));
+    }
+    Ok(layout)
+}
+
 /// The CSV for a list or search page, when `--format csv` asked for it.
 fn csv_of(
     cli: &Cli,
@@ -1562,9 +1579,10 @@ fn dispatch(cli: &Cli, cfg: &Resolved, ctx: &Ctx, b: &mut dyn Backend) -> Result
                     p.total
                 ));
             }
+            let layout = layout_of(cli, a.long, a.pretty, a.tree)?;
             let text = match csv_of(cli, &p.issues, &a.fields)? {
                 Some(csv) => csv,
-                None => output::page_text(&p, "matching"),
+                None => output::page_text_layout(&p, "matching", layout),
             };
             Ok(ok(json, output::list_json(&p), text, warnings))
         }
@@ -1633,9 +1651,10 @@ fn dispatch(cli: &Cli, cfg: &Resolved, ctx: &Ctx, b: &mut dyn Backend) -> Result
                 deferred: a.deferred,
             };
             let r = engine::search(b, &req, at)?;
+            let layout = layout_of(cli, a.long, a.pretty, a.tree)?;
             let text = match csv_of(cli, &r.page.issues, &a.fields)? {
                 Some(csv) => csv,
-                None => output::search_text(&r, &a.query),
+                None => output::search_text(&r, &a.query, layout),
             };
             Ok(ok(json, output::search_json(&r), text, vec![]))
         }

@@ -1054,3 +1054,68 @@ fn format_csv_on_list_and_search_quotes_like_rfc4180_and_refuses_what_it_would_i
         assert_eq!(code(&sb.run(&bad)), 2, "{bad:?}");
     }
 }
+
+// br's --long/--pretty/--tree, measured on a br scratch store: --long adds the
+// fields with dates, --pretty the same fields with connectors and no dates,
+// --tree nests children and lifts one whose parent is filtered out. br lets
+// --tree silently win over the others and --json ignore all three; sd refuses
+// each combination instead of ignoring it.
+#[test]
+fn list_long_pretty_and_tree_layouts_and_refusals() {
+    let sb = Sandbox::new("layouts");
+    let p = sb
+        .ok(&["create", "epic", "-p", "1", "--silent"])
+        .trim()
+        .to_string();
+    let c = sb
+        .ok(&["create", "child", "--parent", &p, "--silent"])
+        .trim()
+        .to_string();
+    let g = sb
+        .ok(&["create", "grand", "--parent", &c, "--silent"])
+        .trim()
+        .to_string();
+    let tree = sb.ok(&["list", "--tree"]);
+    let lines: Vec<&str> = tree.lines().collect();
+    assert!(
+        lines[0].contains(&p) && !lines[0].starts_with(['├', '└']),
+        "{tree}"
+    );
+    assert!(
+        lines[1].starts_with("└── ") && lines[1].contains(&c),
+        "{tree}"
+    );
+    assert!(
+        lines[2].starts_with("    └── ") && lines[2].contains(&g),
+        "{tree}"
+    );
+    // The epic filtered out (P1): its child is a root again.
+    let lifted = sb.ok(&["list", "--tree", "-p", "2"]);
+    assert!(lifted.lines().next().unwrap().contains(&c), "{lifted}");
+    assert!(
+        !lifted.lines().next().unwrap().starts_with(['├', '└']),
+        "{lifted}"
+    );
+
+    let long = sb.ok(&["list", "--long", "--id", &p]);
+    assert!(
+        long.contains("\n  Status: open\n  Priority: P1\n  Type: task\n  Created: "),
+        "{long}"
+    );
+    let pretty = sb.ok(&["list", "--pretty", "--id", &p]);
+    assert!(
+        pretty.contains("\n├── Status: open\n├── Priority: P1\n└── Type: task"),
+        "{pretty}"
+    );
+    assert!(!pretty.contains("Created"), "{pretty}");
+    assert!(sb.ok(&["search", "grand", "--tree"]).contains(&g));
+
+    for bad in [
+        vec!["list", "--tree", "--long"],
+        vec!["list", "--pretty", "--tree"],
+        vec!["list", "--tree", "--json"],
+        vec!["list", "--long", "--format", "csv"],
+    ] {
+        assert_eq!(code(&sb.run(&bad)), 2, "{bad:?}");
+    }
+}

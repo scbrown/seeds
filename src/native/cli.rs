@@ -465,6 +465,15 @@ pub struct ListArgs {
     /// With --format csv: the columns, comma-separated (default id,title,status,priority,issue_type,assignee,created_at,updated_at)
     #[arg(long)]
     pub fields: Option<String>,
+    /// Text layout: each seed's fields indented below it (br's --long)
+    #[arg(long, conflicts_with_all = ["pretty", "tree"])]
+    pub long: bool,
+    /// Text layout: each seed's fields with tree connectors (br's --pretty)
+    #[arg(long, conflicts_with = "tree")]
+    pub pretty: bool,
+    /// Text layout: children nested under their parents (br's --tree)
+    #[arg(long)]
+    pub tree: bool,
 }
 
 /// `sd search`.
@@ -532,6 +541,15 @@ pub struct SearchArgs {
     /// With --format csv: the columns, comma-separated (default id,title,status,priority,issue_type,assignee,created_at,updated_at)
     #[arg(long)]
     pub fields: Option<String>,
+    /// Text layout: each seed's fields indented below it (br's --long)
+    #[arg(long, conflicts_with_all = ["pretty", "tree"])]
+    pub long: bool,
+    /// Text layout: each seed's fields with tree connectors (br's --pretty)
+    #[arg(long, conflicts_with = "tree")]
+    pub pretty: bool,
+    /// Text layout: children nested under their parents (br's --tree)
+    #[arg(long)]
+    pub tree: bool,
 }
 
 /// `sd ready`.

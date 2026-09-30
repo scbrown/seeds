@@ -67,8 +67,8 @@ pub fn search_json(r: &SearchPage) -> Json {
 }
 
 /// `search` as text: the hits, then how many closed ones were hidden.
-pub fn search_text(r: &SearchPage, query: &str) -> String {
-    let mut out = page_text(&r.page, "matching");
+pub fn search_text(r: &SearchPage, query: &str, layout: Layout) -> String {
+    let mut out = page_text_layout(&r.page, "matching", layout);
     if r.hidden_closed > 0 {
         out.push_str(&format!(
             "\n({} closed seed{} also match {query:?}; --all shows them)",
@@ -275,9 +275,136 @@ pub fn seed_line(s: &Seed) -> String {
     line
 }
 
+/// How `list`/`search` lay out text (br's `--long`, `--pretty`, `--tree`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Layout {
+    /// One line per seed.
+    #[default]
+    Line,
+    /// Each line, then its fields indented, then a blank line.
+    Long,
+    /// Each line, then its fields with tree connectors, then a blank line.
+    Pretty,
+    /// Children nested under their parents with tree connectors.
+    Tree,
+}
+
+/// br's `--long`/`--pretty` field block: status, priority, type, assignee (if
+/// any), and for `--long` created and updated (br's `--pretty` has no dates).
+fn seed_fields(s: &Seed, dates: bool) -> Vec<String> {
+    let mut f = vec![
+        format!("Status: {}", s.status),
+        format!("Priority: P{}", s.priority),
+        format!("Type: {}", s.issue_type),
+    ];
+    if let Some(a) = &s.assignee {
+        f.push(format!("Assignee: {a}"));
+    }
+    if dates {
+        f.push(format!("Created: {}", s.created_at));
+        f.push(format!("Updated: {}", s.updated_at));
+    }
+    f
+}
+
+/// Seeds nested under their parents, in the given order. A seed whose parent
+/// is not in the list is a root. A parent loop (possible only in a damaged
+/// ledger) cannot hide or repeat a seed: anything no root reaches is printed
+/// as a root too.
+fn tree_lines(seeds: &[Seed]) -> Vec<String> {
+    use std::collections::{BTreeMap, BTreeSet};
+    let ids: BTreeSet<&str> = seeds.iter().map(|s| s.id.as_str()).collect();
+    let mut children: BTreeMap<&str, Vec<&Seed>> = BTreeMap::new();
+    for s in seeds {
+        if let Some(p) = s
+            .parent
+            .as_deref()
+            .filter(|p| ids.contains(p) && *p != s.id)
+        {
+            children.entry(p).or_default().push(s);
+        }
+    }
+    fn walk<'a>(
+        s: &'a Seed,
+        prefix: &str,
+        connector: &str,
+        children: &BTreeMap<&str, Vec<&'a Seed>>,
+        seen: &mut BTreeSet<&'a str>,
+        out: &mut Vec<String>,
+    ) {
+        if !seen.insert(s.id.as_str()) {
+            return;
+        }
+        out.push(format!("{prefix}{connector}{}", seed_line(s)));
+        let kids = children
+            .get(s.id.as_str())
+            .map(Vec::as_slice)
+            .unwrap_or(&[]);
+        let next = match connector {
+            "├── " => format!("{prefix}│   "),
+            "└── " => format!("{prefix}    "),
+            _ => prefix.to_string(),
+        };
+        for (i, k) in kids.iter().enumerate() {
+            let c = if i + 1 == kids.len() {
+                "└── "
+            } else {
+                "├── "
+            };
+            walk(k, &next, c, children, seen, out);
+        }
+    }
+    let mut seen = BTreeSet::new();
+    let mut out = Vec::new();
+    let roots = seeds.iter().filter(|s| {
+        s.parent
+            .as_deref()
+            .is_none_or(|p| !ids.contains(p) || p == s.id)
+    });
+    for s in roots {
+        walk(s, "", "", &children, &mut seen, &mut out);
+    }
+    for s in seeds {
+        walk(s, "", "", &children, &mut seen, &mut out);
+    }
+    out
+}
+
+/// Seeds in a [`Layout`].
+pub fn seeds_layout(seeds: &[Seed], layout: Layout) -> Vec<String> {
+    match layout {
+        Layout::Line => seeds.iter().map(seed_line).collect(),
+        Layout::Tree => tree_lines(seeds),
+        Layout::Long | Layout::Pretty => {
+            let mut out = Vec::new();
+            for (i, s) in seeds.iter().enumerate() {
+                if i > 0 {
+                    out.push(String::new());
+                }
+                out.push(seed_line(s));
+                let f = seed_fields(s, layout == Layout::Long);
+                for (j, line) in f.iter().enumerate() {
+                    let lead = match layout {
+                        Layout::Long => "  ",
+                        _ if j + 1 == f.len() => "└── ",
+                        _ => "├── ",
+                    };
+                    out.push(format!("{lead}{line}"));
+                }
+            }
+            out
+        }
+    }
+}
+
 /// A page of seeds, with a trailer that says when it was cut short.
 pub fn page_text(p: &Page, what: &str) -> String {
-    let mut out: Vec<String> = p.issues.iter().map(seed_line).collect();
+    page_text_layout(p, what, Layout::Line)
+}
+
+/// [`page_text`] in a [`Layout`].
+pub fn page_text_layout(p: &Page, what: &str, layout: Layout) -> String {
+    let mut out: Vec<String> = seeds_layout(&p.issues, layout);
     if p.issues.is_empty() {
         out.push(format!("no {what} seeds"));
     }
@@ -439,4 +566,54 @@ pub fn seeds_csv(seeds: &[Seed], fields: &[String]) -> String {
         out.push(row.join(","));
     }
     out.join("\n")
+}
+
+#[cfg(test)]
+mod layout_tests {
+    use super::*;
+
+    fn seed(id: &str, parent: Option<&str>) -> Seed {
+        Seed {
+            id: id.into(),
+            title: id.into(),
+            status: "open".into(),
+            priority: 2,
+            issue_type: "task".into(),
+            parent: parent.map(str::to_string),
+            ..Seed::default()
+        }
+    }
+
+    #[test]
+    fn a_parent_loop_prints_every_seed_exactly_once() {
+        // x and y are each other's parent (a damaged ledger): no root reaches
+        // them, and a naive walk would drop them or recurse forever.
+        let seeds = [seed("r", None), seed("x", Some("y")), seed("y", Some("x"))];
+        let lines = tree_lines(&seeds);
+        for id in ["r", "x", "y"] {
+            let n = lines
+                .iter()
+                .filter(|l| l.contains(&format!(" {id} [P2]")))
+                .count();
+            assert_eq!(n, 1, "{id} in {lines:?}");
+        }
+    }
+
+    #[test]
+    fn nested_children_get_brs_connectors() {
+        let seeds = [
+            seed("p", None),
+            seed("p.1", Some("p")),
+            seed("p.1.1", Some("p.1")),
+            seed("p.2", Some("p")),
+        ];
+        let lines: Vec<String> = tree_lines(&seeds)
+            .iter()
+            .map(|l| l.replace(" [P2] [task]", "").replace("○ ", ""))
+            .collect();
+        assert_eq!(
+            lines,
+            ["p p", "├── p.1 p.1", "│   └── p.1.1 p.1.1", "└── p.2 p.2"]
+        );
+    }
 }
