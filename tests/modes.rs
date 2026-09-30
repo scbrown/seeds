@@ -858,3 +858,26 @@ fn history_over_a_quipu_server_finds_each_version_without_a_head_tx() {
         .unwrap()
         .contains("transaction history"));
 }
+
+#[test]
+fn a_remote_create_says_created_not_exists() {
+    // wu, aegis-w3k75d.13: the create text branched on tx == 0 to mean "a keyed
+    // create found the seed", and a remote store reports tx 0 for EVERY write,
+    // so every remote create printed "exists".
+    let mut env = Env::new("remote-created");
+    let Some(url) = env.start_server() else {
+        eprintln!("SKIPPED: set SEEDS_TEST_QUIPU_SERVER to a quipu-server binary to run this");
+        return;
+    };
+    let work = env.dir("work");
+    let remote = [("SEEDS_QUIPU_URL", url.as_str())];
+    let text = env.ok(&work, &["create", "brand new"], &remote);
+    assert!(text.starts_with("created "), "{text}");
+    let j: Value =
+        serde_json::from_str(&env.ok(&work, &["create", "another", "--json"], &remote)).unwrap();
+    assert!(j["tx"].is_null(), "a remote write has no tx to report: {j}");
+    // A keyed create that finds its seed still says so.
+    let keyed = ["create", "step", "--workflow-run", "r1", "--step", "build"];
+    assert!(env.ok(&work, &keyed, &remote).starts_with("created "));
+    assert!(env.ok(&work, &keyed, &remote).starts_with("exists "));
+}
