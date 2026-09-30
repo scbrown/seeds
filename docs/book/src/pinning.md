@@ -1,6 +1,6 @@
 # Pinning: `--at <tx>`
 
-The pinning demo is the sharpest test of the experiment's question.
+Pinning is the clearest case for fact-level versioning.
 
 ## The idea
 

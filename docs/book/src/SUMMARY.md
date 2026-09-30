@@ -3,7 +3,7 @@
 [Introduction](introduction.md)
 
 - [Getting started](getting-started.md)
-- [An experiment, not a competing beads](experiment.md)
+- [Why facts, not snapshots](why-facts.md)
 - [The bd intent map](intent-map.md)
 - [How it works](architecture.md)
   - [The storage model](storage.md)

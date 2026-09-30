@@ -2,7 +2,7 @@
 name = "seeds-ai"
 version = "0.0.1"
 edition = "2021"
-description = "An experiment: beads-shaped work items stored as facts in a quipu knowledge graph"
+description = "A beads-compatible issue tracker for AI agents that stores work items as facts in a quipu knowledge graph"
 license = "MIT"
 repository = "https://github.com/scbrown/seeds"
 # 1.89 for `std::fs::File::lock`, the cross-process write lock the native

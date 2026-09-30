@@ -22,8 +22,7 @@
 facts in a [quipu](https://github.com/scbrown/quipu) knowledge graph instead of
 rows in a versioned database. It is a CLI that answers the `bd`/`br` verbs
 agents already type (`create`, `show`, `ready`, `close`, …) with `--json` in the
-same shape. It is an experiment that tests one design question, fact-level
-versus snapshot versioning, and not a competing beads implementation.** The
+same shape, and it is the beads replacement for the quipu stack.** The
 name comes from the counting board: a *quipucamayoc* moved seeds across a
 *yupana* to count, then knotted the result into the quipu.
 
@@ -187,9 +186,9 @@ Caboodle installs these together and proves each one works; every tool also stan
 | [yupana](https://github.com/scbrown/yupana) | which code calls which: the blast radius before an edit |
 | [desire-path](https://github.com/scbrown/desire-path) | the tool calls your agents get wrong, so you can fix them |
 
-seeds is an experiment built on top of these, not a member of the six:
-quipu stores it, camayoc supplies its WorkItem vocabulary and shape, caboodle
-will install and verify it, and desire-path will redirect `bd` to it.
+seeds is the stack's work tracker, built on the others: quipu stores it,
+camayoc supplies its WorkItem vocabulary and shape, caboodle installs and
+verifies it, and desire-path redirects `bd` to it.
 [How seeds fits the stack](docs/book/src/stack.md).
 
 ## Contributing

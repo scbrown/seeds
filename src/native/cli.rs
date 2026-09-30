@@ -7,9 +7,9 @@ use clap::{Args, Parser, Subcommand};
 #[command(
     name = "sd",
     version,
-    about = "Beads-shaped work items as facts in a quipu graph (experiment)",
-    long_about = "seeds is an experiment testing fact-level versus snapshot versioning \
-                  of work items. Each work item is a set of facts in a quipu knowledge \
+    about = "Beads-compatible work items as facts in a quipu graph",
+    long_about = "seeds is the beads-compatible tracker for the quipu stack, with \
+                  fact-level versioning of work items. Each work item is a set of facts in a quipu knowledge \
                   graph; every write is one quipu transaction, and --at <tx> reads any \
                   seed as it stood at that transaction.\n\n\
                   Where the graph lives comes from --store/--quipu, then SEEDS_QUIPU_STORE/\

@@ -1,7 +1,7 @@
 # The stack
 
-seeds is an experiment built on the caboodle stack. It is not one of the six
-stack tools; it uses them.
+seeds is the caboodle stack's work tracker, and a member of the stack. It is
+built on the other tools:
 
 | tool | what seeds uses it for |
 |---|---|
