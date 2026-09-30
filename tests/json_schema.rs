@@ -11,16 +11,49 @@ use std::process::Command;
 
 use serde_json::Value;
 
-// The pinned key sets come from the same tables `sd schema` publishes, so the
-// schema and this contract cannot drift apart.
-fn seed_keys() -> Vec<&'static str> {
-    seeds::schema::keys(seeds::schema::SEED)
-}
-fn edge_keys() -> Vec<&'static str> {
-    seeds::schema::keys(seeds::schema::EDGE)
-}
-fn comment_keys() -> Vec<&'static str> {
-    seeds::schema::keys(seeds::schema::COMMENT)
+// THE GOLDEN LIST. Literal on purpose: it is the independent witness. If a
+// key were removed from src/schema.rs AND from the output together, a pin
+// derived from schema.rs would still pass; this list would not (sattler,
+// seeds#35 review). schema.rs must equal it, and output must match both.
+const SEED_KEYS: &[&str] = &[
+    "assignee",
+    "close_reason",
+    "closed_at",
+    "created_at",
+    "created_by",
+    "defer_until",
+    "dependency_count",
+    "description",
+    "id",
+    "issue_type",
+    "labels",
+    "notes",
+    "owner",
+    "outcome",
+    "parent",
+    "priority",
+    "revision",
+    "status",
+    "title",
+    "updated_at",
+    "workflow_run",
+];
+const EDGE_KEYS: &[&str] = &["dependency_type", "id", "priority", "status", "title"];
+const COMMENT_KEYS: &[&str] = &["author", "created_at", "id", "issue_id", "text"];
+
+#[test]
+fn the_published_schema_tables_equal_the_golden_key_lists() {
+    fn sorted(k: &[&'static str]) -> Vec<&'static str> {
+        let mut v = k.to_vec();
+        v.sort_unstable();
+        v
+    }
+    assert_eq!(seeds::schema::keys(seeds::schema::SEED), sorted(SEED_KEYS));
+    assert_eq!(seeds::schema::keys(seeds::schema::EDGE), sorted(EDGE_KEYS));
+    assert_eq!(
+        seeds::schema::keys(seeds::schema::COMMENT),
+        sorted(COMMENT_KEYS)
+    );
 }
 
 struct Store {
@@ -99,7 +132,7 @@ fn every_verb_prints_its_documented_keys() {
     let st = Store::new("keys");
 
     let a = st.json(&["create", "a", "-l", "x", "-d", "desc"]);
-    assert_eq!(keys(&a), with(&seed_keys(), &["tx"]), "create");
+    assert_eq!(keys(&a), with(SEED_KEYS, &["tx"]), "create");
     let a = a["id"].as_str().unwrap().to_string();
     let b = st.json(&["create", "b"])["id"]
         .as_str()
@@ -136,20 +169,20 @@ fn every_verb_prints_its_documented_keys() {
     );
 
     let c = st.json(&["comments", "add", &a, "hello"]);
-    assert_eq!(keys(&c), with(&comment_keys(), &["tx"]), "comments add");
+    assert_eq!(keys(&c), with(COMMENT_KEYS, &["tx"]), "comments add");
     let cl = st.json(&["comments", "list", &a]);
-    assert_eq!(keys(&cl[0]), set(&comment_keys()), "comments list");
+    assert_eq!(keys(&cl[0]), set(COMMENT_KEYS), "comments list");
 
     let show = st.json(&["show", &a, &b]);
     assert_eq!(show.as_array().unwrap().len(), 2);
     assert_eq!(
         keys(&show[0]),
-        with(&seed_keys(), &["comments", "dependencies", "dependents"]),
+        with(SEED_KEYS, &["comments", "dependencies", "dependents"]),
         "show"
     );
-    assert_eq!(keys(&show[0]["dependencies"][0]), set(&edge_keys()));
-    assert_eq!(keys(&show[1]["dependents"][0]), set(&edge_keys()));
-    assert_eq!(keys(&show[0]["comments"][0]), set(&comment_keys()));
+    assert_eq!(keys(&show[0]["dependencies"][0]), set(EDGE_KEYS));
+    assert_eq!(keys(&show[1]["dependents"][0]), set(EDGE_KEYS));
+    assert_eq!(keys(&show[0]["comments"][0]), set(COMMENT_KEYS));
 
     let list = st.json(&["list"]);
     assert_eq!(
@@ -159,13 +192,13 @@ fn every_verb_prints_its_documented_keys() {
     );
     assert_eq!(
         keys(&list["issues"][0]),
-        with(&seed_keys(), &["dependent_count"]),
+        with(SEED_KEYS, &["dependent_count"]),
         "list issues carry br's dependent_count"
     );
 
     let ready = st.json(&["ready"]);
     assert!(ready.is_array(), "ready is a bare array, as in br");
-    assert_eq!(keys(&ready[0]), set(&seed_keys()), "ready");
+    assert_eq!(keys(&ready[0]), set(SEED_KEYS), "ready");
 
     assert_eq!(keys(&st.json(&["count"])), set(&["count"]), "count");
     let by = st.json(&["count", "--by", "status"]);
@@ -174,11 +207,11 @@ fn every_verb_prints_its_documented_keys() {
 
     let up = st.json(&["update", &a, "--add-label", "y"]);
     assert!(up.is_array());
-    assert_eq!(keys(&up[0]), with(&seed_keys(), &["tx"]), "update");
+    assert_eq!(keys(&up[0]), with(SEED_KEYS, &["tx"]), "update");
 
     let closed = st.json(&["close", &b, "--reason", "done"]);
     assert!(closed.is_array());
-    assert_eq!(keys(&closed[0]), with(&seed_keys(), &["tx"]), "close");
+    assert_eq!(keys(&closed[0]), with(SEED_KEYS, &["tx"]), "close");
     assert_eq!(closed[0]["status"], "closed");
 
     let rm = st.json(&["dep", "remove", &a, &b]);
