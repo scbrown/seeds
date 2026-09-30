@@ -2049,6 +2049,9 @@ fn dispatch(cli: &Cli, cfg: &Resolved, ctx: &Ctx, b: &mut dyn Backend) -> Result
             ))
         }
         Command::Close(a) => {
+            if a.suggest_next && a.ids.len() != 1 {
+                return Err(SdError::usage("--suggest-next works with a single seed id"));
+            }
             let (seeds, tx, warnings) = engine::close_as(
                 b,
                 ctx,
@@ -2058,17 +2061,36 @@ fn dispatch(cli: &Cli, cfg: &Resolved, ctx: &Ctx, b: &mut dyn Backend) -> Result
                 a.force,
                 a.transition_comment.as_deref(),
             )?;
-            let text = seeds
+            let mut text = seeds
                 .iter()
                 .map(|s| format!("closed {}{}", output::seed_line(s), tx_note(tx)))
                 .collect::<Vec<_>>()
                 .join("\n");
-            Ok(ok(
-                json,
-                output::with_tx(output::seeds_json(&seeds), Some(tx)),
-                text,
-                warnings,
-            ))
+            if !a.suggest_next {
+                return Ok(ok(
+                    json,
+                    output::with_tx(output::seeds_json(&seeds), Some(tx)),
+                    text,
+                    warnings,
+                ));
+            }
+            let freed = engine::unblocked_by(b, &a.ids[0])?;
+            if freed.is_empty() {
+                text.push_str("\nunblocked nothing");
+            } else {
+                text.push_str(&format!("\nunblocked {}:", freed.len()));
+                for s in &freed {
+                    text.push_str(&format!("\n  {}", output::seed_line(s)));
+                }
+            }
+            let value = serde_json::json!({
+                "closed": output::seeds_json(&seeds),
+                "unblocked": freed.iter().map(|s| serde_json::json!({
+                    "id": s.id, "title": s.title, "priority": s.priority,
+                })).collect::<Vec<_>>(),
+                "tx": tx,
+            });
+            Ok(ok(json, value, text, warnings))
         }
         Command::Delete(a) => {
             let mut ids = a.ids.clone();
