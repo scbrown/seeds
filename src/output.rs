@@ -165,7 +165,7 @@ pub fn blocked_json(b: &BlockedPage) -> Json {
 }
 
 /// `blocked` as text: each seed and what blocks it; says when cut short.
-pub fn blocked_text(b: &BlockedPage) -> String {
+pub fn blocked_text(b: &BlockedPage, detailed: bool) -> String {
     let p = &b.page;
     if p.issues.is_empty() {
         return "no blocked seeds".to_string();
@@ -174,7 +174,18 @@ pub fn blocked_text(b: &BlockedPage) -> String {
     for s in &p.issues {
         let by = b.blocked_by.get(&s.id).cloned().unwrap_or_default();
         lines.push(seed_line(s));
-        lines.push(format!("  blocked by {} open: {}", by.len(), by.join(", ")));
+        if detailed {
+            // br's --detailed: each blocker with its title, priority and status.
+            lines.push("  blocked by:".into());
+            for id in &by {
+                lines.push(match b.blockers.get(id) {
+                    Some(x) => format!("    • {id}: {} [P{}] [{}]", x.title, x.priority, x.status),
+                    None => format!("    • {id}"),
+                });
+            }
+        } else {
+            lines.push(format!("  blocked by {} open: {}", by.len(), by.join(", ")));
+        }
     }
     if p.has_more {
         lines.push(format!(

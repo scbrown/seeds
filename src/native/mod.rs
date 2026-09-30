@@ -1958,11 +1958,16 @@ fn dispatch(cli: &Cli, cfg: &Resolved, ctx: &Ctx, b: &mut dyn Backend) -> Result
                 labels: a.label.clone(),
                 limit: a.limit,
             };
+            if a.detailed && json {
+                return Err(SdError::usage(
+                    "--detailed lays out text output; it does nothing with --json",
+                ));
+            }
             let page = engine::blocked(b, &req, at)?;
             Ok(ok(
                 json,
                 output::blocked_json(&page),
-                output::blocked_text(&page),
+                output::blocked_text(&page, a.detailed),
                 vec![],
             ))
         }
