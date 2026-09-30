@@ -58,6 +58,9 @@ pub enum Command {
     /// List open seeds with no open blockers. Never truncated unless you pass
     /// --limit, and then it says so.
     Ready(ReadyArgs),
+    /// List seeds that are not closed and have an open blocker (50 at a time,
+    /// --limit 0 for all; the output says when it was cut short)
+    Blocked(BlockedArgs),
     /// Count seeds (open ones by default)
     Count(CountArgs),
     /// Update fields on one or more seeds
@@ -246,6 +249,23 @@ pub struct ReadyArgs {
     /// Only children of this seed
     #[arg(long)]
     pub parent: Option<String>,
+}
+
+/// `sd blocked`.
+#[derive(Debug, Args)]
+pub struct BlockedArgs {
+    /// Page size (default 50; 0 = all). The output says when it was cut short.
+    #[arg(long)]
+    pub limit: Option<usize>,
+    /// Only this type (repeatable: any of them)
+    #[arg(short = 't', long = "type")]
+    pub issue_type: Vec<String>,
+    /// Only this priority (repeatable: any of them)
+    #[arg(short, long)]
+    pub priority: Vec<String>,
+    /// Only seeds with this label (repeatable; all must match)
+    #[arg(short, long)]
+    pub label: Vec<String>,
 }
 
 /// `sd count`.
@@ -455,6 +475,7 @@ impl Command {
             | Command::Show(_)
             | Command::List(_)
             | Command::Ready(_)
+            | Command::Blocked(_)
             | Command::Count(_) => false,
         }
     }
@@ -466,6 +487,7 @@ impl Command {
             Command::Show(_) => "show",
             Command::List(_) => "list",
             Command::Ready(_) => "ready",
+            Command::Blocked(_) => "blocked",
             Command::Count(_) => "count",
             Command::Update(_) => "update",
             Command::Close(_) => "close",
@@ -504,6 +526,13 @@ mod tests {
         (&["list", "--status", "open", "--limit", "0"], "list", false),
         (&["ready", "--json", "--limit", "5"], "ready", false),
         (&["count", "--by", "status"], "count", false),
+        (
+            &[
+                "blocked", "-t", "bug", "-t", "task", "-p", "1", "--limit", "0",
+            ],
+            "blocked",
+            false,
+        ),
         (&["update", "s-1", "--claim", "--json"], "update", true),
         (&["close", "s-1", "--reason", "done"], "close", true),
         (&["dep", "add", "s-1", "s-2"], "dep add", true),

@@ -320,6 +320,64 @@ fn page(mut seeds: Vec<Seed>, limit: usize) -> Page {
     }
 }
 
+/// `sd blocked`. Repeated types and priorities are alternatives; labels must
+/// all match (br's semantics).
+#[derive(Debug, Clone, Default)]
+pub struct BlockedReq {
+    /// Only these types (any of them).
+    pub types: Vec<String>,
+    /// Only these priorities (any of them).
+    pub priorities: Vec<String>,
+    /// Only seeds carrying every one of these labels.
+    pub labels: Vec<String>,
+    /// Page size; `None` means [`DEFAULT_LIST_LIMIT`] (br's 50), `Some(0)` means all.
+    pub limit: Option<usize>,
+}
+
+/// A page of blocked seeds and, for each, its open blockers.
+#[derive(Debug, Clone)]
+pub struct BlockedPage {
+    /// The page.
+    pub page: Page,
+    /// Open `blocks` targets by seed id, for every seed on the page.
+    pub blocked_by: BTreeMap<String, Vec<String>>,
+}
+
+/// `sd blocked`: seeds that are not closed and have at least one open `blocks`
+/// dependency, as of `at`. A `blocked` status alone does not qualify (br).
+pub fn blocked(b: &dyn Backend, req: &BlockedReq, at: Option<u64>) -> Result<BlockedPage> {
+    let types = req
+        .types
+        .iter()
+        .map(|t| model::parse_type(t))
+        .collect::<Result<BTreeSet<_>>>()?;
+    let priorities = req
+        .priorities
+        .iter()
+        .map(|p| model::parse_priority(p))
+        .collect::<Result<BTreeSet<_>>>()?;
+    let labels = clean_labels(&req.labels);
+    let snap = b.snapshot(at)?;
+    let mut blocked_by = BTreeMap::new();
+    let mut seeds: Vec<Seed> = Vec::new();
+    for s in snap.seeds.values().filter(|s| s.status != "closed") {
+        let blockers = snap.open_blockers(s);
+        if blockers.is_empty()
+            || !(types.is_empty() || types.contains(&s.issue_type))
+            || !(priorities.is_empty() || priorities.contains(&s.priority))
+            || !labels.is_subset(&s.labels)
+        {
+            continue;
+        }
+        blocked_by.insert(s.id.clone(), blockers);
+        seeds.push(s.clone());
+    }
+    sort_seeds(&mut seeds, None)?;
+    let page = page(seeds, req.limit.unwrap_or(DEFAULT_LIST_LIMIT));
+    blocked_by.retain(|id, _| page.issues.iter().any(|s| &s.id == id));
+    Ok(BlockedPage { page, blocked_by })
+}
+
 /// `sd ready`.
 #[derive(Debug, Clone, Default)]
 pub struct ReadyReq {

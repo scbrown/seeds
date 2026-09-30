@@ -23,6 +23,7 @@ STEPS = [
     ("update", ["update", "{A}", "--status", "in_progress", "--assignee", "probe"]),
     ("dep add", ["dep", "add", "{B}", "{A}"]),
     ("dep list", ["dep", "list", "{B}"]),
+    ("blocked", ["blocked"]),
     ("comments add", ["comments", "add", "{A}", "a comment"]),
     ("comments list", ["comments", "list", "{A}"]),
     ("label add", ["label", "add", "{A}", "{B}", "infra"]),
