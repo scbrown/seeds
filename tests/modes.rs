@@ -375,6 +375,43 @@ fn remote_mode_reads_and_writes_a_quipu_server() {
         .collect();
     assert_eq!(codes.iter().filter(|c| **c == 0).count(), 1, "{codes:?}");
     assert!(codes.iter().all(|c| *c == 0 || *c == 4), "{codes:?}");
+
+    // Simultaneous creates of ONE workflow step through the server: every
+    // caller names the same seed and exactly one exists. Process start-up is
+    // slow enough that these rarely collide inside the server's compare-and-set
+    // (measured: this passes with the race recovery disabled), so the proof of
+    // the race path itself is core.rs's RacedBackend test; this is the
+    // end-to-end check.
+    let procs: Vec<_> = (0..6)
+        .map(|_| {
+            let mut c = Command::new(env!("CARGO_BIN_EXE_sd"));
+            c.args([
+                "create",
+                "raced step",
+                "--workflow-run",
+                "r1",
+                "--step",
+                "s",
+                "--silent",
+            ])
+            .current_dir(&work)
+            .env("HOME", env.root.join("home"))
+            .env("XDG_CONFIG_HOME", env.root.join("home/.config"))
+            .env("SEEDS_QUIPU_URL", &url)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+            c.spawn().unwrap()
+        })
+        .collect();
+    let mut ids = std::collections::BTreeSet::new();
+    for p in procs {
+        let o = p.wait_with_output().unwrap();
+        assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+        ids.insert(String::from_utf8_lossy(&o.stdout).trim().to_string());
+    }
+    assert_eq!(ids.len(), 1, "{ids:?}");
+    let listed = env.ok(&work, &["list", "--json"], &remote);
+    assert_eq!(listed.matches("raced step").count(), 1, "{listed}");
 }
 
 #[test]

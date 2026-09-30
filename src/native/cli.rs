@@ -187,6 +187,15 @@ pub struct CreateArgs {
     /// a bare run id (becomes urn:shuttle:run:<id>)
     #[arg(long = "workflow-run", value_name = "RUN")]
     pub workflow_run: Option<String>,
+    /// The workflow step creating this seed (needs --workflow-run). The id is
+    /// derived from run, step and visit, so repeating the create returns the
+    /// same seed instead of a duplicate
+    #[arg(long, value_name = "STEP")]
+    pub step: Option<String>,
+    /// Which entry into --step this is, counting from 1 (default 1). A step the
+    /// run enters again gets a new seed
+    #[arg(long, value_name = "N")]
+    pub visit: Option<u32>,
     /// Print what would be created without writing it
     #[arg(long)]
     pub dry_run: bool,

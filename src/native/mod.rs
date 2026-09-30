@@ -600,6 +600,8 @@ fn dispatch(cli: &Cli, ctx: &Ctx, b: &mut dyn Backend) -> Result<Outcome> {
                 parent: a.parent.clone(),
                 deps: split_csv(&a.deps),
                 workflow_run: a.workflow_run.clone(),
+                step: a.step.clone(),
+                visit: a.visit,
                 dry_run: a.dry_run,
             };
             let (seed, tx) = engine::create(b, ctx, &req)?;
@@ -607,6 +609,11 @@ fn dispatch(cli: &Cli, ctx: &Ctx, b: &mut dyn Backend) -> Result<Outcome> {
                 seed.id.clone()
             } else if a.dry_run {
                 format!("would create {}", output::seed_line(&seed))
+            } else if tx == 0 {
+                format!(
+                    "exists {} (this run and step already created it)",
+                    output::seed_line(&seed)
+                )
             } else {
                 format!("created {}{}", output::seed_line(&seed), tx_note(tx))
             };

@@ -1256,6 +1256,61 @@ fn search_matches_id_title_description_and_comments_but_not_notes() {
     assert_eq!(found(&b, "parser", true), (1, 0));
     let err = engine::search(&b, &engine::SearchReq::default(), None).unwrap_err();
     assert_eq!(err.kind, ErrorKind::Usage);
+
+/// A backend whose FIRST commit is preceded by another writer's commit of
+/// the same batch: the race a keyed create must survive, made deterministic.
+/// The inner store's own compare-and-set is what refuses the second write.
+struct RacedBackend {
+    inner: QuipuBackend,
+    raced: bool,
+}
+
+impl Backend for RacedBackend {
+    fn snapshot(&self, at: Option<u64>) -> seeds::error::Result<seeds::model::Snapshot> {
+        self.inner.snapshot(at)
+    }
+    fn ready_ids(&self, at: Option<u64>) -> seeds::error::Result<Vec<String>> {
+        self.inner.ready_ids(at)
+    }
+    fn commit(&mut self, batch: &WriteBatch, ctx: &Ctx) -> seeds::error::Result<u64> {
+        if !self.raced {
+            self.raced = true;
+            self.inner.commit(batch, ctx)?; // the other writer wins
+        }
+        self.inner.commit(batch, ctx)
+    }
+}
+
+#[test]
+fn a_keyed_create_that_loses_the_race_returns_the_winners_seed() {
+    let req = CreateReq {
+        title: "raced".into(),
+        workflow_run: Some("r1".into()),
+        step: Some("s".into()),
+        ..CreateReq::default()
+    };
+    let mut b = RacedBackend {
+        inner: backend(),
+        raced: false,
+    };
+    let (seed, tx) = engine::create(&mut b, &ctx(1), &req).unwrap();
+    assert_eq!(tx, 0, "our write was refused; the seed is the winner's");
+    let snap = b.snapshot(None).unwrap();
+    assert_eq!(snap.seeds.len(), 1);
+    assert!(snap.seeds.contains_key(&seed.id));
+
+    // CONTROL: an UNKEYED create under the same race is not idempotent. It
+    // must surface the conflict, so the test above is not passing vacuously.
+    let mut b = RacedBackend {
+        inner: backend(),
+        raced: false,
+    };
+    let plain = CreateReq {
+        title: "raced".into(),
+        ..CreateReq::default()
+    };
+    let e = engine::create(&mut b, &ctx(1), &plain).unwrap_err();
+    assert_eq!(e.kind, ErrorKind::Conflict);
 }
 
 fn at_time(now: &str) -> Ctx {

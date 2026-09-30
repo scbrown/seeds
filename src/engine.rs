@@ -14,7 +14,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::backend::{Backend, Ctx, SeedWrite, WriteBatch};
-use crate::error::{Result, SdError};
+use crate::error::{ErrorKind, Result, SdError};
 use crate::ids;
 use crate::model::{self, Comment, Seed, Snapshot};
 use crate::vocab;
@@ -49,6 +49,12 @@ pub struct CreateReq {
     pub deps: Vec<String>,
     /// The shuttle run that creates or drives this seed (an IRI or a bare run id).
     pub workflow_run: Option<String>,
+    /// The workflow step creating this seed. With `workflow_run`, the seed's
+    /// id is derived from (run, step, visit) and the create is idempotent: if
+    /// that seed exists it is returned unchanged (transaction 0).
+    pub step: Option<String>,
+    /// Which entry into `step` this is (1 when absent).
+    pub visit: Option<u32>,
     /// Compute and return the seed without writing it.
     pub dry_run: bool,
 }
@@ -60,12 +66,40 @@ pub fn create(b: &mut dyn Backend, ctx: &Ctx, req: &CreateReq) -> Result<(Seed, 
         return Err(SdError::usage("a seed needs a non-empty title"));
     }
     let snap = b.snapshot(None)?;
-    let id = match &req.parent {
-        Some(p) => {
+    let run = non_empty(req.workflow_run.as_deref()).map(|r| vocab::run_iri(&r));
+    let keyed = match (non_empty(req.step.as_deref()), &run) {
+        (Some(step), Some(run)) => {
+            if req.parent.is_some() {
+                return Err(SdError::usage(
+                    "--step mints the id from the run and step, so it cannot take --parent",
+                ));
+            }
+            let visit = req.visit.unwrap_or(1);
+            if visit == 0 {
+                return Err(SdError::usage("--visit counts from 1"));
+            }
+            Some(ids::keyed(&ctx.prefix, run, &step, visit))
+        }
+        (Some(_), None) => {
+            return Err(SdError::usage("--step needs --workflow-run"));
+        }
+        (None, _) if req.visit.is_some() => {
+            return Err(SdError::usage("--visit needs --step"));
+        }
+        (None, _) => None,
+    };
+    if let Some(id) = &keyed {
+        if let Some(existing) = existing_keyed(&snap, id, run.as_deref())? {
+            return Ok((existing, 0));
+        }
+    }
+    let id = match (&keyed, &req.parent) {
+        (Some(id), _) => id.clone(),
+        (None, Some(p)) => {
             snap.get(p)?;
             ids::child(p, |c| snap.seeds.contains_key(c))
         }
-        None => ids::mint(&ctx.prefix, title, &ctx.now, |c| snap.seeds.contains_key(c)),
+        (None, None) => ids::mint(&ctx.prefix, title, &ctx.now, |c| snap.seeds.contains_key(c)),
     };
     let mut seed = Seed {
         id,
@@ -86,7 +120,7 @@ pub fn create(b: &mut dyn Backend, ctx: &Ctx, req: &CreateReq) -> Result<(Seed, 
         created_by: non_empty(Some(&ctx.actor)),
         updated_at: ctx.now.clone(),
         parent: req.parent.clone(),
-        workflow_run: non_empty(req.workflow_run.as_deref()).map(|r| vocab::run_iri(&r)),
+        workflow_run: run.clone(),
         revision: 1,
         ..Seed::default()
     };
@@ -98,7 +132,7 @@ pub fn create(b: &mut dyn Backend, ctx: &Ctx, req: &CreateReq) -> Result<(Seed, 
     if req.dry_run {
         return Ok((seed, 0));
     }
-    let tx = b.commit(
+    let written = b.commit(
         &WriteBatch {
             seeds: vec![SeedWrite {
                 seed: seed.clone(),
@@ -109,8 +143,38 @@ pub fn create(b: &mut dyn Backend, ctx: &Ctx, req: &CreateReq) -> Result<(Seed, 
             ..WriteBatch::default()
         },
         ctx,
-    )?;
-    Ok((seed, tx))
+    );
+    match (written, &keyed) {
+        (Ok(tx), _) => Ok((seed, tx)),
+        // A keyed create that lost a race: the other writer created the same
+        // seed between our read and our write, and the compare-and-set refused
+        // ours. That is the idempotent outcome, not a failure.
+        (Err(e), Some(id)) if e.kind == ErrorKind::Conflict => {
+            let snap = b.snapshot(None)?;
+            match existing_keyed(&snap, id, run.as_deref())? {
+                Some(existing) => Ok((existing, 0)),
+                None => Err(e),
+            }
+        }
+        (Err(e), _) => Err(e),
+    }
+}
+
+/// The seed a keyed create names, if it already exists. A seed with that id
+/// but a different run is refused rather than returned: it is not the seed
+/// this step asked for.
+fn existing_keyed(snap: &Snapshot, id: &str, run: Option<&str>) -> Result<Option<Seed>> {
+    let Some(existing) = snap.seeds.get(id) else {
+        return Ok(None);
+    };
+    if existing.workflow_run.as_deref() != run {
+        return Err(SdError::refused(format!(
+            "{id} exists but belongs to a different workflow run ({}), so it is not the seed \
+             this step names",
+            existing.workflow_run.as_deref().unwrap_or("none")
+        )));
+    }
+    Ok(Some(existing.clone()))
 }
 
 /// br's `--deps` element: `id` means `blocks`, `type:id` names the type.

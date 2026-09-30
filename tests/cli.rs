@@ -150,6 +150,113 @@ fn a_blocker_that_has_its_own_blocker_can_be_added() {
 }
 
 #[test]
+fn a_workflow_step_creates_its_seed_once() {
+    let sb = Sandbox::new("keyed");
+    let args = [
+        "create",
+        "triage the report",
+        "--workflow-run",
+        "r1",
+        "--step",
+        "triage",
+        "--silent",
+    ];
+    let a = sb.ok(&args).trim().to_string();
+    assert!(a.starts_with("sd-w"), "{a}");
+    // The retry names the same seed and writes nothing new.
+    let again = sb.run(&[
+        "create",
+        "triage the report",
+        "--workflow-run",
+        "r1",
+        "--step",
+        "triage",
+    ]);
+    assert!(again.status.success());
+    assert!(String::from_utf8_lossy(&again.stdout).contains("exists"));
+    assert_eq!(sb.ok(&args).trim(), a);
+    assert_eq!(ids(&sb.json(&["list"])), vec![a.clone()]);
+    // A second visit to the same step is a new seed.
+    let b = sb
+        .ok(&[
+            "create",
+            "triage again",
+            "--workflow-run",
+            "r1",
+            "--step",
+            "triage",
+            "--visit",
+            "2",
+            "--silent",
+        ])
+        .trim()
+        .to_string();
+    assert_ne!(a, b);
+    // The run is recorded on the seed.
+    assert_eq!(
+        sb.json(&["show", &a])[0]["workflow_run"],
+        "urn:shuttle:run:r1"
+    );
+    // Misuse is a usage error (exit 2), never a silent random id.
+    for bad in [
+        vec!["create", "x", "--step", "triage"],
+        vec!["create", "x", "--workflow-run", "r1", "--visit", "2"],
+        vec![
+            "create",
+            "x",
+            "--workflow-run",
+            "r1",
+            "--step",
+            "s",
+            "--visit",
+            "0",
+        ],
+    ] {
+        assert_eq!(sb.run(&bad).status.code(), Some(2), "{bad:?}");
+    }
+}
+
+#[test]
+fn concurrent_creates_of_one_workflow_step_make_one_seed() {
+    let sb = Sandbox::new("keyed-race");
+    sb.ok(&["create", "warm the store", "--silent"]);
+    const N: usize = 8;
+    let children: Vec<_> = (0..N)
+        .map(|_| {
+            sb.cmd(
+                &sb.work(),
+                &[
+                    "create",
+                    "raced",
+                    "--workflow-run",
+                    "r9",
+                    "--step",
+                    "s",
+                    "--silent",
+                ],
+            )
+            .spawn()
+            .unwrap()
+        })
+        .collect();
+    let mut got = std::collections::BTreeSet::new();
+    for c in children {
+        let o = c.wait_with_output().unwrap();
+        assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+        got.insert(String::from_utf8_lossy(&o.stdout).trim().to_string());
+    }
+    assert_eq!(got.len(), 1, "every caller must get the same seed: {got:?}");
+    let listed = sb.json(&["list"]);
+    let raced = listed["issues"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|s| s["title"] == "raced")
+        .count();
+    assert_eq!(raced, 1, "exactly one seed for (run, step, visit)");
+}
+
+#[test]
 fn concurrent_label_writes_from_separate_processes_lose_nothing() {
     let sb = Sandbox::new("concurrent-labels");
     let id = sb
