@@ -906,6 +906,79 @@ pub fn history(b: &dyn Backend, id: &str) -> Result<Vec<HistoryEntry>> {
     Ok(out)
 }
 
+/// One type's section of `sd changelog`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ChangelogGroup {
+    /// The issue type.
+    pub issue_type: String,
+    /// Its heading ("Bugs", ...).
+    pub label: String,
+    /// Closed seeds of that type, most recently closed first.
+    pub issues: Vec<Seed>,
+}
+
+/// Where a `--since` value starts, against `now`: a date or RFC 3339 instant
+/// as given, or a relative span back from now (`+7d`, `-2w`, `12h`: br's
+/// "relative like +7d" means the last 7 days).
+pub fn parse_since(value: &str, now: &str) -> Result<String> {
+    let v = value.trim();
+    let span = v.trim_start_matches(['+', '-']);
+    if span.len() > 1 && span[..span.len() - 1].chars().all(|c| c.is_ascii_digit()) {
+        let forward = parse_until(&format!("+{span}"), now)?;
+        let secs = parse_instant(&forward).and_then(|f| Some(f - parse_instant(now)?));
+        let back = secs.and_then(|s| Some(format_instant(parse_instant(now)? - s)));
+        return back.ok_or_else(|| SdError::usage(format!("cannot read --since {value:?}")));
+    }
+    parse_until(v, now).map_err(|_| {
+        SdError::usage(format!(
+            "cannot read --since {value:?}; use YYYY-MM-DD, an RFC 3339 instant, or +7d/+2w/+12h"
+        ))
+    })
+}
+
+/// `sd changelog`: closed seeds (closed at or after `since`, if given),
+/// grouped by type in a fixed order, most recently closed first (br).
+pub fn changelog(
+    b: &dyn Backend,
+    since: Option<&str>,
+    at: Option<u64>,
+) -> Result<Vec<ChangelogGroup>> {
+    const ORDER: [(&str, &str); 7] = [
+        ("epic", "Epics"),
+        ("feature", "Features"),
+        ("bug", "Bugs"),
+        ("task", "Tasks"),
+        ("chore", "Chores"),
+        ("docs", "Docs"),
+        ("question", "Questions"),
+    ];
+    let snap = b.snapshot(at)?;
+    let closed: Vec<&Seed> = snap
+        .seeds
+        .values()
+        .filter(|s| s.status == "closed")
+        .filter(|s| since.is_none_or(|from| s.closed_at.as_deref().is_some_and(|c| c >= from)))
+        .collect();
+    let mut groups = Vec::new();
+    for (ty, label) in ORDER {
+        let mut issues: Vec<Seed> = closed
+            .iter()
+            .filter(|s| s.issue_type == ty)
+            .map(|s| (*s).clone())
+            .collect();
+        if issues.is_empty() {
+            continue;
+        }
+        issues.sort_by(|a, b| (&b.closed_at, &a.id).cmp(&(&a.closed_at, &b.id)));
+        groups.push(ChangelogGroup {
+            issue_type: ty.into(),
+            label: label.into(),
+            issues,
+        });
+    }
+    Ok(groups)
+}
+
 /// `sd blocked`. Repeated types and priorities are alternatives; labels must
 /// all match (br's semantics).
 #[derive(Debug, Clone, Default)]

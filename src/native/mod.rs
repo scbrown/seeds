@@ -732,6 +732,31 @@ fn merge_driver(a: &cli::MergeDriverArgs) -> Result<Outcome> {
 }
 
 /// " (tx N)" when the store reported a transaction (a quipu server does not).
+/// `2026-09-30T14:00:00-04:00` -> `2026-09-30T18:00:00Z`, so a git date
+/// compares correctly against the ledger's UTC instants.
+fn to_utc(d: &str) -> Option<String> {
+    let (base, sign, off) = if let Some(i) = d.rfind(['+', '-']).filter(|i| *i >= 19) {
+        (&d[..19], if &d[i..=i] == "-" { 1 } else { -1 }, &d[i + 1..])
+    } else {
+        return d
+            .ends_with('Z')
+            .then(|| format!("{}Z", &d[..19.min(d.len())]));
+    };
+    let (h, m) = off.split_once(':')?;
+    let shift = sign * (h.parse::<i64>().ok()? * 3600 + m.parse::<i64>().ok()? * 60);
+    let t = engine::parse_until(&format!("{base}Z"), &format!("{base}Z")).ok()?;
+    let secs = if shift >= 0 {
+        format!("+{}m", shift / 60)
+    } else {
+        String::new()
+    };
+    if shift >= 0 {
+        engine::parse_until(&secs, &t).ok()
+    } else {
+        engine::parse_since(&format!("+{}m", -shift / 60), &t).ok()
+    }
+}
+
 fn tx_note(tx: u64) -> String {
     if tx > 0 {
         format!(" (tx {tx})")
@@ -1045,6 +1070,55 @@ fn dispatch(cli: &Cli, cfg: &Resolved, ctx: &Ctx, b: &mut dyn Backend) -> Result
                     lines.push("  created".into());
                 }
                 lines.extend(e.changes.iter().map(|c| format!("  {c}")));
+            }
+            Ok(ok(json, value, lines.join("\n"), vec![]))
+        }
+        Command::Changelog(a) => {
+            let git_date = |rev: &str| -> Result<String> {
+                let o = std::process::Command::new("git")
+                    .args(["log", "-1", "--format=%cI", rev, "--"])
+                    .output()
+                    .map_err(|e| SdError::failed(format!("cannot run git: {e}")))?;
+                let d = String::from_utf8_lossy(&o.stdout).trim().to_string();
+                if !o.status.success() || d.is_empty() {
+                    return Err(SdError::usage(format!("git does not know {rev:?}")));
+                }
+                // git gives a local offset; the ledger's instants are UTC.
+                Ok(to_utc(&d).unwrap_or(d))
+            };
+            let since = match (&a.since, &a.since_tag, &a.since_commit) {
+                (Some(s), _, _) => Some(engine::parse_since(s, &ctx.now)?),
+                (_, Some(t), _) => Some(git_date(&format!("refs/tags/{t}"))?),
+                (_, _, Some(c)) => Some(git_date(c)?),
+                _ => None,
+            };
+            let groups = engine::changelog(b, since.as_deref(), at)?;
+            let total: usize = groups.iter().map(|g| g.issues.len()).sum();
+            let value = serde_json::json!({
+                "since": since.clone().unwrap_or_else(|| "all".into()),
+                "until": ctx.now,
+                "total_closed": total,
+                "groups": groups.iter().map(|g| serde_json::json!({
+                    "issue_type": g.issue_type, "label": g.label,
+                    "issues": g.issues.iter().map(|s| serde_json::json!({
+                        "id": s.id, "title": s.title, "priority": format!("P{}", s.priority),
+                        "closed_at": s.closed_at,
+                    })).collect::<Vec<_>>(),
+                })).collect::<Vec<_>>(),
+            });
+            let mut lines = vec![format!(
+                "Changelog since {} ({total} closed seed{}):",
+                since.as_deref().unwrap_or("all"),
+                if total == 1 { "" } else { "s" }
+            )];
+            for g in &groups {
+                lines.push(String::new());
+                lines.push(format!("{}:", g.label));
+                lines.extend(
+                    g.issues
+                        .iter()
+                        .map(|s| format!("- [P{}] {} {}", s.priority, s.id, s.title)),
+                );
             }
             Ok(ok(json, value, lines.join("\n"), vec![]))
         }
@@ -1547,4 +1621,33 @@ pub fn main_entry() -> i32 {
         eprintln!("{}", o.stderr);
     }
     o.code
+}
+
+#[cfg(test)]
+mod changelog_tests {
+    use super::to_utc;
+
+    #[test]
+    fn git_dates_convert_to_utc_both_sides_of_zero() {
+        assert_eq!(
+            to_utc("2026-09-30T14:00:00-04:00").as_deref(),
+            Some("2026-09-30T18:00:00Z")
+        );
+        assert_eq!(
+            to_utc("2026-09-30T01:30:00+02:30").as_deref(),
+            Some("2026-09-29T23:00:00Z")
+        );
+        assert_eq!(
+            to_utc("2026-12-31T23:00:00-02:00").as_deref(),
+            Some("2027-01-01T01:00:00Z")
+        );
+        assert_eq!(
+            to_utc("2026-09-30T14:00:00Z").as_deref(),
+            Some("2026-09-30T14:00:00Z")
+        );
+        assert_eq!(
+            to_utc("2026-09-30T14:00:00+00:00").as_deref(),
+            Some("2026-09-30T14:00:00Z")
+        );
+    }
 }

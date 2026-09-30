@@ -50,6 +50,7 @@ STEPS = [
     ("search closed", ["search", "parity A"]),
     ("delete preview", ["delete", "{A}", "--dry-run"]),
     ("delete", ["delete", "{B}", "--reason", "dup"]),
+    ("changelog", ["changelog"]),
     ("list all", ["list", "--all"]),
 ]
 
