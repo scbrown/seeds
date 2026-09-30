@@ -2414,3 +2414,64 @@ fn attribution_claims_attach_to_their_own_version_and_never_to_the_ledger() {
         .values()
         .all(|f| !f.contains("m1") && !f.contains("m3") && !f.contains("gennaro")));
 }
+
+// br's stats recent activity, from seed timestamps: created, closed and
+// updated in the window are disjoint, touched counts every seed changed in it,
+// and a seed untouched since before the window counts nowhere.
+#[test]
+fn stats_activity_counts_created_closed_updated_in_the_window() {
+    let mut b = backend();
+    let mk_at = |b: &mut QuipuBackend, t: &str, when: &str| {
+        engine::create(
+            b,
+            &at_time(when),
+            &CreateReq {
+                title: t.into(),
+                ..CreateReq::default()
+            },
+        )
+        .unwrap()
+        .0
+        .id
+    };
+    let old = mk_at(&mut b, "old, edited now", "2026-09-28T00:00:00Z");
+    let gone = mk_at(&mut b, "old, closed now", "2026-09-28T00:00:01Z");
+    mk_at(&mut b, "old, untouched", "2026-09-28T00:00:02Z");
+    mk_at(&mut b, "new", "2026-09-30T00:10:00Z");
+    engine::update(
+        &mut b,
+        &at_time("2026-09-30T00:30:00Z"),
+        std::slice::from_ref(&old),
+        &UpdateReq {
+            priority: Some("1".into()),
+            ..UpdateReq::default()
+        },
+    )
+    .unwrap();
+    engine::close(
+        &mut b,
+        &at_time("2026-09-30T00:20:00Z"),
+        std::slice::from_ref(&gone),
+        Some("done"),
+        false,
+    )
+    .unwrap();
+    let st = engine::stats(
+        &b,
+        &at_time("2026-09-30T01:00:00Z"),
+        engine::StatsReq {
+            activity_hours: Some(24),
+            ..engine::StatsReq::default()
+        },
+        None,
+    )
+    .unwrap();
+    let a = st.activity.unwrap();
+    assert_eq!(
+        (a.hours, a.created, a.closed, a.updated, a.touched),
+        (24, 1, 1, 1, 3)
+    );
+    // Without activity_hours there is no activity section.
+    let none = engine::stats(&b, &ctx(0), engine::StatsReq::default(), None).unwrap();
+    assert!(none.activity.is_none());
+}
