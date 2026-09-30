@@ -1740,3 +1740,65 @@ fn graph_walks_like_br_dependents_dependencies_and_components() {
         .iter()
         .any(|g| g.roots == [r.clone()] && g.nodes.len() == 1));
 }
+
+#[test]
+fn history_finds_the_exact_tx_of_every_version_amid_other_writes() {
+    let mut b = backend();
+    let (x, t_create) = {
+        let (s, tx) = engine::create(
+            &mut b,
+            &ctx(1),
+            &CreateReq {
+                title: "first".into(),
+                ..CreateReq::default()
+            },
+        )
+        .unwrap();
+        (s.id, tx)
+    };
+    // Noise: other seeds written between x's versions.
+    for n in 2..6 {
+        mk(&mut b, &format!("noise {n}"), n);
+    }
+    let (_, t_update) = engine::update(
+        &mut b,
+        &ctx(7),
+        std::slice::from_ref(&x),
+        &UpdateReq {
+            title: Some("second".into()),
+            ..UpdateReq::default()
+        },
+    )
+    .unwrap();
+    mk(&mut b, "more noise", 8);
+    let (_, t_close, _) = engine::close(
+        &mut b,
+        &ctx(9),
+        std::slice::from_ref(&x),
+        Some("done"),
+        false,
+    )
+    .unwrap();
+    mk(&mut b, "after", 10);
+
+    let h = engine::history(&b, &x).unwrap();
+    assert_eq!(
+        h.iter().map(|e| e.tx).collect::<Vec<_>>(),
+        [t_create, t_update, t_close],
+        "each version at the tx its write reported"
+    );
+    assert!(h[0].changes.is_empty());
+    assert!(h[1].changes.iter().any(|c| c.starts_with("title:")));
+    assert!(h[2].changes.iter().any(|c| c.starts_with("status:")));
+    // Every entry is exactly what --at reads at that tx.
+    for e in &h {
+        let at = engine::show(&b, std::slice::from_ref(&x), Some(e.tx)).unwrap()[0]
+            .seed
+            .clone();
+        assert_eq!(at, e.seed);
+    }
+    assert_eq!(
+        engine::history(&b, "sd-nope").unwrap_err().kind,
+        ErrorKind::NotFound
+    );
+}

@@ -20,6 +20,7 @@
 | `blocked` | no | [blocked](blocked.md) |
 | `label add`, `label remove`, `label rename`, `label list`, `label list-all` | add/remove/rename | [label](label.md) |
 | `graph` | no | [graph](graph.md) |
+| `history` | no | [history](history.md) |
 | `epic status`, `epic close-eligible` | close-eligible | [epic](epic.md) |
 | `dep add`, `dep remove`, `dep list` | add/remove | [dep](dep.md) |
 | `comments add`, `comments list` | add | [comments](comments.md) |
@@ -31,7 +32,10 @@ Every verb accepts the [global options](../reference.md#global-options), and
 every read accepts `--at <tx>`. A verb that writes prints the transaction it
 wrote as `(tx N)` in text mode and as `tx` in `--json` (on the object, or on
 each seed of a bare array); that number is what `--at` takes. A `--dry-run`
-writes nothing, so its `tx` is `null`.
+writes nothing, so its `tx` is `null`. Against a **quipu server** a write's
+`tx` is also `null` today: quipu's `/update` returns no transaction id
+(aegis-xajsgn). `--at` reads still work there, and [history](history.md)
+recovers each version's transaction from them.
 
 `--json` output is a contract: every documented key is always present (an
 absent value is `null`, never a missing key), and `tests/json_schema.rs` pins

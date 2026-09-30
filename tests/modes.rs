@@ -812,3 +812,49 @@ fn a_delete_syncs_both_ways_without_allow_remote_deletes() {
     assert_eq!(v[0]["status"], "tombstone");
     assert!(env.ready(&repo, &[]).is_empty());
 }
+
+#[test]
+fn history_over_a_quipu_server_finds_each_version_without_a_head_tx() {
+    // A quipu server reports no head transaction, and its /update returns no tx
+    // (so remote writes print tx null; aegis-xajsgn). history gallops over --at
+    // reads instead: every version it reports must be exactly what --at reads
+    // at that tx, in order, one per write.
+    let mut env = Env::new("remote-history");
+    let Some(url) = env.start_server() else {
+        eprintln!("SKIPPED: set SEEDS_TEST_QUIPU_SERVER to a quipu-server binary to run this");
+        return;
+    };
+    let work = env.dir("work");
+    let remote = [("SEEDS_QUIPU_URL", url.as_str())];
+    let json = |args: &[&str]| -> Value {
+        let mut a = args.to_vec();
+        a.push("--json");
+        serde_json::from_str(&env.ok(&work, &a, &remote)).unwrap()
+    };
+    let id = json(&["create", "first"])["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    json(&["create", "noise one"]);
+    json(&["update", &id, "--title", "second"]);
+    json(&["create", "noise two"]);
+    json(&["close", &id, "--reason", "done"]);
+    let h = json(&["history", &id]);
+    let versions = h["versions"].as_array().unwrap();
+    assert_eq!(versions.len(), 3, "{h}");
+    let txs: Vec<u64> = versions.iter().map(|v| v["tx"].as_u64().unwrap()).collect();
+    assert!(txs.windows(2).all(|w| w[0] < w[1]), "{txs:?}");
+    for v in versions {
+        let tx = v["tx"].as_u64().unwrap().to_string();
+        let at = json(&["show", &id, "--at", &tx]);
+        assert_eq!(at[0]["title"], v["title"]);
+        assert_eq!(at[0]["status"], v["status"]);
+        assert_eq!(at[0]["revision"], v["revision"]);
+    }
+    assert_eq!(versions[1]["title"], "second");
+    assert_eq!(versions[2]["status"], "closed");
+    assert!(h["meaning"]
+        .as_str()
+        .unwrap()
+        .contains("transaction history"));
+}
