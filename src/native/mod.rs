@@ -20,7 +20,7 @@ use crate::output;
 use crate::pendant;
 use crate::quipu_backend::QuipuBackend;
 use crate::sync;
-use cli::{Cli, Command, CommentsCommand, DepCommand};
+use cli::{Cli, Command, CommentsCommand, DepCommand, LabelCommand};
 use config::{Location, Resolved};
 
 /// What a run produced: the exit code and the two streams.
@@ -798,6 +798,7 @@ fn dispatch(cli: &Cli, ctx: &Ctx, b: &mut dyn Backend) -> Result<Outcome> {
                 "export, import and sync are handled before dispatch",
             ))
         }
+        Command::Label { command } => label(json, at, ctx, b, command),
         Command::Comments { command } => match command {
             CommentsCommand::Add {
                 id,
@@ -845,6 +846,91 @@ fn dispatch(cli: &Cli, ctx: &Ctx, b: &mut dyn Backend) -> Result<Outcome> {
                 Ok(ok(json, output::comments_json(&cs), text, vec![]))
             }
         },
+    }
+}
+
+fn label(
+    json: bool,
+    at: Option<u64>,
+    ctx: &Ctx,
+    b: &mut dyn Backend,
+    command: &LabelCommand,
+) -> Result<Outcome> {
+    match command {
+        LabelCommand::Add { issues, label } | LabelCommand::Remove { issues, label } => {
+            let add = matches!(command, LabelCommand::Add { .. });
+            let verb = if add { "add" } else { "remove" };
+            let (ids, label) = LabelCommand::ids_and_label(issues, label).ok_or_else(|| {
+                SdError::usage(format!(
+                    "usage: label {verb} <id...> <label> or label {verb} <id...> -l <label>"
+                ))
+            })?;
+            let (changes, tx) = engine::label_change(b, ctx, &ids, &label, add)?;
+            let value = Json::Array(
+                changes
+                    .iter()
+                    .map(|c| {
+                        serde_json::json!({"status": c.status, "issue_id": c.issue_id,
+                                           "label": c.label, "tx": tx})
+                    })
+                    .collect(),
+            );
+            let text = changes
+                .iter()
+                .map(|c| match c.status {
+                    "added" => format!("added label {} to {}{}", c.label, c.issue_id, tx_note(tx)),
+                    "removed" => format!(
+                        "removed label {} from {}{}",
+                        c.label,
+                        c.issue_id,
+                        tx_note(tx)
+                    ),
+                    "exists" => format!("{} already has label {}", c.issue_id, c.label),
+                    _ => format!("{} has no label {}", c.issue_id, c.label),
+                })
+                .collect::<Vec<_>>()
+                .join("\n");
+            Ok(ok(json, value, text, vec![]))
+        }
+        LabelCommand::List { issue } => {
+            let labels = engine::labels(b, issue.as_deref(), at)?;
+            let text = match (issue, labels.is_empty()) {
+                (Some(id), true) => format!("{id} has no labels"),
+                (None, true) => "no labels in use".to_string(),
+                _ => labels.join("\n"),
+            };
+            Ok(ok(json, serde_json::json!(labels), text, vec![]))
+        }
+        LabelCommand::ListAll => {
+            let counts = engine::label_counts(b, at)?;
+            let value = Json::Array(
+                counts
+                    .iter()
+                    .map(|(l, n)| serde_json::json!({"label": l, "count": n}))
+                    .collect(),
+            );
+            let text = if counts.is_empty() {
+                "no labels in use".to_string()
+            } else {
+                counts
+                    .iter()
+                    .map(|(l, n)| format!("{l} ({n} seed{})", if *n == 1 { "" } else { "s" }))
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            };
+            Ok(ok(json, value, text, vec![]))
+        }
+        LabelCommand::Rename { old_name, new_name } => {
+            let (n, tx) = engine::label_rename(b, ctx, old_name, new_name)?;
+            let value = serde_json::json!({"old_name": old_name, "new_name": new_name,
+                                           "affected_issues": n, "tx": tx});
+            let text = format!(
+                "renamed label {old_name} -> {new_name} on {n} seed{}{}",
+                if n == 1 { "" } else { "s" },
+                if n > 0 { tx_note(tx) } else { String::new() }
+            );
+            Ok(ok(json, value, text, vec![]))
+        }
     }
 }
 

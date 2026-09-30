@@ -74,6 +74,11 @@ pub enum Command {
         #[command(subcommand)]
         command: CommentsCommand,
     },
+    /// Manage labels
+    Label {
+        #[command(subcommand)]
+        command: LabelCommand,
+    },
     /// Write the ledger as a pendant (quipu's share files) to a directory
     Export(ExportArgs),
     /// Read a pendant into the configured store; conflicts are reported, never
@@ -378,6 +383,60 @@ pub enum CommentsCommand {
     },
 }
 
+/// `sd label ...`. Same shapes as br: `label add <id...> <label>` or
+/// `label add <id...> -l <label>`.
+#[derive(Debug, Subcommand)]
+pub enum LabelCommand {
+    /// Add a label to one or more seeds
+    Add {
+        /// Seed id(s), then the label unless -l is given
+        issues: Vec<String>,
+        /// Label to add
+        #[arg(short, long)]
+        label: Option<String>,
+    },
+    /// Remove a label from one or more seeds
+    Remove {
+        /// Seed id(s), then the label unless -l is given
+        issues: Vec<String>,
+        /// Label to remove
+        #[arg(short, long)]
+        label: Option<String>,
+    },
+    /// List a seed's labels, or every label in use when no id is given
+    List {
+        /// The seed (optional)
+        issue: Option<String>,
+    },
+    /// List every label in use, with how many seeds carry it
+    ListAll,
+    /// Rename a label on every seed that carries it
+    Rename {
+        /// Current label
+        old_name: String,
+        /// New label
+        new_name: String,
+    },
+}
+
+impl LabelCommand {
+    /// Split `add`/`remove` arguments into (ids, label) the way br does: with
+    /// -l every positional is an id; without it the last positional is the label.
+    pub fn ids_and_label(
+        issues: &[String],
+        label: &Option<String>,
+    ) -> Option<(Vec<String>, String)> {
+        match label {
+            Some(l) if !issues.is_empty() => Some((issues.to_vec(), l.clone())),
+            None if issues.len() >= 2 => {
+                let (last, ids) = issues.split_last()?;
+                Some((ids.to_vec(), last.clone()))
+            }
+            _ => None,
+        }
+    }
+}
+
 impl Command {
     /// Whether the verb writes (and so takes the store's write lock).
     pub fn writes(&self) -> bool {
@@ -385,6 +444,12 @@ impl Command {
             Command::Create(_) | Command::Update(_) | Command::Close(_) => true,
             Command::Dep { command } => !matches!(command, DepCommand::List { .. }),
             Command::Comments { command } => matches!(command, CommentsCommand::Add { .. }),
+            Command::Label { command } => matches!(
+                command,
+                LabelCommand::Add { .. }
+                    | LabelCommand::Remove { .. }
+                    | LabelCommand::Rename { .. }
+            ),
             Command::Import(_) | Command::Sync(_) | Command::MergeDriver(_) => true,
             Command::Export(_)
             | Command::Show(_)
@@ -412,6 +477,13 @@ impl Command {
             Command::Comments { command } => match command {
                 CommentsCommand::Add { .. } => "comments add",
                 CommentsCommand::List { .. } => "comments list",
+            },
+            Command::Label { command } => match command {
+                LabelCommand::Add { .. } => "label add",
+                LabelCommand::Remove { .. } => "label remove",
+                LabelCommand::List { .. } => "label list",
+                LabelCommand::ListAll => "label list-all",
+                LabelCommand::Rename { .. } => "label rename",
             },
             Command::Export(_) => "export",
             Command::Import(_) => "import",
@@ -451,6 +523,13 @@ mod tests {
             true,
         ),
         (&["comments", "list", "s-1"], "comments list", false),
+        (&["label", "add", "s-1", "s-2", "l"], "label add", true),
+        (&["label", "add", "s-1", "-l", "l"], "label add", true),
+        (&["label", "remove", "s-1", "l"], "label remove", true),
+        (&["label", "list", "s-1"], "label list", false),
+        (&["label", "list"], "label list", false),
+        (&["label", "list-all"], "label list-all", false),
+        (&["label", "rename", "a", "b"], "label rename", true),
         (&["export", "--to", "p"], "export", false),
         (&["import", "p", "--prefer", "store"], "import", true),
         (&["sync"], "sync", true),
@@ -512,6 +591,22 @@ mod tests {
         let err = Cli::try_parse_from(["sd", "ready", "--store", "a.db", "--quipu", "http://x"])
             .unwrap_err();
         assert_eq!(err.exit_code(), 2);
+    }
+
+    #[test]
+    fn label_arguments_split_like_br() {
+        let v = |xs: &[&str]| xs.iter().map(|x| x.to_string()).collect::<Vec<_>>();
+        let split = LabelCommand::ids_and_label;
+        assert_eq!(
+            split(&v(&["s-1", "s-2", "l"]), &None),
+            Some((v(&["s-1", "s-2"]), "l".into()))
+        );
+        assert_eq!(
+            split(&v(&["s-1", "s-2"]), &Some("l".into())),
+            Some((v(&["s-1", "s-2"]), "l".into()))
+        );
+        assert_eq!(split(&v(&["s-1"]), &None), None);
+        assert_eq!(split(&[], &Some("l".into())), None);
     }
 
     #[test]

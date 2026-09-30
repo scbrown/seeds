@@ -393,3 +393,45 @@ fn a_seed_records_the_shuttle_run_that_drives_it() {
     let v = sb.json(&["update", &id, "--workflow-run", ""]);
     assert!(v[0]["workflow_run"].is_null());
 }
+
+#[test]
+fn label_verbs_take_br_argument_shapes_and_emit_br_json() {
+    let sb = Sandbox::new("label");
+    let a = sb.json(&["create", "a"])["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let b = sb.json(&["create", "b"])["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    // Positional label (last argument) and -l both work, across several seeds.
+    let added = sb.json(&["label", "add", &a, &b, "infra"]);
+    assert_eq!(added[0]["status"], "added");
+    assert_eq!(added[1]["issue_id"], b.as_str());
+    assert!(added[0]["tx"].as_u64().unwrap() > 0);
+    assert_eq!(
+        sb.json(&["label", "add", &a, "-l", "infra"])[0]["status"],
+        "exists"
+    );
+    assert_eq!(
+        sb.json(&["label", "list", &a]),
+        serde_json::json!(["infra"])
+    );
+    assert_eq!(
+        sb.json(&["label", "list-all"]),
+        serde_json::json!([{"label": "infra", "count": 2}])
+    );
+    let renamed = sb.json(&["label", "rename", "infra", "ops"]);
+    assert_eq!(renamed["affected_issues"], 2);
+    assert_eq!(
+        sb.json(&["label", "remove", &b, "ops"])[0]["status"],
+        "removed"
+    );
+    assert_eq!(sb.json(&["label", "list"]), serde_json::json!(["ops"]));
+    // One positional and no -l is a usage error, as in br; nothing is written.
+    let o = sb.run(&["label", "add", &a]);
+    assert_eq!(code(&o), 2);
+    let o = sb.run(&["label", "add", "sd-nope", "x"]);
+    assert_eq!(code(&o), 3);
+}

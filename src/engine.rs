@@ -537,6 +537,145 @@ pub fn update(
     finish(b, ctx, &snap, ids, writes, "seeds:update")
 }
 
+// ---------------------------------------------------------------- labels
+
+/// One seed's outcome from `label add` / `label remove`, in br's vocabulary:
+/// `added` or `exists`, `removed` or `not_found`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LabelChange {
+    /// The seed.
+    pub issue_id: String,
+    /// The label.
+    pub label: String,
+    /// What happened to this seed.
+    pub status: &'static str,
+}
+
+fn one_label(label: &str) -> Result<String> {
+    let label = label.trim();
+    if label.is_empty() {
+        return Err(SdError::usage("a label must be non-empty"));
+    }
+    if label.contains(',') {
+        return Err(SdError::usage(format!(
+            "a label cannot contain a comma: {label:?} (labels are comma-separated elsewhere)"
+        )));
+    }
+    Ok(label.to_string())
+}
+
+fn unique(ids: &[String]) -> Vec<String> {
+    let mut seen = BTreeSet::new();
+    ids.iter()
+        .filter(|i| seen.insert(i.as_str()))
+        .cloned()
+        .collect()
+}
+
+/// `sd label add|remove`: every named seed changes in one transaction, or none
+/// do. A seed that already has (or lacks) the label is reported, not written.
+pub fn label_change(
+    b: &mut dyn Backend,
+    ctx: &Ctx,
+    ids: &[String],
+    label: &str,
+    add: bool,
+) -> Result<(Vec<LabelChange>, u64)> {
+    let label = one_label(label)?;
+    let ids = unique(ids);
+    if ids.is_empty() {
+        return Err(SdError::usage("at least one seed id is required"));
+    }
+    let snap = b.snapshot(None)?;
+    let (mut writes, mut changes) = (Vec::new(), Vec::new());
+    for id in &ids {
+        let before = snap.get(id)?;
+        let mut s = before.clone();
+        let changed = if add {
+            s.labels.insert(label.clone())
+        } else {
+            s.labels.remove(&label)
+        };
+        let status = match (add, changed) {
+            (true, true) => "added",
+            (true, false) => "exists",
+            (false, true) => "removed",
+            (false, false) => "not_found",
+        };
+        changes.push(LabelChange {
+            issue_id: id.clone(),
+            label: label.clone(),
+            status,
+        });
+        if changed {
+            s.updated_at = ctx.now.clone();
+            s.revision = before.revision + 1;
+            writes.push(SeedWrite {
+                seed: s,
+                expected_revision: Some(before.revision),
+            });
+        }
+    }
+    let source = if add {
+        "seeds:label-add"
+    } else {
+        "seeds:label-remove"
+    };
+    let (_, tx) = finish(b, ctx, &snap, &ids, writes, source)?;
+    Ok((changes, tx))
+}
+
+/// `sd label rename <old> <new>`: every seed carrying `old` carries `new`
+/// instead, in one transaction. Returns the number of seeds changed.
+pub fn label_rename(b: &mut dyn Backend, ctx: &Ctx, old: &str, new: &str) -> Result<(usize, u64)> {
+    let (old, new) = (one_label(old)?, one_label(new)?);
+    let snap = b.snapshot(None)?;
+    if old == new {
+        return Ok((0, snap.tx));
+    }
+    let (mut writes, mut ids) = (Vec::new(), Vec::new());
+    for before in snap.seeds.values().filter(|s| s.labels.contains(&old)) {
+        let mut s = before.clone();
+        s.labels.remove(&old);
+        s.labels.insert(new.clone());
+        s.updated_at = ctx.now.clone();
+        s.revision = before.revision + 1;
+        ids.push(s.id.clone());
+        writes.push(SeedWrite {
+            seed: s,
+            expected_revision: Some(before.revision),
+        });
+    }
+    let (_, tx) = finish(b, ctx, &snap, &ids, writes, "seeds:label-rename")?;
+    Ok((ids.len(), tx))
+}
+
+/// `sd label list [id]`: one seed's labels, or every label in use (closed
+/// seeds included, as br does), sorted.
+pub fn labels(b: &dyn Backend, id: Option<&str>, at: Option<u64>) -> Result<Vec<String>> {
+    let snap = b.snapshot(at)?;
+    Ok(match id {
+        Some(id) => snap.get(id)?.labels.iter().cloned().collect(),
+        None => snap
+            .seeds
+            .values()
+            .flat_map(|s| s.labels.iter().cloned())
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect(),
+    })
+}
+
+/// `sd label list-all`: every label in use with the number of seeds carrying it.
+pub fn label_counts(b: &dyn Backend, at: Option<u64>) -> Result<Vec<(String, usize)>> {
+    let snap = b.snapshot(at)?;
+    let mut counts: BTreeMap<String, usize> = BTreeMap::new();
+    for l in snap.seeds.values().flat_map(|s| s.labels.iter()) {
+        *counts.entry(l.clone()).or_default() += 1;
+    }
+    Ok(counts.into_iter().collect())
+}
+
 fn claim(snap: &Snapshot, s: &mut Seed, actor: &str) -> Result<()> {
     if actor.trim().is_empty() {
         return Err(SdError::usage(

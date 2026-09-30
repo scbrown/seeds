@@ -985,3 +985,75 @@ fn sync_refuses_removals_unless_allowed() {
     sync::sync(&base, &mut local, &mut remote, &ctx(10), true).unwrap();
     assert!(local.snapshot(None).unwrap().seeds.is_empty());
 }
+
+#[test]
+fn label_add_and_remove_report_br_statuses_in_one_transaction() {
+    let mut b = backend();
+    let (x, y) = (mk(&mut b, "x", 1), mk(&mut b, "y", 2));
+    let ids = vec![x.clone(), y.clone()];
+    let (changes, tx) = engine::label_change(&mut b, &ctx(3), &ids, "infra", true).unwrap();
+    assert!(tx > 0);
+    assert_eq!(
+        changes.iter().map(|c| c.status).collect::<Vec<_>>(),
+        ["added", "added"]
+    );
+    // Adding again writes nothing and says so; the transaction does not move.
+    let (again, tx2) = engine::label_change(&mut b, &ctx(4), &ids, "infra", true).unwrap();
+    assert_eq!(again[0].status, "exists");
+    assert_eq!(tx2, tx);
+    let (gone, _) =
+        engine::label_change(&mut b, &ctx(5), std::slice::from_ref(&x), "infra", false).unwrap();
+    assert_eq!(gone[0].status, "removed");
+    let (none, _) =
+        engine::label_change(&mut b, &ctx(6), std::slice::from_ref(&x), "infra", false).unwrap();
+    assert_eq!(none[0].status, "not_found");
+    assert_eq!(engine::labels(&b, Some(&y), None).unwrap(), ["infra"]);
+    assert!(engine::labels(&b, Some(&x), None).unwrap().is_empty());
+}
+
+#[test]
+fn label_change_with_an_unknown_id_writes_nothing() {
+    let mut b = backend();
+    let x = mk(&mut b, "x", 1);
+    let err = engine::label_change(&mut b, &ctx(2), &[x.clone(), "sd-nope".into()], "l", true)
+        .unwrap_err();
+    assert_eq!(err.kind, ErrorKind::NotFound);
+    assert!(engine::labels(&b, Some(&x), None).unwrap().is_empty());
+}
+
+#[test]
+fn a_label_must_be_one_non_empty_label() {
+    let mut b = backend();
+    let x = mk(&mut b, "x", 1);
+    for bad in ["", "  ", "a,b"] {
+        let err =
+            engine::label_change(&mut b, &ctx(2), std::slice::from_ref(&x), bad, true).unwrap_err();
+        assert_eq!(err.kind, ErrorKind::Usage, "{bad:?}");
+    }
+}
+
+#[test]
+fn label_list_and_counts_include_closed_seeds_and_rename_moves_every_carrier() {
+    let mut b = backend();
+    let (x, y) = (mk(&mut b, "x", 1), mk(&mut b, "y", 2));
+    engine::label_change(&mut b, &ctx(3), &[x.clone(), y.clone()], "old", true).unwrap();
+    engine::label_change(&mut b, &ctx(4), std::slice::from_ref(&y), "other", true).unwrap();
+    engine::close(
+        &mut b,
+        &ctx(5),
+        std::slice::from_ref(&y),
+        Some("done"),
+        false,
+    )
+    .unwrap();
+    assert_eq!(engine::labels(&b, None, None).unwrap(), ["old", "other"]);
+    assert_eq!(
+        engine::label_counts(&b, None).unwrap(),
+        [("old".to_string(), 2), ("other".to_string(), 1)]
+    );
+    let (n, _) = engine::label_rename(&mut b, &ctx(6), "old", "new").unwrap();
+    assert_eq!(n, 2);
+    assert_eq!(engine::labels(&b, None, None).unwrap(), ["new", "other"]);
+    let (n, _) = engine::label_rename(&mut b, &ctx(7), "absent", "z").unwrap();
+    assert_eq!(n, 0);
+}
