@@ -223,6 +223,27 @@ impl Backend for QuipuBackend {
         Ok(snap)
     }
 
+    fn claims_of(&self, id: &str) -> Result<Vec<(u64, crate::backend::Claims)>> {
+        let result = query_temporal(
+            &self.store,
+            &vocab::claims_query(&self.graph_iri, id),
+            &Self::ctx(None)?,
+        )?;
+        let rows = result
+            .rows()
+            .iter()
+            .map(|r| {
+                r.iter()
+                    .filter_map(|(k, v)| match v {
+                        Value::Str(s) => Some((k.clone(), crate::model::Obj::Str(s.clone()))),
+                        _ => None,
+                    })
+                    .collect()
+            })
+            .collect();
+        Ok(crate::backend::claims_rows(id, rows))
+    }
+
     fn ready_ids(&self, at: Option<u64>) -> Result<Vec<String>> {
         let result = query_temporal(
             &self.store,
@@ -340,13 +361,39 @@ impl Backend for QuipuBackend {
         if datums.is_empty() {
             return Ok(u64::try_from(self.store.transaction_head()?).unwrap_or(0));
         }
-        let tx = self.store.transact_to_graph(
-            &datums,
+        // The same provenance record remote mode writes, in the same
+        // transaction: who, why, when, which seeds, and any attribution claims.
+        let pg = self
+            .store
+            .graph_create(&crate::vocab::provenance_graph(&self.graph_iri))?;
+        let write_iri = format!(
+            "urn:seeds:write:{}",
+            &crate::pendant::sha256(
+                format!("{}\n{}\n{}\n{datums:?}", ctx.now, ctx.actor, batch.source).as_bytes()
+            )[7..31]
+        );
+        let mut prov = Vec::new();
+        for (iri, facts) in crate::backend::write_record(&write_iri, batch, ctx) {
+            let e = self.store.intern(&iri)?;
+            for (p, o) in &facts {
+                prov.push(Datum {
+                    entity: e,
+                    attribute: self.store.intern(p)?,
+                    value: self.value_of(o)?,
+                    valid_from: ctx.now.clone(),
+                    valid_to: None,
+                    op: Op::Assert,
+                });
+            }
+        }
+        self.store.transact_graph_batches(
+            // Provenance first, so the head afterwards is the data write's
+            // transaction: the tx sd reports and `--at` reads.
+            &[(pg, prov), (g, datums)],
             &ctx.now,
             Some(&ctx.actor),
             Some(&batch.source),
-            g,
         )?;
-        Ok(u64::try_from(tx).unwrap_or(0))
+        Ok(u64::try_from(self.store.transaction_head()?).unwrap_or(0))
     }
 }

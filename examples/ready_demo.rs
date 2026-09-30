@@ -22,6 +22,7 @@ fn main() {
         now: "2026-09-30T00:00:00Z".into(),
         actor: "demo".into(),
         prefix: "sd".into(),
+        claims: Default::default(),
     };
     let mk = |b: &mut QuipuBackend, t: &str| {
         engine::create(

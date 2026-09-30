@@ -1011,6 +1011,9 @@ pub struct HistoryEntry {
     /// What changed from the previous version, as `field: old (before) vs new
     /// (after)`; empty for the first version.
     pub changes: Vec<String>,
+    /// What the writer of this version claimed to be (`--agent-name`,
+    /// `--harness`, `--model`): self-asserted, never verified.
+    pub claims: Option<crate::backend::Claims>,
 }
 
 /// The seed's revision as of `tx`, or 0 if it did not exist yet.
@@ -1049,6 +1052,7 @@ fn first_tx_after(b: &dyn Backend, id: &str, after: u64, mut lo: u64) -> Result<
 /// history in quipu (what `--at` reads), not br's local backup files.
 pub fn history(b: &dyn Backend, id: &str) -> Result<Vec<HistoryEntry>> {
     let current = b.snapshot(None)?.get(id)?.clone();
+    let claims = b.claims_of(id)?;
     let mut out: Vec<HistoryEntry> = Vec::new();
     let (mut after, mut lo) = (0u64, 1u64);
     while after < current.revision {
@@ -1066,7 +1070,17 @@ pub fn history(b: &dyn Backend, id: &str) -> Result<Vec<HistoryEntry>> {
             .unwrap_or_default();
         after = seed.revision;
         lo = tx + 1;
-        out.push(HistoryEntry { tx, seed, changes });
+        // A version is matched to the write that produced its revision.
+        let claimed = claims
+            .iter()
+            .find(|(rev, _)| *rev == seed.revision)
+            .map(|(_, c)| c.clone());
+        out.push(HistoryEntry {
+            tx,
+            seed,
+            changes,
+            claims: claimed,
+        });
     }
     Ok(out)
 }

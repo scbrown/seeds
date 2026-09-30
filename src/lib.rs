@@ -19,7 +19,7 @@
 //! use seeds::quipu_backend::QuipuBackend;
 //!
 //! let mut b = QuipuBackend::in_memory("https://seeds.local/project/sd").unwrap();
-//! let ctx = Ctx { now: "2026-09-30T00:00:00Z".into(), actor: "me".into(), prefix: "sd".into() };
+//! let ctx = Ctx { now: "2026-09-30T00:00:00Z".into(), actor: "me".into(), prefix: "sd".into(), claims: Default::default() };
 //! let (a, _) = engine::create(&mut b, &ctx, &CreateReq { title: "a".into(), ..Default::default() }).unwrap();
 //! let (blocker, _) = engine::create(&mut b, &ctx, &CreateReq { title: "b".into(), ..Default::default() }).unwrap();
 //! engine::dep_add(&mut b, &ctx, &a.id, &blocker.id, "blocks").unwrap();

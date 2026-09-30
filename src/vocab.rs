@@ -257,6 +257,34 @@ pub fn decode(s: &str) -> String {
     String::from_utf8_lossy(&out).into_owned()
 }
 
+/// The side graph holding who wrote what (`seeds:Write` records and their
+/// attribution claims). Snapshots and exports never read it.
+pub fn provenance_graph(graph: &str) -> String {
+    if graph.contains('#') {
+        format!("{graph}-seeds-provenance")
+    } else {
+        format!("{graph}#seeds-provenance")
+    }
+}
+
+/// The attribution claims on writes to one seed, from its project's
+/// provenance graph: each `?version` (`<id>@<revision>`) a claiming write
+/// produced, and whichever of `?agent ?harness ?model` it made. The caller
+/// keeps only versions of this seed (one write can produce several).
+pub fn claims_query(graph_iri: &str, id: &str) -> String {
+    format!(
+        "PREFIX seeds: <{SEEDS}>\n\
+         SELECT ?version ?agent ?harness ?model WHERE {{ GRAPH <{pg}> {{\n\
+         \x20 ?w seeds:wrote <{item}> ; seeds:version ?version ; seeds:claimed ?c .\n\
+         \x20 OPTIONAL {{ ?c seeds:agentName ?agent }}\n\
+         \x20 OPTIONAL {{ ?c seeds:harness ?harness }}\n\
+         \x20 OPTIONAL {{ ?c seeds:model ?model }}\n\
+         }} }}",
+        pg = provenance_graph(graph_iri),
+        item = item_iri(id),
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

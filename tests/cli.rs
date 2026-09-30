@@ -41,6 +41,12 @@ impl Sandbox {
             "SEEDS_QUIPU_URL",
             "SEEDS_GRAPH",
             "SEEDS_PREFIX",
+            "SEEDS_AGENT_NAME",
+            "SEEDS_HARNESS",
+            "SEEDS_MODEL",
+            "BR_AGENT_NAME",
+            "BR_HARNESS",
+            "BR_MODEL",
         ] {
             c.env_remove(k);
         }
