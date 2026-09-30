@@ -20,6 +20,9 @@ STEPS = [
     ("list", ["list"]),
     ("ready", ["ready"]),
     ("count", ["count"]),
+    ("version", ["version"]),
+    ("where", ["where"]),
+    ("info", ["info"]),
     ("stale", ["stale", "--days", "0"]),
     ("search", ["search", "parity"]),
     ("update", ["update", "{A}", "--status", "in_progress", "--assignee", "probe"]),
@@ -45,7 +48,9 @@ STEPS = [
 
 # br JSON fields that describe its own storage engine; no referent in a quipu ledger.
 NOT_APPLICABLE = {"compaction_level": "br compaction", "original_size": "br compaction",
-                  "source_repo": "JSONL multi-repo", "source_repo_path": "JSONL multi-repo"}
+                  "source_repo": "JSONL multi-repo", "source_repo_path": "JSONL multi-repo",
+                  "daemon_connected": "br daemon", "daemon_detail": "br daemon",
+                  "daemon_fallback_reason": "br daemon", "jsonl_size": "JSONL file"}
 
 
 def shape(value, path="$", out=None):

@@ -43,13 +43,104 @@ pub fn run(cli: &Cli) -> Outcome {
             Err(e) => error_outcome(cli.json, &e, Vec::new()),
         };
     }
+    if let Command::Version(a) = &cli.command {
+        // Needs no store and no configuration.
+        return version(cli.json, a.short);
+    }
     let result = config::Inputs::from_env(cli.store.clone(), cli.quipu.clone(), cli.graph.clone())
         .and_then(|i| config::resolve(&i))
-        .and_then(|cfg| run_with(cli, &cfg));
+        .and_then(|cfg| match cli.command {
+            // Reads only the configuration: never creates a project id or a store.
+            Command::Where => Ok(where_outcome(cli.json, &cfg)),
+            _ => run_with(cli, &cfg),
+        });
     match result {
         Ok(o) => o,
         Err(e) => error_outcome(cli.json, &e, Vec::new()),
     }
+}
+
+/// `sd version`: br's keys. seeds does not embed its commit, branch or
+/// compiler, so those are null rather than guessed.
+fn version(json: bool, short: bool) -> Outcome {
+    let v = env!("CARGO_PKG_VERSION");
+    let mut features = vec!["native"];
+    if cfg!(feature = "shacl") {
+        features.push("shacl");
+    }
+    let value = serde_json::json!({
+        "version": v,
+        "build": if cfg!(debug_assertions) { "debug" } else { "release" },
+        "commit": null, "branch": null, "rust_version": null,
+        "target": format!("{}-{}", std::env::consts::ARCH, std::env::consts::OS),
+        "features": features,
+    });
+    let text = if short {
+        v.to_string()
+    } else {
+        format!("sd {v}")
+    };
+    ok(json, value, text, vec![])
+}
+
+fn location_parts(cfg: &Resolved) -> (Option<String>, Option<String>, &'static str) {
+    match &cfg.location {
+        Location::Store(p) => (Some(p.display().to_string()), None, "local"),
+        Location::Url(u) => (None, Some(u.clone()), "remote"),
+    }
+}
+
+/// `sd where`: where the ledger lives, from the configuration alone.
+fn where_outcome(json: bool, cfg: &Resolved) -> Outcome {
+    let (store, url, mode) = location_parts(cfg);
+    let dir = cfg
+        .project_id_file
+        .parent()
+        .map(|p| p.display().to_string());
+    let pendant = cfg.pendant.as_ref().map(|p| p.display().to_string());
+    let value = serde_json::json!({
+        "path": dir, "prefix": cfg.prefix, "database_path": store, "jsonl_path": null,
+        "quipu_url": url, "mode": mode, "graph": cfg.graph, "pendant_path": pendant,
+        "location_source": cfg.location_source,
+    });
+    let mut lines = vec![match (&store, &url) {
+        (Some(s), _) => format!("local store {s}"),
+        (_, Some(u)) => format!("quipu server {u}"),
+        _ => unreachable!("a location is a store or a url"),
+    }];
+    lines.push(format!("  from {}", cfg.location_source));
+    lines.push(format!("  prefix {}", cfg.prefix));
+    if let Some(g) = &cfg.graph {
+        lines.push(format!("  graph {g}"));
+    }
+    if let Some(p) = &pendant {
+        lines.push(format!("  pendant {p}"));
+    }
+    ok(json, value, lines.join("\n"), vec![])
+}
+
+/// `sd info`: `where`, plus what the ledger holds.
+fn info_outcome(json: bool, cfg: &Resolved, b: &dyn Backend) -> Result<Outcome> {
+    let snap = b.snapshot(None)?;
+    let (store, url, mode) = location_parts(cfg);
+    let size = store
+        .as_ref()
+        .and_then(|p| std::fs::metadata(p).ok())
+        .map(|m| m.len());
+    let value = serde_json::json!({
+        "database_path": store, "beads_dir": cfg.project_id_file.parent().map(|p| p.display().to_string()),
+        "mode": mode, "quipu_url": url, "graph": cfg.graph,
+        "issue_count": snap.seeds.len(), "comment_count": snap.comments.len(), "tx": snap.tx,
+        "config": {"issue_prefix": cfg.prefix}, "db_size": size, "jsonl_path": null,
+    });
+    let text = format!(
+        "{} seeds, {} comments at tx {} ({mode}: {})",
+        snap.seeds.len(),
+        snap.comments.len(),
+        snap.tx,
+        store.or(url).unwrap_or_default()
+    );
+    Ok(ok(json, value, text, vec![]))
 }
 
 fn error_outcome(json: bool, e: &SdError, warnings: Vec<String>) -> Outcome {
@@ -206,7 +297,7 @@ fn run_remote(cli: &Cli, cfg: &Resolved, ctx: &Ctx, url: &str) -> Result<Outcome
             "sd sync runs from a local store ([quipu] store) to a [sync] remote; this \
              configuration's primary store is already the remote",
         )),
-        _ => dispatch(cli, ctx, &mut remote),
+        _ => dispatch(cli, cfg, ctx, &mut remote),
     }
 }
 
@@ -362,7 +453,7 @@ fn run_local(cli: &Cli, cfg: &Resolved, ctx: &Ctx, path: &std::path::Path) -> Re
         // Mode 1: reconcile with the pendant, run, export.
         let mut h = store::open_for_write(path, cfg.graph())?;
         let notes = store::hydrate(&mut h.backend, path, dir, ctx)?;
-        let o = dispatch(cli, ctx, &mut h.backend)?;
+        let o = dispatch(cli, cfg, ctx, &mut h.backend)?;
         if cli.command.writes() {
             store::export_to_pendant(&h.backend, path, dir)?;
         }
@@ -370,15 +461,15 @@ fn run_local(cli: &Cli, cfg: &Resolved, ctx: &Ctx, path: &std::path::Path) -> Re
     }
     if cli.command.writes() {
         let mut h = store::open_for_write(path, cfg.graph())?;
-        return dispatch(cli, ctx, &mut h.backend);
+        return dispatch(cli, cfg, ctx, &mut h.backend);
     }
     match store::open_for_read(path, cfg.graph())? {
-        Some(mut b) => dispatch(cli, ctx, &mut b),
+        Some(mut b) => dispatch(cli, cfg, ctx, &mut b),
         None => {
             // Nothing written yet: answer from an empty graph, and say so,
             // so an empty answer is never mistaken for "nothing matched".
             let mut empty = QuipuBackend::in_memory(cfg.graph())?;
-            let o = dispatch(cli, ctx, &mut empty)?;
+            let o = dispatch(cli, cfg, ctx, &mut empty)?;
             Ok(with_notes(
                 o,
                 vec![format!(
@@ -568,7 +659,7 @@ fn ok(json: bool, value: Json, text: String, warnings: Vec<String>) -> Outcome {
     }
 }
 
-fn dispatch(cli: &Cli, ctx: &Ctx, b: &mut dyn Backend) -> Result<Outcome> {
+fn dispatch(cli: &Cli, cfg: &Resolved, ctx: &Ctx, b: &mut dyn Backend) -> Result<Outcome> {
     let json = cli.json;
     let at = cli.at;
     match &cli.command {
@@ -868,11 +959,15 @@ fn dispatch(cli: &Cli, ctx: &Ctx, b: &mut dyn Backend) -> Result<Outcome> {
                 Ok(ok(json, output::dep_list_json(&rows), text, vec![]))
             }
         },
-        Command::Export(_) | Command::Import(_) | Command::Sync(_) | Command::MergeDriver(_) => {
-            Err(SdError::usage(
-                "export, import and sync are handled before dispatch",
-            ))
-        }
+        Command::Info => info_outcome(json, cfg, b),
+        Command::Export(_)
+        | Command::Import(_)
+        | Command::Sync(_)
+        | Command::MergeDriver(_)
+        | Command::Version(_)
+        | Command::Where => Err(SdError::usage(
+            "export, import, sync, merge-driver, version and where are handled before dispatch",
+        )),
         Command::Label { command } => label(json, at, ctx, b, command),
         Command::Comments { command } => match command {
             CommentsCommand::Add {
