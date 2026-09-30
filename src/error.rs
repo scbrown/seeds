@@ -39,6 +39,20 @@ pub enum ErrorKind {
 }
 
 impl ErrorKind {
+    /// Every kind, for the published error schema.
+    pub const ALL: [ErrorKind; 10] = [
+        ErrorKind::Failed,
+        ErrorKind::Usage,
+        ErrorKind::NotFound,
+        ErrorKind::Conflict,
+        ErrorKind::Refused,
+        ErrorKind::Config,
+        ErrorKind::Unreachable,
+        ErrorKind::Indeterminate,
+        ErrorKind::NotBuilt,
+        ErrorKind::Elsewhere,
+    ];
+
     /// The process exit code for this kind.
     pub fn exit_code(self) -> i32 {
         match self {
