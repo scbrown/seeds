@@ -992,3 +992,16 @@ fn ready_epic_is_parent_recursive_and_conflicts_with_parent() {
     assert_eq!(code(&sb.run(&["ready", "-r"])), 2);
     assert_eq!(code(&sb.run(&["ready", "--sort", "bogus"])), 2);
 }
+
+#[test]
+fn quiet_prints_nothing_on_success_and_still_explains_a_failure() {
+    let sb = Sandbox::new("quiet");
+    let o = sb.run(&["-q", "create", "a"]);
+    assert_eq!(code(&o), 0);
+    assert!(o.stdout.is_empty() && o.stderr.is_empty(), "{o:?}");
+    // The write happened: -q silences the report, not the work.
+    assert_eq!(sb.json(&["ready"]).as_array().unwrap().len(), 1);
+    let o = sb.run(&["show", "sd-nope", "--quiet"]);
+    assert_ne!(code(&o), 0);
+    assert!(!o.stderr.is_empty());
+}

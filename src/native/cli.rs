@@ -46,6 +46,10 @@ pub struct Cli {
     #[arg(long, global = true, value_name = "TX")]
     pub at: Option<u64>,
 
+    /// Quiet: print nothing on success (the exit code is the answer); errors still print
+    #[arg(short, long, global = true)]
+    pub quiet: bool,
+
     #[command(subcommand)]
     pub command: Command,
 }
