@@ -715,6 +715,9 @@ pub struct UpdateArgs {
     /// The shuttle workflow run driving the seed ("" clears it)
     #[arg(long = "workflow-run", value_name = "RUN")]
     pub workflow_run: Option<String>,
+    /// A comment committed with the change, in the same transaction
+    #[arg(long)]
+    pub transition_comment: Option<String>,
 }
 
 /// `sd close`.
@@ -733,6 +736,9 @@ pub struct CloseArgs {
     /// Close even if the seed still has open blockers
     #[arg(short, long)]
     pub force: bool,
+    /// A comment committed with the change, in the same transaction
+    #[arg(long)]
+    pub transition_comment: Option<String>,
 }
 
 /// `sd delete`.
@@ -777,6 +783,9 @@ pub struct DeferArgs {
     /// instant (none: deferred with no date)
     #[arg(long)]
     pub until: Option<String>,
+    /// A comment committed with the change, in the same transaction
+    #[arg(long)]
+    pub transition_comment: Option<String>,
 }
 
 /// `sd undefer`.
@@ -785,6 +794,9 @@ pub struct UndeferArgs {
     /// Seed id(s)
     #[arg(required = true)]
     pub ids: Vec<String>,
+    /// A comment committed with the change, in the same transaction
+    #[arg(long)]
+    pub transition_comment: Option<String>,
 }
 
 /// `sd epic ...`.
@@ -801,6 +813,9 @@ pub enum EpicCommand {
         /// List what would be closed without writing
         #[arg(long)]
         dry_run: bool,
+        /// A comment committed on each closed epic, in the same transaction
+        #[arg(long)]
+        transition_comment: Option<String>,
     },
 }
 
@@ -949,7 +964,7 @@ impl Command {
             | Command::Undefer(_) => true,
             Command::Dep { command } => !matches!(command, DepCommand::List { .. }),
             Command::Epic { command } => {
-                matches!(command, EpicCommand::CloseEligible { dry_run: false })
+                matches!(command, EpicCommand::CloseEligible { dry_run: false, .. })
             }
             Command::Comments { command } => matches!(command, CommentsCommand::Add { .. }),
             Command::Label { command } => matches!(

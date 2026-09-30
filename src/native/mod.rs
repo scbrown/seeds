@@ -1749,6 +1749,7 @@ fn dispatch(cli: &Cli, cfg: &Resolved, ctx: &Ctx, b: &mut dyn Backend) -> Result
                 remove_labels: a.remove_label.clone(),
                 defer: a.defer.clone(),
                 workflow_run: a.workflow_run.clone(),
+                transition_comment: a.transition_comment.clone(),
             };
             let (seeds, tx) = engine::update(b, ctx, &a.ids, &req)?;
             let text = seeds
@@ -1771,6 +1772,7 @@ fn dispatch(cli: &Cli, cfg: &Resolved, ctx: &Ctx, b: &mut dyn Backend) -> Result
                 a.reason.as_deref(),
                 a.outcome.as_deref(),
                 a.force,
+                a.transition_comment.as_deref(),
             )?;
             let text = seeds
                 .iter()
@@ -1826,11 +1828,17 @@ fn dispatch(cli: &Cli, cfg: &Resolved, ctx: &Ctx, b: &mut dyn Backend) -> Result
             Ok(transitions(json, "reopened", "reopened", r))
         }
         Command::Defer(a) => {
-            let r = engine::defer(b, ctx, &a.ids, a.until.as_deref())?;
+            let r = engine::defer_with(
+                b,
+                ctx,
+                &a.ids,
+                a.until.as_deref(),
+                a.transition_comment.as_deref(),
+            )?;
             Ok(transitions(json, "deferred", "deferred", r))
         }
         Command::Undefer(a) => {
-            let r = engine::undefer(b, ctx, &a.ids)?;
+            let r = engine::undefer_with(b, ctx, &a.ids, a.transition_comment.as_deref())?;
             Ok(transitions(json, "undeferred", "undeferred", r))
         }
         Command::Epic { command } => match command {
@@ -1843,7 +1851,7 @@ fn dispatch(cli: &Cli, cfg: &Resolved, ctx: &Ctx, b: &mut dyn Backend) -> Result
                     vec![],
                 ))
             }
-            EpicCommand::CloseEligible { dry_run: true } => {
+            EpicCommand::CloseEligible { dry_run: true, .. } => {
                 let rows = engine::epic_status(b, true, at)?;
                 Ok(ok(
                     json,
@@ -1852,8 +1860,12 @@ fn dispatch(cli: &Cli, cfg: &Resolved, ctx: &Ctx, b: &mut dyn Backend) -> Result
                     vec![],
                 ))
             }
-            EpicCommand::CloseEligible { dry_run: false } => {
-                let (closed, skipped, tx) = engine::epic_close_eligible(b, ctx)?;
+            EpicCommand::CloseEligible {
+                dry_run: false,
+                transition_comment,
+            } => {
+                let (closed, skipped, tx) =
+                    engine::epic_close_eligible_with(b, ctx, transition_comment.as_deref())?;
                 let ids: Vec<&str> = closed.iter().map(|s| s.id.as_str()).collect();
                 let mut value = serde_json::json!({"closed": ids, "count": ids.len(), "tx": tx});
                 if !skipped.is_empty() {
