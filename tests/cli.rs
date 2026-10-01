@@ -1018,6 +1018,78 @@ fn version_check_exits_0_current_1_update_7_cannot_tell() {
 }
 
 #[test]
+fn orphans_fix_closes_only_on_an_explicit_yes() {
+    // aegis-w3k75d.13: br's --fix. EOF and anything but yes skip.
+    use std::io::Write;
+    let sb = Sandbox::new("orphans-fix");
+    let a = sb.ok(&["create", "one", "--silent"]).trim().to_string();
+    let b = sb.ok(&["create", "two", "--silent"]).trim().to_string();
+    let git = |args: &[&str]| {
+        std::process::Command::new("git")
+            .args(args)
+            .current_dir(sb.work())
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_AUTHOR_NAME", "t")
+            .env("GIT_AUTHOR_EMAIL", "t@example.org")
+            .env("GIT_COMMITTER_NAME", "t")
+            .env("GIT_COMMITTER_EMAIL", "t@example.org")
+            .output()
+            .unwrap()
+    };
+    git(&["init", "-q"]);
+    git(&[
+        "commit",
+        "-q",
+        "--allow-empty",
+        "-m",
+        &format!("work on {a} and {b}"),
+    ]);
+    let fix = |input: &str| -> serde_json::Value {
+        let mut c = sb
+            .cmd(&sb.work(), &["orphans", "--fix", "--json"])
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .unwrap();
+        c.stdin.take().unwrap().write_all(input.as_bytes()).unwrap();
+        let o = c.wait_with_output().unwrap();
+        assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+        serde_json::from_slice(&o.stdout).unwrap()
+    };
+    let status = |id: &str| sb.json(&["show", id])[0]["status"].clone();
+
+    // No input at all: both skipped, nothing closed.
+    let v = fix("");
+    assert!(
+        v.as_array().unwrap().iter().all(|o| o["fix"] == "skipped"),
+        "{v}"
+    );
+    assert_eq!((status(&a), status(&b)), ("open".into(), "open".into()));
+
+    // yes to the first, no to the second (orphans list in id order).
+    let v = fix("y\nn\n");
+    let first = v[0]["issue_id"].as_str().unwrap().to_string();
+    let other = if first == a { &b } else { &a };
+    assert_eq!(
+        (v[0]["fix"].clone(), v[1]["fix"].clone()),
+        ("closed".into(), "skipped".into()),
+        "{v}"
+    );
+    let shown = sb.json(&["show", &first]);
+    assert_eq!(shown[0]["status"], "closed");
+    assert_eq!(
+        shown[0]["close_reason"],
+        "Implemented (detected by orphans scan)"
+    );
+    assert_eq!(status(other), "open");
+
+    // Plain orphans stays read-only and carries no fix field.
+    let v = sb.json(&["orphans"]);
+    assert!(v[0].get("fix").is_none(), "{v}");
+}
+
+#[test]
 fn orphans_reads_the_git_log_of_the_current_repo() {
     let sb = Sandbox::new("orphans");
     let id = sb.ok(&["create", "x", "--silent"]).trim().to_string();

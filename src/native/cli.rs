@@ -126,6 +126,11 @@ pub enum Command {
         /// Include the full commit hash and message body
         #[arg(long)]
         details: bool,
+        /// Ask, seed by seed on stdin, whether to close each one: y closes
+        /// it ("Implemented (detected by orphans scan)"); anything else, or
+        /// no input at all, skips it. Prompts go to stderr. br's --fix
+        #[arg(long)]
+        fix: bool,
     },
     /// Count seeds (open ones by default)
     Count(CountArgs),
@@ -1158,6 +1163,7 @@ impl Command {
             Command::Import(_) | Command::Sync(_) | Command::MergeDriver(_) | Command::Init(_) => {
                 true
             }
+            Command::Orphans { fix, .. } => *fix,
             Command::Export(_)
             | Command::Completions(_)
             | Command::Version(_)
@@ -1173,7 +1179,6 @@ impl Command {
             | Command::Ready(_)
             | Command::Blocked(_)
             | Command::Stale(_)
-            | Command::Orphans { .. }
             | Command::Lint(_)
             | Command::Changelog(_)
             | Command::History { .. }
