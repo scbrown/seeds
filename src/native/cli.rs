@@ -402,7 +402,7 @@ pub struct CreateArgs {
     #[arg(short = 'f', long = "file", value_name = "FILE", conflicts_with_all = [
         "title", "title_flag", "issue_type", "priority", "description", "status", "defer",
         "description_file", "assignee", "owner", "labels", "parent", "deps", "workflow_run",
-        "step", "visit", "acceptance_criteria", "external_ref", "due", "estimate",
+        "step", "visit", "acceptance_criteria", "external_ref", "due", "estimate", "slug",
     ])]
     pub file: Option<String>,
     /// Title (positional form)
@@ -452,6 +452,11 @@ pub struct CreateArgs {
     /// Parent seed; the new seed is minted as <parent>.<n>
     #[arg(long)]
     pub parent: Option<String>,
+    /// Human-readable slug embedded in the id: <prefix>-<slug>-<hash>.
+    /// Normalized to lowercase ASCII letters, digits and single hyphens,
+    /// at most 48 characters; ignored with --parent
+    #[arg(long)]
+    pub slug: Option<String>,
     /// Comma-separated dependencies: <id> (blocks) or <type>:<id>
     #[arg(long)]
     pub deps: Option<String>,

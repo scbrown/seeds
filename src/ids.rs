@@ -8,6 +8,8 @@
 //! project under the write lock.
 //!
 //! A child created with `--parent P` gets `P.<n>`, the next free integer.
+//!
+//! `sd create --slug S` embeds a normalized slug: `<prefix>-<slug>-<short hash>`.
 
 use sha2::{Digest, Sha256};
 
@@ -26,6 +28,39 @@ pub fn mint(prefix: &str, title: &str, now: &str, taken: impl Fn(&str) -> bool) 
         }
         attempt += 1;
     }
+}
+
+/// The longest normalized slug, br's cap.
+const SLUG_MAX: usize = 48;
+
+/// br's `--slug` normalization: lowercase ASCII letters and digits, every run
+/// of anything else (non-ASCII included) collapsed to one hyphen, leading and
+/// trailing hyphens stripped, then capped at 48 characters (stripping a
+/// hyphen the cap exposes). `None` when nothing is left, and the id is then
+/// minted without a slug, as br does.
+pub fn slug(raw: &str) -> Option<String> {
+    let mut out = String::with_capacity(raw.len());
+    for c in raw.chars() {
+        if c.is_ascii_alphanumeric() {
+            out.push(c.to_ascii_lowercase());
+        } else if !out.is_empty() && !out.ends_with('-') {
+            out.push('-');
+        }
+    }
+    out.truncate(SLUG_MAX);
+    let out = out.trim_end_matches('-');
+    (!out.is_empty()).then(|| out.to_string())
+}
+
+/// Like [`mint`], with a normalized slug between the prefix and the hash.
+pub fn mint_slugged(
+    prefix: &str,
+    slug: &str,
+    title: &str,
+    now: &str,
+    taken: impl Fn(&str) -> bool,
+) -> String {
+    mint(&format!("{prefix}-{slug}"), title, now, taken)
 }
 
 /// The id of the seed a workflow step creates: `<prefix>-w<8 base36>` from a
@@ -97,6 +132,34 @@ mod tests {
             assert!(taken.insert(id));
         }
         assert!(taken.iter().any(|id| id.len() > "sd-".len() + 3));
+    }
+
+    #[test]
+    fn slugs_normalize_like_br() {
+        // Expected values are br's observed CLI output for the same inputs
+        // (aegis-w3k75d.13; br --help and outputs only, per aegis-fur6v8).
+        assert_eq!(slug("Survey My Thing!").as_deref(), Some("survey-my-thing"));
+        assert_eq!(slug("--weird__  slug--").as_deref(), Some("weird-slug"));
+        assert_eq!(slug("a--b").as_deref(), Some("a-b"));
+        assert_eq!(slug("ABC-123").as_deref(), Some("abc-123"));
+        assert_eq!(slug("Ünïcode café").as_deref(), Some("n-code-caf"));
+        assert_eq!(slug(""), None);
+        assert_eq!(slug("!!!"), None);
+        assert_eq!(slug(&"a".repeat(60)), Some("a".repeat(48)));
+        // The cap lands on a hyphen, which is then stripped: 47 characters.
+        let capped = slug(&"ab-".repeat(20)).unwrap();
+        assert_eq!(capped, ["ab"; 16].join("-"));
+        assert_eq!(capped.len(), 47);
+    }
+
+    #[test]
+    fn slugged_ids_keep_prefix_slug_and_hash() {
+        let id = mint_slugged("sd", "survey-my-thing", "t", "2026-10-01T00:00:00Z", |_| {
+            false
+        });
+        let tail = id.strip_prefix("sd-survey-my-thing-").unwrap();
+        assert_eq!(tail.len(), 3);
+        assert!(tail.bytes().all(|b| ALPHABET.contains(&b)));
     }
 
     #[test]

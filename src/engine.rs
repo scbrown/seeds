@@ -55,6 +55,9 @@ pub struct CreateReq {
     pub labels: Vec<String>,
     /// Parent seed: the new seed is minted as `<parent>.<n>`.
     pub parent: Option<String>,
+    /// A human-readable slug embedded in the id (br's `--slug`); ignored under
+    /// `parent`, as br does.
+    pub slug: Option<String>,
     /// Dependencies, br's form: `id` (blocks) or `type:id`.
     pub deps: Vec<String>,
     /// The shuttle run that creates or drives this seed (an IRI or a bare run id).
@@ -334,6 +337,11 @@ pub fn create_outcome(b: &mut dyn Backend, ctx: &Ctx, req: &CreateReq) -> Result
                     "--step mints the id from the run and step, so it cannot take --parent",
                 ));
             }
+            if req.slug.is_some() {
+                return Err(SdError::usage(
+                    "--step mints the id from the run and step, so it cannot take --slug",
+                ));
+            }
             let visit = req.visit.unwrap_or(1);
             if visit == 0 {
                 return Err(SdError::usage("--visit counts from 1"));
@@ -363,7 +371,12 @@ pub fn create_outcome(b: &mut dyn Backend, ctx: &Ctx, req: &CreateReq) -> Result
             snap.get(p)?;
             ids::child(p, |c| snap.seeds.contains_key(c))
         }
-        (None, None) => ids::mint(&ctx.prefix, title, &ctx.now, |c| snap.seeds.contains_key(c)),
+        (None, None) => match req.slug.as_deref().and_then(ids::slug) {
+            Some(slug) => ids::mint_slugged(&ctx.prefix, &slug, title, &ctx.now, |c| {
+                snap.seeds.contains_key(c)
+            }),
+            None => ids::mint(&ctx.prefix, title, &ctx.now, |c| snap.seeds.contains_key(c)),
+        },
     };
     let seed = new_seed(&snap, ctx, req, id, title, run.clone())?;
     if req.dry_run {
