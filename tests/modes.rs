@@ -1160,3 +1160,39 @@ fn sync_dry_run_and_status_report_without_writing_anything() {
     let o = env.sd(&repo, &["sync", "--dry-run", "--status"], &sync_env);
     assert_eq!(o.status.code(), Some(2));
 }
+
+// ---------------------------------------------------------------- update overwrite guard, remote (aegis-w3k75d.13)
+
+#[test]
+fn update_refuses_replacing_text_without_force_on_a_remote_ledger_too() {
+    // wu's amendment: the guard is in the engine path every backend shares,
+    // so a quipu server refuses exactly as a local store does.
+    let mut env = Env::new("update-force-remote");
+    let Some(url) = env.start_server() else {
+        eprintln!("SKIPPED: set SEEDS_TEST_QUIPU_SERVER to a quipu-server binary to run this");
+        return;
+    };
+    let work = env.dir("work");
+    let remote = [
+        ("SEEDS_QUIPU_URL", url.as_str()),
+        ("SEEDS_GRAPH", "https://seeds.local/project/update-force"),
+    ];
+    let a = env
+        .ok(&work, &["create", "a", "--silent"], &remote)
+        .trim()
+        .to_string();
+    let get = |env: &Env, key: &str| -> Value {
+        let v: Value =
+            serde_json::from_str(&env.ok(&work, &["show", &a, "--json"], &remote)).unwrap();
+        v[0][key].clone()
+    };
+    for (field, key) in [("--description", "description"), ("--notes", "notes")] {
+        env.ok(&work, &["update", &a, field, "first"], &remote);
+        env.ok(&work, &["update", &a, field, "first"], &remote);
+        let o = env.sd(&work, &["update", &a, field, "second"], &remote);
+        assert_eq!(o.status.code(), Some(5), "{field}");
+        assert_eq!(get(&env, key), "first", "{field}: nothing was written");
+        env.ok(&work, &["update", &a, field, "second", "--force"], &remote);
+        assert_eq!(get(&env, key), "second");
+    }
+}

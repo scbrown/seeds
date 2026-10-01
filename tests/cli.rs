@@ -1184,8 +1184,42 @@ fn update_changes_type_labels_parent_and_description_like_br() {
     }
     let f = sb.root.join("desc.md");
     std::fs::write(&f, "## Acceptance Criteria\n- x\n").unwrap();
-    let d = sb.json(&["update", &a, "--description-file", f.to_str().unwrap()]);
+    // Replacing the existing "b1" is br's overwrite guard: --force says so.
+    assert_eq!(
+        code(&sb.run(&["update", &a, "--description-file", f.to_str().unwrap()])),
+        5
+    );
+    let d = sb.json(&[
+        "update",
+        &a,
+        "--description-file",
+        f.to_str().unwrap(),
+        "--force",
+    ]);
     assert_eq!(d[0]["description"], "## Acceptance Criteria\n- x\n");
+}
+
+#[test]
+fn update_refuses_replacing_text_without_force_like_br() {
+    // aegis-w3k75d.13 (wu's spec): non-empty -> different refuses (5) and
+    // writes nothing; --force passes; empty -> value and the same value pass;
+    // notes behave the same. Clearing existing text is a replacement too.
+    let sb = Sandbox::new("update-force");
+    let a = sb.ok(&["create", "a", "--silent"]).trim().to_string();
+    for field in ["--description", "--notes"] {
+        let key = field.trim_start_matches("--");
+        let get = || sb.json(&["show", &a])[0][key].clone();
+        sb.ok(&["update", &a, field, "first"]); // empty -> value
+        sb.ok(&["update", &a, field, "first"]); // same value: idempotent
+        let o = sb.run(&["update", &a, field, "second"]);
+        assert_eq!(code(&o), 5, "{field}");
+        let err = String::from_utf8_lossy(&o.stderr);
+        assert!(err.contains(key) && err.contains("--force"), "{err}");
+        assert_eq!(get(), "first", "{field}: nothing was written");
+        assert_eq!(code(&sb.run(&["update", &a, field, ""])), 5, "clearing");
+        sb.ok(&["update", &a, field, "second", "--force"]);
+        assert_eq!(get(), "second");
+    }
 }
 
 #[test]

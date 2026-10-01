@@ -12,7 +12,8 @@ sd update sd-a3f --defer 2026-10-15      # hide from ready until then
 
 | flag | meaning |
 |---|---|
-| `--title`, `-d, --description`, `--notes` | replace the text |
+| `--title`, `-d, --description`, `--notes` | set the text (see below for replacing existing text) |
+| `--force` | allow replacing a non-empty description or notes with different content |
 | `-s, --status` | `open`, `in_progress`, `blocked`, `deferred`, `closed` |
 | `-p, --priority` | `0`-`4` or `P0`-`P4` |
 | `--assignee NAME` | set the assignee (`""` clears it) |
@@ -31,7 +32,16 @@ Setting status to `closed` records `closed_at`; setting it back to anything
 else clears `closed_at` and `close_reason`. An update that changes nothing
 writes nothing.
 
+**Existing text is not replaced by accident.** Setting a description or notes
+that already has text to *different* text (including `""`) is refused with
+exit **5**, naming the field, and nothing is written, unless `--force` is
+given. This is br's guard (br's `--force`). Filling an empty field, or setting
+the same text again, needs no `--force`, so re-running an update is safe. The
+replaced text stays in the seed's history (`sd history`). The check runs in the
+shared update path, so a local store and a quipu server refuse alike.
+
 **`--json`**: an array of the updated seed objects, each with the `tx`.
 
 **Exit codes**: 0; 2 for a bad value or `--claim` combined with `--assignee`
-or `--status`; 3 for an unknown id; 4 for a lost claim or a concurrent change.
+or `--status`; 3 for an unknown id; 4 for a lost claim or a concurrent change;
+5 for replacing existing text without `--force`.
