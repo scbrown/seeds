@@ -1818,6 +1818,12 @@ pub struct UpdateReq {
     pub acceptance_criteria: Option<String>,
     /// New external reference; empty clears it.
     pub external_ref: Option<String>,
+    /// Acceptance checklist items to tick (br's --check-acceptance).
+    pub check_acceptance: Vec<String>,
+    /// Acceptance checklist items to untick (br's --uncheck-acceptance).
+    pub uncheck_acceptance: Vec<String>,
+    /// Unchecked items to append (br's --add-acceptance).
+    pub add_acceptance: Vec<String>,
     /// New due date, br's forms; empty clears it.
     pub due: Option<String>,
     /// New time estimate in minutes.
@@ -1907,6 +1913,15 @@ pub fn update(
         if let Some(g) = &req.design {
             s.design = replace_text(id, "design", &before.design, g, req.force)?;
         }
+        let checklist_edit = !(req.check_acceptance.is_empty()
+            && req.uncheck_acceptance.is_empty()
+            && req.add_acceptance.is_empty());
+        if checklist_edit && req.acceptance_criteria.is_some() {
+            return Err(SdError::usage(
+                "give --acceptance-criteria or checklist edits \
+                 (--check/--uncheck/--add-acceptance), not both",
+            ));
+        }
         if let Some(a) = &req.acceptance_criteria {
             s.acceptance_criteria = replace_text(
                 id,
@@ -1915,6 +1930,17 @@ pub fn update(
                 a,
                 req.force,
             )?;
+        }
+        if checklist_edit {
+            let body = before.acceptance_criteria.clone().unwrap_or_default();
+            let edited = edit_checklist(
+                &body,
+                &req.check_acceptance,
+                &req.uncheck_acceptance,
+                &req.add_acceptance,
+            )
+            .map_err(|e| SdError::usage(format!("{id}: {e}")))?;
+            s.acceptance_criteria = non_empty(Some(&edited));
         }
         if let Some(e) = &req.external_ref {
             s.external_ref = non_empty(Some(e.trim()));
@@ -2350,6 +2376,150 @@ pub fn parse_when(value: &str, now: &str, flag: &str) -> Result<String> {
         return Ok(v.to_string());
     }
     Err(bad())
+}
+
+/// One `- [ ]` / `- [x]` line of an acceptance checklist.
+struct ChecklistItem {
+    /// Index into the body's lines.
+    line: usize,
+    /// Byte offset of the box's inner character in that line.
+    mark: usize,
+    /// The item's text after the box.
+    text: String,
+}
+
+fn checklist_items(lines: &[&str]) -> Vec<ChecklistItem> {
+    let mut items = Vec::new();
+    for (line, l) in lines.iter().enumerate() {
+        let lead = l.len() - l.trim_start().len();
+        let rest = &l[lead..];
+        let Some(after) = rest
+            .strip_prefix("- [")
+            .or_else(|| rest.strip_prefix("* ["))
+        else {
+            continue;
+        };
+        let mut chars = after.chars();
+        let (Some(c), Some(']')) = (chars.next(), chars.next()) else {
+            continue;
+        };
+        if !matches!(c, ' ' | 'x' | 'X') {
+            continue;
+        }
+        let text = chars.as_str().trim().to_string();
+        items.push(ChecklistItem {
+            line,
+            mark: lead + 3,
+            text,
+        });
+    }
+    items
+}
+
+/// Resolve one ITEMS argument (br's form): a comma-separated list of 1-based
+/// item numbers, or a text selector that must match exactly one item
+/// (case-insensitive; an exact match wins, otherwise a unique substring).
+fn select_items(spec: &str, items: &[ChecklistItem]) -> std::result::Result<Vec<usize>, String> {
+    let parts: Vec<&str> = spec.split(',').map(str::trim).collect();
+    if !parts.is_empty()
+        && parts
+            .iter()
+            .all(|p| !p.is_empty() && p.bytes().all(|b| b.is_ascii_digit()))
+    {
+        return parts
+            .iter()
+            .map(|p| {
+                let n: usize = p.parse().map_err(|_| format!("bad item number {p:?}"))?;
+                if n == 0 || n > items.len() {
+                    Err(format!(
+                        "no item {n}: the checklist has {} item(s)",
+                        items.len()
+                    ))
+                } else {
+                    Ok(n - 1)
+                }
+            })
+            .collect();
+    }
+    let want = spec.trim().to_lowercase();
+    if want.is_empty() {
+        return Err("an empty item selector".into());
+    }
+    let exact: Vec<usize> = (0..items.len())
+        .filter(|&i| items[i].text.to_lowercase() == want)
+        .collect();
+    let hits = if exact.is_empty() {
+        (0..items.len())
+            .filter(|&i| items[i].text.to_lowercase().contains(&want))
+            .collect()
+    } else {
+        exact
+    };
+    match hits.as_slice() {
+        [one] => Ok(vec![*one]),
+        [] => Err(format!("{spec:?} matches no checklist item")),
+        many => Err(format!(
+            "{spec:?} matches {} items ({}); use its number or more of its text",
+            many.len(),
+            many.iter()
+                .map(|i| (i + 1).to_string())
+                .collect::<Vec<_>>()
+                .join(", ")
+        )),
+    }
+}
+
+/// br's in-place acceptance checklist edit: tick `check`, untick `uncheck`,
+/// append `add` as unchecked items. Every selector is resolved before anything
+/// changes; every other byte of the field is kept. An item already in the
+/// requested state is left as it is.
+pub fn edit_checklist(
+    body: &str,
+    check: &[String],
+    uncheck: &[String],
+    add: &[String],
+) -> std::result::Result<String, String> {
+    let lines: Vec<&str> = body.split_inclusive('\n').collect();
+    let items = checklist_items(&lines);
+    if items.is_empty() && !(check.is_empty() && uncheck.is_empty()) {
+        return Err("has no acceptance checklist (`- [ ] ...` lines) to tick".into());
+    }
+    let mut want: BTreeMap<usize, char> = BTreeMap::new();
+    for (specs, mark) in [(check, 'x'), (uncheck, ' ')] {
+        for spec in specs {
+            for i in select_items(spec, &items)? {
+                if want.insert(i, mark).is_some_and(|m| m != mark) {
+                    return Err(format!(
+                        "item {} is both checked and unchecked by this update",
+                        i + 1
+                    ));
+                }
+            }
+        }
+    }
+    for a in add {
+        if a.trim().is_empty() {
+            return Err("--add-acceptance needs text".into());
+        }
+    }
+    let mut out: Vec<String> = lines.iter().map(|l| (*l).to_string()).collect();
+    for (i, mark) in want {
+        let it = &items[i];
+        let l = &mut out[it.line];
+        let current = l[it.mark..].chars().next();
+        let done = matches!(current, Some('x' | 'X'));
+        if (mark == 'x') != done {
+            l.replace_range(it.mark..it.mark + 1, &mark.to_string());
+        }
+    }
+    let mut body: String = out.concat();
+    for a in add {
+        if !body.is_empty() && !body.ends_with('\n') {
+            body.push('\n');
+        }
+        body.push_str(&format!("- [ ] {}\n", a.trim()));
+    }
+    Ok(body)
 }
 
 /// br's bound on `estimated_minutes`: 0 to about a year.

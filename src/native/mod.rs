@@ -1021,13 +1021,17 @@ fn now() -> String {
 /// RFC 3339 UTC instant. So `--due 2026-10-01` on a US-Eastern host in
 /// summer is `2026-10-01T13:00:00Z`, and `--overdue` agrees with br on the
 /// due day. Every other form (`+1d`, an instant) passes through to the core.
-fn resolve_due(value: &Option<String>) -> Result<Option<String>> {
-    use jiff::{civil::Date, tz::TimeZone, Zoned};
+fn resolve_due(value: &Option<String>, now: &str) -> Result<Option<String>> {
+    use jiff::{civil::Date, tz::TimeZone, Timestamp};
     let Some(v) = value else { return Ok(None) };
     let t = v.trim();
     let tz = TimeZone::system();
     let date: Date = if t.eq_ignore_ascii_case("tomorrow") {
-        let today = Zoned::now().with_time_zone(tz.clone()).date();
+        // From the run's injected clock, like every other relative form.
+        let now: Timestamp = now
+            .parse()
+            .map_err(|e| SdError::usage(format!("--due tomorrow: cannot read now {now:?}: {e}")))?;
+        let today = now.to_zoned(tz.clone()).date();
         today
             .tomorrow()
             .map_err(|e| SdError::usage(format!("--due tomorrow: {e}")))?
@@ -1985,7 +1989,7 @@ fn dispatch(cli: &Cli, cfg: &Resolved, ctx: &Ctx, b: &mut dyn Backend) -> Result
                 owner: a.owner.clone(),
                 acceptance_criteria: a.acceptance_criteria.clone(),
                 external_ref: a.external_ref.clone(),
-                due: resolve_due(&a.due)?,
+                due: resolve_due(&a.due, &ctx.now)?,
                 estimate: a.estimate.clone(),
                 labels: split_csv(&a.labels),
                 parent: a.parent.clone(),
@@ -2569,7 +2573,10 @@ fn dispatch(cli: &Cli, cfg: &Resolved, ctx: &Ctx, b: &mut dyn Backend) -> Result
                 design: a.design.clone(),
                 acceptance_criteria: a.acceptance_criteria.clone(),
                 external_ref: a.external_ref.clone(),
-                due: resolve_due(&a.due)?,
+                check_acceptance: a.check_acceptance.clone(),
+                uncheck_acceptance: a.uncheck_acceptance.clone(),
+                add_acceptance: a.add_acceptance.clone(),
+                due: resolve_due(&a.due, &ctx.now)?,
                 estimate: a.estimate.clone(),
                 owner: a.owner.clone(),
                 status: a.status.clone(),

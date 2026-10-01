@@ -1297,6 +1297,61 @@ fn a_bare_due_date_is_nine_local_as_an_instant() {
 }
 
 #[test]
+fn acceptance_checklist_flags_edit_in_place() {
+    // aegis-w3k75d.13: br's --check/--uncheck/--add-acceptance on update.
+    let sb = Sandbox::new("checklist");
+    let id = sb
+        .ok(&[
+            "create",
+            "x",
+            "--acceptance",
+            "- [ ] one\n- [ ] two",
+            "--silent",
+        ])
+        .trim()
+        .to_string();
+    let ac = || sb.json(&["show", &id])[0]["acceptance_criteria"].clone();
+
+    // No --force needed: these edit the field in place.
+    sb.ok(&[
+        "update",
+        &id,
+        "--check-acceptance",
+        "2",
+        "--add-acceptance",
+        "three",
+    ]);
+    assert_eq!(ac(), "- [ ] one\n- [x] two\n- [ ] three\n");
+    sb.ok(&[
+        "update",
+        &id,
+        "--check-acceptance",
+        "ONE",
+        "--uncheck-acceptance",
+        "two",
+    ]);
+    assert_eq!(ac(), "- [x] one\n- [ ] two\n- [ ] three\n");
+
+    // A bad selector refuses the whole update (exit 2); nothing is written.
+    let before = ac();
+    for bad in [
+        vec!["update", id.as_str(), "--check-acceptance", "9"],
+        vec!["update", id.as_str(), "--check-acceptance", "t"],
+        vec![
+            "update",
+            id.as_str(),
+            "--check-acceptance",
+            "1",
+            "--acceptance",
+            "- [ ] new",
+        ],
+    ] {
+        assert_eq!(code(&sb.run(&bad)), 2, "{bad:?}");
+    }
+    assert_eq!(ac(), before);
+}
+
+#[test]
 fn orphans_reads_the_git_log_of_the_current_repo() {
     let sb = Sandbox::new("orphans");
     let id = sb.ok(&["create", "x", "--silent"]).trim().to_string();

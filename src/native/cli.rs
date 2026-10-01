@@ -906,6 +906,18 @@ pub struct UpdateArgs {
     /// New external reference ("" clears it)
     #[arg(long)]
     pub external_ref: Option<String>,
+    /// Tick acceptance checklist items in place: 1-based numbers (1,4,5) or a
+    /// text selector matching exactly one item (repeatable; no --force needed)
+    #[arg(long, value_name = "ITEMS")]
+    pub check_acceptance: Vec<String>,
+    /// Untick acceptance checklist items in place; same selectors as
+    /// --check-acceptance
+    #[arg(long, value_name = "ITEMS")]
+    pub uncheck_acceptance: Vec<String>,
+    /// Append an unchecked item (`- [ ] TEXT`) to the acceptance checklist
+    /// (repeatable)
+    #[arg(long, value_name = "TEXT", allow_hyphen_values = true)]
+    pub add_acceptance: Vec<String>,
     /// New due date: +1d, tomorrow, YYYY-MM-DD or an RFC 3339 instant ("" clears it)
     #[arg(long)]
     pub due: Option<String>,

@@ -21,6 +21,9 @@ sd update sd-a3f --defer 2026-10-15      # hide from ready until then
 | `--external-ref REF` | a reference to the same work elsewhere, br's `external_ref` (`""` clears it) |
 | `--due WHEN` | due date, the forms of `--defer`; a bare date or `tomorrow` is 09:00 local, stored as a UTC instant (`""` clears it) |
 | `--estimate MIN` | time estimate in minutes, 0 to 525960 |
+| `--check-acceptance ITEMS` | tick acceptance checklist items in place: 1-based numbers (`1,4,5`) or a text selector matching exactly one item (case-insensitive; an exact match wins, else a unique substring). Repeatable; needs no `--force`; the rest of the field is kept byte for byte |
+| `--uncheck-acceptance ITEMS` | untick items; the same selectors |
+| `--add-acceptance TEXT` | append `- [ ] TEXT` to the checklist (repeatable). Checklist edits and `--acceptance-criteria` are not combined in one update |
 | `--claim` | set assignee to the actor and status to `in_progress`, only if the seed is open, unclaimed and unblocked |
 | `--add-label`, `--remove-label` | repeatable |
 | `--defer DATE` | hide from `ready` until this date or instant (`""` clears it) |
