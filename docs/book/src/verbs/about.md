@@ -5,6 +5,7 @@ What `sd` is, and where its ledger lives.
 ```bash
 sd version            # sd 0.0.x
 sd version --short    # just the number, for scripts
+sd version --check    # is a newer release published? exit 0 / 1 / 7
 sd where              # store file or server, graph, prefix, pendant
 sd info --json        # where, plus how many seeds and comments, at which tx
 sd info --schema      # plus the shapes' sha256 and target classes
@@ -12,6 +13,13 @@ sd info --whats-new   # this build's latest changelog section (no store)
 sd info --thanks      # the projects sd builds on (no store)
 ```
 
+- `version --check` asks for the latest published release (GitHub's latest
+  release of scbrown/seeds; `SEEDS_RELEASES_URL` overrides it) and exits
+  **0** when this build is current, **1** when a newer release exists, as br
+  does, and **7** when it cannot tell: offline, an error status, or a tag that
+  is not a plain `x.y.z`. It never reports "up to date" for an answer it could
+  not compare. `--json`: `{current_version, latest_version, update_available,
+  source}`.
 - `version` needs no configuration. seeds does not embed its commit, branch
   or compiler, so those `--json` keys are `null` rather than guessed.
 - `where` reads the **configuration only**. It never creates a store or a

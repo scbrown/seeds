@@ -956,6 +956,67 @@ fn info_schema_whats_new_and_thanks() {
     assert_eq!(i["issue_count"], 1, "the plain info fields stay: {i}");
 }
 
+/// A one-shot HTTP server answering `body` with `status`; returns its URL.
+fn fake_release_server(status: &str, body: &str) -> String {
+    use std::io::{Read, Write};
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let url = format!("http://{}/releases/latest", listener.local_addr().unwrap());
+    let (status, body) = (status.to_string(), body.to_string());
+    std::thread::spawn(move || {
+        if let Ok((mut s, _)) = listener.accept() {
+            let mut buf = [0u8; 4096];
+            let _ = s.read(&mut buf);
+            let _ = write!(
+                s,
+                "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            );
+        }
+    });
+    url
+}
+
+#[test]
+fn version_check_exits_0_current_1_update_7_cannot_tell() {
+    // aegis-w3k75d.13: br's version --check contract (0 up to date, 1 update
+    // available), plus 7 when sd cannot tell, so "offline" never reads as either.
+    let sb = Sandbox::new("version-check");
+    let mine = env!("CARGO_PKG_VERSION");
+    let run = |url: &str| {
+        let o = sb
+            .cmd(&sb.work(), &["version", "--check", "--json"])
+            .env("SEEDS_RELEASES_URL", url)
+            .output()
+            .unwrap();
+        (code(&o), String::from_utf8_lossy(&o.stdout).to_string())
+    };
+    let (c, out) = run(&fake_release_server(
+        "200 OK",
+        &format!(r#"{{"tag_name":"seeds-ai-v{mine}"}}"#),
+    ));
+    assert_eq!(c, 0, "{out}");
+    let (c, out) = run(&fake_release_server(
+        "200 OK",
+        r#"{"tag_name":"seeds-ai-v999.0.0"}"#,
+    ));
+    assert_eq!(c, 1, "{out}");
+    let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+    assert_eq!(
+        (v["update_available"].clone(), v["latest_version"].clone()),
+        (true.into(), "999.0.0".into())
+    );
+    let (c, _) = run(&fake_release_server("200 OK", r#"{"tag_name":"nightly"}"#));
+    assert_eq!(c, 7, "an unreadable tag is not 'up to date'");
+    let (c, _) = run(&fake_release_server(
+        "404 Not Found",
+        r#"{"message":"Not Found"}"#,
+    ));
+    assert_eq!(c, 7);
+    let (c, _) = run("http://127.0.0.1:9/releases/latest");
+    assert_eq!(c, 7, "offline");
+    assert!(!sb.work().join(".seeds").exists(), "needs no store");
+}
+
 #[test]
 fn orphans_reads_the_git_log_of_the_current_repo() {
     let sb = Sandbox::new("orphans");
