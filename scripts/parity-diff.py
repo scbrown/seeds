@@ -102,6 +102,12 @@ NOT_APPLICABLE_ON = {
         "--fix": "br doctor: alias of --repair (rebuild the SQLite DB from JSONL); sd doctor never repairs, and nothing in a quipu ledger is derived",
         "--dry-run": "br doctor: previews --repair; without it br documents it as a no-op, and sd doctor is always read-only",
     },
+    "count": {
+        "--include-templates": "br count: includes template issues, but no br command can create one (every br --help swept) and the fleet has none (br count = br count --include-templates = 537, 2026-10-01); lead ruling on aegis-w3k75d.13",
+    },
+    "dep add": {
+        "--metadata": "br dep add: stores JSON surfaced only in br's JSONL export (not show, not dep list); 0 of 1,419 live dependencies carry it, and sd dependencies are bare edges. Reopen if a producer starts writing it; lead ruling on aegis-w3k75d.13",
+    },
 }
 
 
