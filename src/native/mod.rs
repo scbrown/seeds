@@ -1907,6 +1907,27 @@ fn dispatch(cli: &Cli, cfg: &Resolved, ctx: &Ctx, b: &mut dyn Backend) -> Result
     let json = cli.json;
     let at = cli.at;
     match &cli.command {
+        Command::Create(a) if a.file.is_some() => {
+            let path = a.file.as_deref().unwrap_or_default();
+            let items = engine::parse_bulk_markdown(&read_text(path)?)?;
+            let (seeds, tx) = engine::create_many(b, ctx, &items, a.dry_run)?;
+            let verb = if a.dry_run { "would create" } else { "created" };
+            let text = if a.silent {
+                seeds.iter().map(|s| s.id.clone()).collect::<Vec<_>>().join("\n")
+            } else {
+                seeds
+                    .iter()
+                    .map(|s| format!("{verb} {}{}", output::seed_line(s), tx_note(tx)))
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            };
+            Ok(ok(
+                json,
+                output::with_tx(output::seeds_json(&seeds), (!a.dry_run).then_some(tx)),
+                text,
+                vec![],
+            ))
+        }
         Command::Create(a) => {
             let title = match (&a.title, &a.title_flag) {
                 (Some(_), Some(_)) => {

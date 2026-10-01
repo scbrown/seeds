@@ -2537,3 +2537,75 @@ fn an_update_keeps_facts_this_sd_does_not_model() {
         "this sd's update must not erase what it does not model"
     );
 }
+
+// ---------------------------------------------------------------- create --file (aegis-w3k75d.13)
+
+#[test]
+fn bulk_markdown_parses_br_sections_and_drops_nothing() {
+    let items = engine::parse_bulk_markdown(
+        "# ignored\n\npreamble\n\n## One\n\nPara one.\n\nPara two.\n\n```\n## not a heading\n```\n\n\
+         ### Priority\n1\n\n### Type\nbug\n\n### Labels\na, b c\n\n### Assignee\nalice\n\n\
+         ### Notes\nN.\n\n### Dependencies\nsd-x, related:sd-y\n\n## Two\n### Description\nD.\n",
+    )
+    .unwrap();
+    assert_eq!(items.len(), 2, "a heading inside a fence is text");
+    let one = &items[0];
+    assert_eq!(one.req.title, "One");
+    let d = one.req.description.as_deref().unwrap();
+    assert!(
+        d.starts_with("Para one.\n\nPara two."),
+        "every paragraph kept: {d}"
+    );
+    assert!(d.contains("## not a heading"), "{d}");
+    assert_eq!(one.req.priority.as_deref(), Some("1"));
+    assert_eq!(one.req.issue_type.as_deref(), Some("bug"));
+    assert_eq!(one.req.labels, ["a", "b", "c"]);
+    assert_eq!(one.req.assignee.as_deref(), Some("alice"));
+    assert_eq!(one.notes.as_deref(), Some("N."));
+    assert_eq!(one.req.deps, ["sd-x", "related:sd-y"]);
+    assert_eq!(items[1].req.description.as_deref(), Some("D."));
+
+    // Refused by name, never dropped.
+    for (md, want) in [
+        ("## A\n### Design\nx\n", "design"),
+        ("## A\n### Acceptance Criteria\nx\n", "acceptance criteria"),
+        ("## A\n### Estimate\n3\n", "unknown section"),
+        ("## A\nbody\n### Description\nD\n", "keep one"),
+        ("no items at all\n", "no items"),
+    ] {
+        let e = engine::parse_bulk_markdown(md).unwrap_err();
+        assert_eq!(e.kind, ErrorKind::Usage, "{md}");
+        assert!(e.message.contains(want), "{md}: {}", e.message);
+    }
+}
+
+#[test]
+fn create_many_writes_every_item_in_one_transaction_or_none() {
+    let mut b = backend();
+    let dep = mk(&mut b, "existing", 1);
+    let md = format!("## Same\n### Dependencies\n{dep}\n\n## Same\n### Notes\nn\n");
+    let items = engine::parse_bulk_markdown(&md).unwrap();
+    let (planned, tx) = engine::create_many(&mut b, &ctx(2), &items, true).unwrap();
+    assert_eq!((planned.len(), tx), (2, 0));
+    assert_eq!(
+        b.snapshot(None).unwrap().seeds.len(),
+        1,
+        "a dry run writes nothing"
+    );
+
+    let (seeds, _) = engine::create_many(&mut b, &ctx(2), &items, false).unwrap();
+    assert_ne!(
+        seeds[0].id, seeds[1].id,
+        "same title, same instant: distinct ids"
+    );
+    let snap = b.snapshot(None).unwrap();
+    assert_eq!(snap.seeds.len(), 3);
+    assert!(snap.seeds[&seeds[0].id].blocked_on.contains(&dep));
+    assert_eq!(snap.seeds[&seeds[1].id].notes.as_deref(), Some("n"));
+
+    // One bad item (an unknown dependency) and nothing is written.
+    let bad =
+        engine::parse_bulk_markdown("## Fine\n\n## Broken\n### Dependencies\nsd-nope\n").unwrap();
+    assert!(engine::create_many(&mut b, &ctx(3), &bad, false).is_err());
+    assert_eq!(b.snapshot(None).unwrap().seeds.len(), 3, "all or none");
+}

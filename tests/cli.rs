@@ -1090,6 +1090,34 @@ fn orphans_fix_closes_only_on_an_explicit_yes() {
 }
 
 #[test]
+fn create_file_imports_br_markdown_in_one_go() {
+    // aegis-w3k75d.13: br's create --file.
+    let sb = Sandbox::new("create-file");
+    let f = sb.root.join("bulk.md");
+    std::fs::write(&f, "## One\n### Priority\n1\n\n## Two\n").unwrap();
+    let path = f.to_str().unwrap();
+    let dry = sb.json(&["create", "--file", path, "--dry-run"]);
+    assert_eq!(dry.as_array().unwrap().len(), 2, "{dry}");
+    assert_eq!(
+        code(&sb.run(&["show", dry[0]["id"].as_str().unwrap()])),
+        3,
+        "dry run wrote nothing"
+    );
+    let made = sb.json(&["create", "-f", path]);
+    assert_eq!(made[0]["priority"], 1, "{made}");
+    assert_eq!(sb.json(&["count"])["count"], 2);
+
+    // A section seeds cannot store refuses the whole file.
+    std::fs::write(&f, "## Three\n\n## Four\n### Design\nx\n").unwrap();
+    assert_eq!(code(&sb.run(&["create", "--file", path])), 2);
+    assert_eq!(sb.json(&["count"])["count"], 2, "nothing written");
+    assert_eq!(
+        code(&sb.run(&["create", "--file", path, "--title", "x"])),
+        2
+    );
+}
+
+#[test]
 fn orphans_reads_the_git_log_of_the_current_repo() {
     let sb = Sandbox::new("orphans");
     let id = sb.ok(&["create", "x", "--silent"]).trim().to_string();

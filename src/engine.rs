@@ -82,6 +82,228 @@ pub fn create(b: &mut dyn Backend, ctx: &Ctx, req: &CreateReq) -> Result<(Seed, 
     create_outcome(b, ctx, req).map(|c| (c.seed, c.tx))
 }
 
+/// A new seed from a create request, checked against `snap` (its deps must
+/// exist there). Shared by `sd create` and `sd create --file`, so one seed
+/// and a bulk import are built the same way.
+fn new_seed(
+    snap: &Snapshot,
+    ctx: &Ctx,
+    req: &CreateReq,
+    id: String,
+    title: &str,
+    run: Option<String>,
+) -> Result<Seed> {
+    let mut seed = Seed {
+        id,
+        title: title.to_string(),
+        description: non_empty(req.description.as_deref()),
+        status: "open".into(),
+        priority: match &req.priority {
+            Some(p) => model::parse_priority(p)?,
+            None => model::DEFAULT_PRIORITY,
+        },
+        issue_type: match &req.issue_type {
+            Some(t) => model::parse_type(t)?,
+            None => "task".into(),
+        },
+        assignee: non_empty(req.assignee.as_deref().map(str::trim)),
+        owner: non_empty(req.owner.as_deref().map(str::trim)),
+        labels: clean_labels(&req.labels),
+        created_at: ctx.now.clone(),
+        created_by: non_empty(Some(&ctx.actor)),
+        updated_at: ctx.now.clone(),
+        parent: req.parent.clone(),
+        workflow_run: run,
+        revision: 1,
+        ..Seed::default()
+    };
+    for spec in &req.deps {
+        let (dep_type, target) = parse_dep_spec(spec)?;
+        snap.get(&target)?;
+        seed.add_dep(&target, &dep_type);
+    }
+    if let Some(st) = &req.status {
+        let st = model::parse_status(st)?;
+        if st == model::TOMBSTONE || st == "closed" {
+            return Err(SdError::usage(format!(
+                "create cannot start a seed as {st}; create it, then sd close or sd delete it"
+            )));
+        }
+        seed.status = st;
+    }
+    if let Some(d) = &req.defer {
+        if req.status.as_deref().is_some_and(|s| s != "deferred") {
+            return Err(SdError::usage(
+                "--defer makes the seed deferred; do not combine it with another --status",
+            ));
+        }
+        seed.status = "deferred".into();
+        seed.defer_until = Some(parse_until(d, &ctx.now)?);
+    }
+    Ok(seed)
+}
+
+/// One seed of a bulk create: the request, plus notes (which `sd create`
+/// has no flag for, but a markdown item can carry).
+#[derive(Debug, Clone, Default)]
+pub struct BulkItem {
+    /// The fields `sd create` takes.
+    pub req: CreateReq,
+    /// Notes.
+    pub notes: Option<String>,
+}
+
+/// `sd create --file`: every item becomes a seed in ONE transaction, or none
+/// does. Ids are minted against the store and the batch, so two items with
+/// the same title never collide.
+pub fn create_many(
+    b: &mut dyn Backend,
+    ctx: &Ctx,
+    items: &[BulkItem],
+    dry_run: bool,
+) -> Result<(Vec<Seed>, u64)> {
+    let snap = b.snapshot(None)?;
+    let mut minted: BTreeSet<String> = BTreeSet::new();
+    let mut seeds = Vec::new();
+    for item in items {
+        let title = item.req.title.trim();
+        if title.is_empty() {
+            return Err(SdError::usage("a seed needs a non-empty title"));
+        }
+        let id = ids::mint(&ctx.prefix, title, &ctx.now, |c| {
+            snap.seeds.contains_key(c) || minted.contains(c)
+        });
+        minted.insert(id.clone());
+        let mut seed = new_seed(&snap, ctx, &item.req, id, title, None)?;
+        seed.notes = non_empty(item.notes.as_deref());
+        seeds.push(seed);
+    }
+    if dry_run || seeds.is_empty() {
+        return Ok((seeds, 0));
+    }
+    let tx = b.commit(
+        &WriteBatch {
+            seeds: seeds
+                .iter()
+                .map(|s| SeedWrite {
+                    seed: s.clone(),
+                    expected_revision: None,
+                })
+                .collect(),
+            source: "seeds:create".into(),
+            ..WriteBatch::default()
+        },
+        ctx,
+    )?;
+    Ok((seeds, tx))
+}
+
+/// Parse br's bulk-create markdown (`br create --file`): each `## Title`
+/// starts a seed; `### Priority`, `### Type`, `### Labels`, `### Assignee`,
+/// `### Dependencies`, `### Description` and `### Notes` set its fields; the
+/// text between the title and its first `###` is the description. Headings
+/// inside fenced code blocks are text. Anything before the first `##` is
+/// ignored, as br does.
+///
+/// Unlike br, nothing is dropped silently: a section seeds cannot store
+/// (`Design`, `Acceptance Criteria`) or does not know is refused by name, as
+/// is an item with both a body and a `### Description`. br keeps only the
+/// first paragraph of a body; seeds keeps all of it.
+pub fn parse_bulk_markdown(text: &str) -> Result<Vec<BulkItem>> {
+    struct Raw {
+        title: String,
+        body: Vec<String>,
+        sections: Vec<(String, Vec<String>)>,
+    }
+    let mut raws: Vec<Raw> = Vec::new();
+    let mut fence = false;
+    for line in text.lines() {
+        let t = line.trim_start();
+        if t.starts_with("```") || t.starts_with("~~~") {
+            fence = !fence;
+        }
+        let heading = |p: &str| (!fence).then(|| t.strip_prefix(p)).flatten();
+        if let Some(title) = heading("## ") {
+            raws.push(Raw {
+                title: title.trim().to_string(),
+                body: vec![],
+                sections: vec![],
+            });
+            continue;
+        }
+        let Some(cur) = raws.last_mut() else {
+            continue;
+        };
+        if let Some(name) = heading("### ") {
+            cur.sections.push((name.trim().to_string(), vec![]));
+            continue;
+        }
+        match cur.sections.last_mut() {
+            Some((_, lines)) => lines.push(line.to_string()),
+            None => cur.body.push(line.to_string()),
+        }
+    }
+    if raws.is_empty() {
+        return Err(SdError::usage(
+            "no items: each seed starts with a `## Title` heading",
+        ));
+    }
+    let list = |v: &str| -> Vec<String> {
+        v.split(|c: char| c == ',' || c.is_whitespace())
+            .filter(|s| !s.is_empty())
+            .map(str::to_string)
+            .collect()
+    };
+    let mut items = Vec::new();
+    for raw in raws {
+        let mut item = BulkItem::default();
+        item.req.title = raw.title.clone();
+        let body = raw.body.join("\n").trim().to_string();
+        let mut explicit = None;
+        for (name, lines) in raw.sections {
+            let value = lines.join("\n").trim().to_string();
+            let one = value.clone();
+            match name.to_ascii_lowercase().as_str() {
+                "description" => explicit = Some(value),
+                "notes" => item.notes = Some(value),
+                "priority" => item.req.priority = Some(one),
+                "type" => item.req.issue_type = Some(one),
+                "assignee" => item.req.assignee = Some(one),
+                "labels" => item.req.labels = list(&value),
+                "dependencies" | "deps" => item.req.deps = list(&value),
+                "design" | "acceptance criteria" => {
+                    return Err(SdError::usage(format!(
+                        "item {:?}: seeds has no {} field yet, so `### {name}` would be lost; \
+                         nothing was written. Move it into the description or notes",
+                        raw.title,
+                        name.to_ascii_lowercase()
+                    )))
+                }
+                _ => {
+                    return Err(SdError::usage(format!(
+                        "item {:?}: unknown section `### {name}`; nothing was written. Known: \
+                         Description, Notes, Priority, Type, Assignee, Labels, Dependencies",
+                        raw.title
+                    )))
+                }
+            }
+        }
+        item.req.description = match (body.is_empty(), explicit) {
+            (true, d) => d,
+            (false, None) => Some(body),
+            (false, Some(_)) => {
+                return Err(SdError::usage(format!(
+                    "item {:?} has both text under its title and a `### Description`; \
+                     keep one, so neither is dropped",
+                    raw.title
+                )))
+            }
+        };
+        items.push(item);
+    }
+    Ok(items)
+}
+
 /// [`create`], saying explicitly whether a keyed create found an existing
 /// seed. Callers must branch on `existed`, never on `tx == 0`: a remote store
 /// reports tx 0 for every write.
@@ -130,53 +352,7 @@ pub fn create_outcome(b: &mut dyn Backend, ctx: &Ctx, req: &CreateReq) -> Result
         }
         (None, None) => ids::mint(&ctx.prefix, title, &ctx.now, |c| snap.seeds.contains_key(c)),
     };
-    let mut seed = Seed {
-        id,
-        title: title.to_string(),
-        description: non_empty(req.description.as_deref()),
-        status: "open".into(),
-        priority: match &req.priority {
-            Some(p) => model::parse_priority(p)?,
-            None => model::DEFAULT_PRIORITY,
-        },
-        issue_type: match &req.issue_type {
-            Some(t) => model::parse_type(t)?,
-            None => "task".into(),
-        },
-        assignee: non_empty(req.assignee.as_deref().map(str::trim)),
-        owner: non_empty(req.owner.as_deref().map(str::trim)),
-        labels: clean_labels(&req.labels),
-        created_at: ctx.now.clone(),
-        created_by: non_empty(Some(&ctx.actor)),
-        updated_at: ctx.now.clone(),
-        parent: req.parent.clone(),
-        workflow_run: run.clone(),
-        revision: 1,
-        ..Seed::default()
-    };
-    for spec in &req.deps {
-        let (dep_type, target) = parse_dep_spec(spec)?;
-        snap.get(&target)?;
-        seed.add_dep(&target, &dep_type);
-    }
-    if let Some(st) = &req.status {
-        let st = model::parse_status(st)?;
-        if st == model::TOMBSTONE || st == "closed" {
-            return Err(SdError::usage(format!(
-                "create cannot start a seed as {st}; create it, then sd close or sd delete it"
-            )));
-        }
-        seed.status = st;
-    }
-    if let Some(d) = &req.defer {
-        if req.status.as_deref().is_some_and(|s| s != "deferred") {
-            return Err(SdError::usage(
-                "--defer makes the seed deferred; do not combine it with another --status",
-            ));
-        }
-        seed.status = "deferred".into();
-        seed.defer_until = Some(parse_until(d, &ctx.now)?);
-    }
+    let seed = new_seed(&snap, ctx, req, id, title, run.clone())?;
     if req.dry_run {
         return Ok(Created {
             seed,
