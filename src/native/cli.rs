@@ -841,6 +841,11 @@ pub struct UpdateArgs {
     /// Seed id(s)
     #[arg(required = true)]
     pub ids: Vec<String>,
+    /// Replace a non-empty description or notes with different content
+    /// (refused without it; the same content, or filling an empty field,
+    /// needs no --force). br's --force
+    #[arg(long)]
+    pub force: bool,
     /// New title
     #[arg(long)]
     pub title: Option<String>,

@@ -1631,6 +1631,9 @@ pub struct UpdateReq {
     pub set_labels: Option<Vec<String>>,
     /// New parent; empty detaches the seed.
     pub parent: Option<String>,
+    /// Allow replacing a non-empty description or notes with different
+    /// content (br's --force). Without it that is refused, naming the field.
+    pub force: bool,
 }
 
 /// `sd update`: all named seeds change in one transaction, or none do.
@@ -1678,10 +1681,10 @@ pub fn update(
             s.title = t.trim().to_string();
         }
         if let Some(d) = &req.description {
-            s.description = non_empty(Some(d));
+            s.description = replace_text(id, "description", &before.description, d, req.force)?;
         }
         if let Some(n) = &req.notes {
-            s.notes = non_empty(Some(n));
+            s.notes = replace_text(id, "notes", &before.notes, n, req.force)?;
         }
         if let Some(o) = &req.owner {
             s.owner = non_empty(Some(o.trim()));
@@ -2814,6 +2817,29 @@ pub fn comment_list(b: &dyn Backend, id: &str, at: Option<u64>) -> Result<Vec<Co
 // ---------------------------------------------------------------- helpers
 
 /// `None` for an absent or blank value; otherwise the value as given.
+/// The new value of a free-text field, refusing to replace existing text
+/// with different text unless `force` (br's overwrite guard, its GitHub
+/// #467). Empty -> value and the same value again both pass, so an
+/// idempotent re-run never trips it; clearing existing text is a
+/// replacement too. Every backend's update passes through here.
+fn replace_text(
+    id: &str,
+    field: &str,
+    before: &Option<String>,
+    new: &str,
+    force: bool,
+) -> Result<Option<String>> {
+    let new = non_empty(Some(new));
+    if !force && before.is_some() && *before != new {
+        return Err(SdError::refused(format!(
+            "{id} already has a {field}, and this update would replace it with different \
+             content; nothing was written. Re-run with --force to replace it (the old text \
+             stays in sd history)"
+        )));
+    }
+    Ok(new)
+}
+
 fn non_empty(s: Option<&str>) -> Option<String> {
     s.filter(|s| !s.trim().is_empty()).map(str::to_string)
 }

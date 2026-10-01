@@ -2521,6 +2521,7 @@ fn dispatch(cli: &Cli, cfg: &Resolved, ctx: &Ctx, b: &mut dyn Backend) -> Result
                 set_labels: (!a.set_labels.is_empty()).then(|| a.set_labels.clone()),
                 parent: a.parent.clone(),
                 transition_comment: a.transition_comment.clone(),
+                force: a.force,
             };
             let (seeds, tx) = engine::update(b, ctx, &a.ids, &req)?;
             let text = seeds
