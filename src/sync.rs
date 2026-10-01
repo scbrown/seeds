@@ -660,6 +660,64 @@ pub fn merge3_named(base: &Snapshot, local: &Snapshot, remote: &Snapshot, sides:
     Merge { merged, conflicts }
 }
 
+/// What a sync between two stores would do, from one three-way merge: the
+/// writes for each side and their reports. Planning reads both stores and
+/// writes nothing, so it backs `sd sync`, `--dry-run` and `--status` alike.
+pub struct SyncPlan {
+    /// What both sides hold after the sync.
+    pub merged: Snapshot,
+    /// Fields both sides changed differently. Non-empty means a sync refuses.
+    pub conflicts: Vec<Conflict>,
+    /// The writes to the local store, and what they do.
+    pub local: (WriteBatch, Report),
+    /// The writes to the remote store, and what they do.
+    pub remote: (WriteBatch, Report),
+}
+
+impl SyncPlan {
+    /// The refusal a sync gives for this plan, if any: conflicts first, then
+    /// removals without `allow_deletes`. `None` means a sync would write.
+    pub fn refusal(&self, allow_deletes: bool) -> Option<SdError> {
+        if !self.conflicts.is_empty() {
+            return Some(conflict_error(
+                "sync",
+                &self.conflicts,
+                "Change one side so the fields agree (sd update), then sync again.",
+            ));
+        }
+        let (lr, rr) = (&self.local.1, &self.remote.1);
+        if !allow_deletes && (!lr.removed.is_empty() || !rr.removed.is_empty()) {
+            return Some(SdError::refused(format!(
+                "sync would remove {} seed(s) from the local store ({}) and {} from the remote ({}) \
+                 because the other side does not have them; nothing was written. That usually \
+                 means the remote was reset or is a different store. If the removals are \
+                 intended, run again with --allow-remote-deletes.",
+                lr.removed.len(),
+                lr.removed.join(", "),
+                rr.removed.len(),
+                rr.removed.join(", ")
+            )));
+        }
+        None
+    }
+}
+
+/// Plan a sync of `local` and `remote` against their common `base`. Reads
+/// both stores; writes neither.
+pub fn plan_sync(base: &Snapshot, local: &dyn Backend, remote: &dyn Backend) -> Result<SyncPlan> {
+    let l = local.snapshot(None)?;
+    let r = remote.snapshot(None)?;
+    let m = merge3(base, &l, &r);
+    let remote_plan = plan(&r, &m.merged, "seeds:sync");
+    let local_plan = plan(&l, &m.merged, "seeds:sync");
+    Ok(SyncPlan {
+        merged: m.merged,
+        conflicts: m.conflicts,
+        local: local_plan,
+        remote: remote_plan,
+    })
+}
+
 /// Sync two stores through a three-way merge: plan both sides from one merge,
 /// then write the remote first and the local second, each with a
 /// compare-and-set on the revisions it read. Nothing is written when there
@@ -678,30 +736,16 @@ pub fn sync(
     ctx: &Ctx,
     allow_deletes: bool,
 ) -> Result<(Snapshot, Report, Report)> {
-    let l = local.snapshot(None)?;
-    let r = remote.snapshot(None)?;
-    let m = merge3(base, &l, &r);
-    if !m.conflicts.is_empty() {
-        return Err(conflict_error(
-            "sync",
-            &m.conflicts,
-            "Change one side so the fields agree (sd update), then sync again.",
-        ));
+    let p = plan_sync(base, &*local, &*remote)?;
+    if let Some(refused) = p.refusal(allow_deletes) {
+        return Err(refused);
     }
-    let (rb, mut rr) = plan(&r, &m.merged, "seeds:sync");
-    let (lb, mut lr) = plan(&l, &m.merged, "seeds:sync");
-    if !allow_deletes && (!lr.removed.is_empty() || !rr.removed.is_empty()) {
-        return Err(SdError::refused(format!(
-            "sync would remove {} seed(s) from the local store ({}) and {} from the remote ({}) \
-             because the other side does not have them; nothing was written. That usually \
-             means the remote was reset or is a different store. If the removals are \
-             intended, run again with --allow-remote-deletes.",
-            lr.removed.len(),
-            lr.removed.join(", "),
-            rr.removed.len(),
-            rr.removed.join(", ")
-        )));
-    }
+    let SyncPlan {
+        merged,
+        local: (lb, mut lr),
+        remote: (rb, mut rr),
+        ..
+    } = p;
     if !rb.is_empty() {
         rr.tx = remote.commit(&rb, ctx)?;
         rr.wrote = true;
@@ -710,5 +754,5 @@ pub fn sync(
         lr.tx = local.commit(&lb, ctx)?;
         lr.wrote = true;
     }
-    Ok((m.merged, lr, rr))
+    Ok((merged, lr, rr))
 }

@@ -35,7 +35,7 @@ Accepted on every verb.
 | [`comments list <ID>`](verbs/comments.md) | |
 | [`export`](verbs/sync.md#sd-export) | `--to <DIR>` |
 | [`import <DIR>`](verbs/sync.md#sd-import) | `--prefer pendant\|store`, `--replace` |
-| [`sync`](verbs/sync.md#sd-sync) | `--remote <URL>`, `--allow-remote-deletes` |
+| [`sync`](verbs/sync.md#sd-sync) | `--remote <URL>`, `--allow-remote-deletes`, `--dry-run`, `--status` |
 | [`merge-driver <BASE> <OURS> <THEIRS>`](verbs/sync.md#sd-merge-driver) | |
 
 `create` and `update` also take `--workflow-run <RUN>` ([Formulas](formulas.md)).

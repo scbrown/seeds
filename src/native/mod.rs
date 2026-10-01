@@ -1235,6 +1235,7 @@ fn run_sync(
         &cfg.allow_plain_http_hosts,
     )?;
     let base_path = store::sync_base_path(path, &url, cfg.graph());
+    let base_existed = base_path.exists();
     let base = match std::fs::read_to_string(&base_path) {
         Ok(nt) => {
             let p = pendant::Pendant {
@@ -1260,6 +1261,32 @@ fn run_sync(
             )))
         }
     };
+    if a.dry_run || a.status {
+        // Read-only: plan from the same merge a sync uses, then stop. Like
+        // every command in mode 1, the pendant was reconciled above; nothing
+        // else is written (no commit on either side, no sync base, no export).
+        let p = sync::plan_sync(&base, &h.backend, &remote)?;
+        let o = if a.status {
+            sync_status(cli.json, &url, base_existed, &p, a.allow_remote_deletes)
+        } else {
+            if let Some(refused) = p.refusal(a.allow_remote_deletes) {
+                return Err(refused);
+            }
+            let text = format!(
+                "dry run, nothing written\n{}\n{}",
+                report_text("local would get", &p.local.1),
+                report_text(&format!("remote {url} would get"), &p.remote.1)
+            );
+            let json = serde_json::json!({
+                "status": "ok",
+                "dry_run": true,
+                "local": report_json(&p.local.1),
+                "remote": report_json(&p.remote.1),
+            });
+            ok(cli.json, json, text, vec![])
+        };
+        return Ok(with_notes(o, notes));
+    }
     let (_, local_r, remote_r) = sync::sync(
         &base,
         &mut h.backend,
@@ -1289,6 +1316,77 @@ fn run_sync(
         "remote": report_json(&remote_r),
     });
     Ok(with_notes(ok(cli.json, json, text, vec![]), notes))
+}
+
+/// `sd sync --status`: where the local store and the remote stand, from the
+/// plan a sync would carry out.
+fn sync_status(
+    json: bool,
+    url: &str,
+    base_existed: bool,
+    p: &sync::SyncPlan,
+    allow_deletes: bool,
+) -> Outcome {
+    let (lr, rr) = (&p.local.1, &p.remote.1);
+    let to_local = !p.local.0.is_empty();
+    let to_remote = !p.remote.0.is_empty();
+    let state = if !p.conflicts.is_empty() {
+        "conflicted"
+    } else {
+        match (to_remote, to_local) {
+            (false, false) => "in-sync",
+            (true, false) => "local-ahead",
+            (false, true) => "remote-ahead",
+            (true, true) => "diverged",
+        }
+    };
+    let removals = lr.removed.len() + rr.removed.len();
+    let blocked = p.refusal(allow_deletes).is_some();
+    let mut text = format!(
+        "{state} with {url}{}\n{}\n{}",
+        if base_existed {
+            ""
+        } else {
+            " (never synced: no sync base yet)"
+        },
+        report_text("local would get", lr),
+        report_text("remote would get", rr)
+    );
+    if !p.conflicts.is_empty() {
+        text.push_str(&format!(
+            "\n{} conflicting seed(s): {}",
+            p.conflicts.len(),
+            p.conflicts
+                .iter()
+                .map(|c| c.id.as_str())
+                .collect::<Vec<_>>()
+                .join(", ")
+        ));
+    }
+    if removals > 0 && !allow_deletes {
+        text.push_str(&format!(
+            "\n{removals} removal(s) need --allow-remote-deletes"
+        ));
+    }
+    if blocked {
+        text.push_str("\na sync now would refuse and write nothing");
+    }
+    let json_v = serde_json::json!({
+        "status": "ok",
+        "sync": {
+            "state": state,
+            "remote_url": url,
+            "synced_before": base_existed,
+            "conflicts": p.conflicts.iter().map(|c| serde_json::json!({
+                "id": c.id, "fields": c.fields,
+            })).collect::<Vec<_>>(),
+            "removals_need_allow": removals > 0 && !allow_deletes,
+            "would_refuse": blocked,
+            "local": report_json(lr),
+            "remote": report_json(rr),
+        },
+    });
+    ok(json, json_v, text, vec![])
 }
 
 /// `sd merge-driver %O %A %B`: merge three versions of a pendant's

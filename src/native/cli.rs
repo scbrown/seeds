@@ -341,6 +341,16 @@ pub struct SyncArgs {
     /// side was reset or is a different store.
     #[arg(long)]
     pub allow_remote_deletes: bool,
+    /// Show what a sync would do, and write nothing: no remote or local
+    /// commit, no new sync base. Exits as the sync would (a conflict or a
+    /// refused removal fails here too). br's --dry-run
+    #[arg(long, conflicts_with = "status")]
+    pub dry_run: bool,
+    /// Show whether the local store and the remote agree (in-sync,
+    /// local-ahead, remote-ahead, diverged or conflicted), and write nothing.
+    /// Reports conflicts and refused removals instead of failing. br's --status
+    #[arg(long)]
+    pub status: bool,
 }
 
 /// `sd create`.

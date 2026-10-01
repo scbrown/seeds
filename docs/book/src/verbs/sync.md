@@ -40,6 +40,8 @@ sides, so no reader holding the store's old revision can write over it.
 ```bash
 sd sync                              # with [sync] remote
 sd sync --remote https://quipu.example.org
+sd sync --dry-run                    # what a sync would do; writes nothing
+sd sync --status                     # in-sync, local-ahead, remote-ahead, diverged or conflicted
 ```
 
 Three-way merge of the local store and the remote against the ledger as of the
@@ -51,6 +53,26 @@ See [Mode 3](../storage-modes.md#mode-3-sync).
 **`--json`**: `{status, local: {…}, remote: {…}}`, each side shaped like
 import's; `wrote` says whether that side was written (a quipu server reports no
 transaction id, so `tx` is 0 there).
+
+**`--dry-run`** plans from the same merge and stops: no write to either side
+and no new sync base. It exits as the sync would, so a conflict (exit 4) or a
+refused removal (exit 5) fails the dry run too. Its `--json` adds
+`dry_run: true`, and `wrote` is false on both sides.
+
+**`--status`** reports where the two stand and never fails on a disagreement:
+`{status, sync: {state, remote_url, synced_before, conflicts, removals_need_allow,
+would_refuse, local, remote}}`. The state is `local-ahead` when only the remote
+would be written, `remote-ahead` when only the local store would, `diverged`
+when both would, `in-sync` when neither would, and `conflicted` when a sync
+would refuse on conflicts.
+
+Neither preview writes anything beyond what every sd command does in
+[mode 1](../storage-modes.md): reconcile the store with its pendant first.
+
+br's other `sync` flags (`--apply`, `--force`, `--orphans` and the JSONL
+export/import modes) act on br's SQLite/JSONL machinery and have no seeds
+counterpart. In particular `--force` does not lift the removal guard; only
+`--allow-remote-deletes` does.
 
 ## sd merge-driver
 
