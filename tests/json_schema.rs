@@ -16,6 +16,7 @@ use serde_json::Value;
 // derived from schema.rs would still pass; this list would not (sattler,
 // seeds#35 review). schema.rs must equal it, and output must match both.
 const SEED_KEYS: &[&str] = &[
+    "acceptance_criteria",
     "assignee",
     "close_reason",
     "closed_at",
@@ -24,6 +25,8 @@ const SEED_KEYS: &[&str] = &[
     "defer_until",
     "dependency_count",
     "description",
+    "design",
+    "external_ref",
     "id",
     "issue_type",
     "labels",

@@ -2565,10 +2565,15 @@ fn bulk_markdown_parses_br_sections_and_drops_nothing() {
     assert_eq!(one.req.deps, ["sd-x", "related:sd-y"]);
     assert_eq!(items[1].req.description.as_deref(), Some("D."));
 
+    // Design and acceptance criteria are fields now, kept verbatim.
+    let items =
+        engine::parse_bulk_markdown("## A\n### Design\nG.\n### Acceptance Criteria\n- [ ] k\n")
+            .unwrap();
+    assert_eq!(items[0].design.as_deref(), Some("G."));
+    assert_eq!(items[0].req.acceptance_criteria.as_deref(), Some("- [ ] k"));
+
     // Refused by name, never dropped.
     for (md, want) in [
-        ("## A\n### Design\nx\n", "design"),
-        ("## A\n### Acceptance Criteria\nx\n", "acceptance criteria"),
         ("## A\n### Estimate\n3\n", "unknown section"),
         ("## A\nbody\n### Description\nD\n", "keep one"),
         ("no items at all\n", "no items"),

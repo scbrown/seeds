@@ -109,6 +109,12 @@ pub struct Seed {
     pub description: Option<String>,
     /// Free-form notes.
     pub notes: Option<String>,
+    /// Design notes (br's `design`).
+    pub design: Option<String>,
+    /// Acceptance criteria (br's `acceptance_criteria`).
+    pub acceptance_criteria: Option<String>,
+    /// A reference to the same work elsewhere (br's `external_ref`).
+    pub external_ref: Option<String>,
     /// Who owns the work (br's `owner`, usually an email); distinct from the
     /// assignee, who is doing it now.
     pub owner: Option<String>,
@@ -274,6 +280,13 @@ impl Seed {
         };
         opt(&mut f, term::description(), &self.description);
         opt(&mut f, term::notes(), &self.notes);
+        opt(&mut f, term::design(), &self.design);
+        opt(
+            &mut f,
+            term::acceptance_criteria(),
+            &self.acceptance_criteria,
+        );
+        opt(&mut f, term::external_ref(), &self.external_ref);
         opt(&mut f, term::owner(), &self.owner);
         opt(&mut f, term::created_by(), &self.created_by);
         opt(&mut f, term::closed_at(), &self.closed_at);
@@ -347,6 +360,9 @@ impl Seed {
                 title: "t".into(),
                 description: some("d"),
                 notes: some("n"),
+                design: some("g"),
+                acceptance_criteria: some("k"),
+                external_ref: some("e"),
                 owner: some("o"),
                 status: "closed".into(),
                 issue_type: "task".into(),
@@ -428,6 +444,9 @@ impl Seed {
             title: s(vocab::RDFS_LABEL.into()).unwrap_or_default(),
             description: s(term::description()),
             notes: s(term::notes()),
+            design: s(term::design()),
+            acceptance_criteria: s(term::acceptance_criteria()),
+            external_ref: s(term::external_ref()),
             owner: s(term::owner()),
             status: s(term::status()).unwrap_or_else(|| "open".into()),
             priority: i(term::priority())
@@ -539,6 +558,9 @@ impl Seed {
             "title": self.title,
             "description": self.description,
             "notes": self.notes,
+            "design": self.design,
+            "acceptance_criteria": self.acceptance_criteria,
+            "external_ref": self.external_ref,
             "owner": self.owner,
             "status": self.status,
             "priority": self.priority,

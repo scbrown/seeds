@@ -16,6 +16,8 @@ sd create "Blocked work" --deps sd-a3f,related:sd-b7c
 | `-d, --description` / `--description-file PATH` | the description |
 | `-a, --assignee` | assignee |
 | `--owner` | who owns the work (br's `owner`, usually an email) |
+| `--acceptance-criteria TEXT` (alias `--acceptance`) | acceptance criteria, often a `- [ ]` checklist |
+| `--external-ref REF` | a reference to the same work elsewhere (br's `external_ref`) |
 | `-l, --labels` | comma-separated labels |
 | `--parent ID` | parent seed; the new id is `<parent>.<n>` |
 | `--deps` | comma-separated: `ID` (a `blocks` dependency) or `TYPE:ID` |
@@ -34,13 +36,14 @@ short and unique. No randomness is involved.
 **`-f, --file FILE`** creates every item of a markdown file in **one
 transaction** (br's bulk import). Each `## Title` starts a seed; under it,
 `### Priority`, `### Type`, `### Labels`, `### Assignee`, `### Dependencies`,
-`### Description` and `### Notes` set its fields, and the text between the
+`### Description`, `### Notes`, `### Design` and `### Acceptance Criteria` set
+its fields, and the text between the
 title and its first `###` is the description. Anything before the first `##`
 is ignored, and headings inside fenced code blocks are text. Two differences
 from br, both so that nothing is dropped silently: sd keeps the whole body
-(br keeps only its first paragraph), and a section sd cannot store
-(`Design`, `Acceptance Criteria`) or does not know, or an item with both a
-body and a `### Description`, refuses the file (exit 2) and writes nothing.
+(br keeps only its first paragraph), and a section sd does not know, or an
+item with both a body and a `### Description`, refuses the file (exit 2) and
+writes nothing.
 `--file` takes no per-seed flags; `--dry-run`, `--silent` and `--json` apply.
 `--json` is an array of the new seeds.
 

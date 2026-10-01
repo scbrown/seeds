@@ -473,10 +473,19 @@ pub fn view_text(v: &SeedView) -> String {
         out.push(String::new());
         out.extend(d.lines().map(|l| format!("  {l}")));
     }
-    if let Some(n) = &s.notes {
-        out.push(String::new());
-        out.push("  notes:".into());
-        out.extend(n.lines().map(|l| format!("    {l}")));
+    for (label, text) in [
+        ("notes", &s.notes),
+        ("design", &s.design),
+        ("acceptance criteria", &s.acceptance_criteria),
+    ] {
+        if let Some(t) = text {
+            out.push(String::new());
+            out.push(format!("  {label}:"));
+            out.extend(t.lines().map(|l| format!("    {l}")));
+        }
+    }
+    if let Some(e) = &s.external_ref {
+        out.push(format!("  external ref: {e}"));
     }
     if !v.dependencies.is_empty() {
         out.push(String::new());
@@ -525,8 +534,8 @@ pub fn count_text(c: &Count) -> String {
     }
 }
 
-/// The `--format csv` columns sd can fill (br's list, less `due_at` and
-/// `external_ref`, which sd does not model).
+/// The `--format csv` columns sd can fill (br's list, less `due_at`, which
+/// sd does not model).
 pub const CSV_FIELDS: &[&str] = &[
     "id",
     "title",
@@ -541,6 +550,7 @@ pub const CSV_FIELDS: &[&str] = &[
     "closed_at",
     "defer_until",
     "notes",
+    "external_ref",
 ];
 
 /// br's default `--format csv` columns.
@@ -590,6 +600,7 @@ pub fn seeds_csv(seeds: &[Seed], fields: &[String]) -> String {
                     "closed_at" => s.closed_at.clone().unwrap_or_default(),
                     "defer_until" => s.defer_until.clone().unwrap_or_default(),
                     "notes" => s.notes.clone().unwrap_or_default(),
+                    "external_ref" => s.external_ref.clone().unwrap_or_default(),
                     _ => String::new(),
                 };
                 cell(&v)

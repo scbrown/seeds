@@ -397,12 +397,12 @@ pub struct SyncArgs {
 #[derive(Debug, Args)]
 pub struct CreateArgs {
     /// Create every `## Title` item of a markdown file, in one transaction
-    /// (br's bulk import; sections: Description, Notes, Priority, Type,
-    /// Assignee, Labels, Dependencies). br's --file
+    /// (br's bulk import; sections: Description, Notes, Design, Acceptance
+    /// Criteria, Priority, Type, Assignee, Labels, Dependencies). br's --file
     #[arg(short = 'f', long = "file", value_name = "FILE", conflicts_with_all = [
         "title", "title_flag", "issue_type", "priority", "description", "status", "defer",
         "description_file", "assignee", "owner", "labels", "parent", "deps", "workflow_run",
-        "step", "visit",
+        "step", "visit", "acceptance_criteria", "external_ref",
     ])]
     pub file: Option<String>,
     /// Title (positional form)
@@ -434,6 +434,12 @@ pub struct CreateArgs {
     /// Owner (usually an email)
     #[arg(long)]
     pub owner: Option<String>,
+    /// Acceptance criteria. br's --acceptance-criteria
+    #[arg(long, visible_alias = "acceptance", allow_hyphen_values = true)]
+    pub acceptance_criteria: Option<String>,
+    /// A reference to the same work elsewhere (a ticket, a URL)
+    #[arg(long)]
+    pub external_ref: Option<String>,
     /// Comma-separated labels
     #[arg(short, long)]
     pub labels: Option<String>,
@@ -850,9 +856,9 @@ pub struct UpdateArgs {
     /// Seed id(s)
     #[arg(required = true)]
     pub ids: Vec<String>,
-    /// Replace a non-empty description or notes with different content
-    /// (refused without it; the same content, or filling an empty field,
-    /// needs no --force). br's --force
+    /// Replace a non-empty description, notes, design or acceptance criteria
+    /// with different content (refused without it; the same content, or
+    /// filling an empty field, needs no --force). br's --force
     #[arg(long)]
     pub force: bool,
     /// New title
@@ -876,6 +882,15 @@ pub struct UpdateArgs {
     /// New notes
     #[arg(long)]
     pub notes: Option<String>,
+    /// New design notes
+    #[arg(long, allow_hyphen_values = true)]
+    pub design: Option<String>,
+    /// New acceptance criteria. br's --acceptance-criteria
+    #[arg(long, visible_alias = "acceptance", allow_hyphen_values = true)]
+    pub acceptance_criteria: Option<String>,
+    /// New external reference ("" clears it)
+    #[arg(long)]
+    pub external_ref: Option<String>,
     /// New owner (usually an email; "" clears it)
     #[arg(long)]
     pub owner: Option<String>,

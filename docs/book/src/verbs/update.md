@@ -12,12 +12,13 @@ sd update sd-a3f --defer 2026-10-15      # hide from ready until then
 
 | flag | meaning |
 |---|---|
-| `--title`, `-d, --description`, `--notes` | set the text (see below for replacing existing text) |
-| `--force` | allow replacing a non-empty description or notes with different content |
+| `--title`, `-d, --description`, `--notes`, `--design`, `--acceptance-criteria` (alias `--acceptance`) | set the text (see below for replacing existing text) |
+| `--force` | allow replacing a non-empty description, notes, design or acceptance criteria with different content |
 | `-s, --status` | `open`, `in_progress`, `blocked`, `deferred`, `closed` |
 | `-p, --priority` | `0`-`4` or `P0`-`P4` |
 | `--assignee NAME` | set the assignee (`""` clears it) |
 | `--owner WHO` | set the owner (`""` clears it) |
+| `--external-ref REF` | a reference to the same work elsewhere, br's `external_ref` (`""` clears it) |
 | `--claim` | set assignee to the actor and status to `in_progress`, only if the seed is open, unclaimed and unblocked |
 | `--add-label`, `--remove-label` | repeatable |
 | `--defer DATE` | hide from `ready` until this date or instant (`""` clears it) |
@@ -32,7 +33,8 @@ Setting status to `closed` records `closed_at`; setting it back to anything
 else clears `closed_at` and `close_reason`. An update that changes nothing
 writes nothing.
 
-**Existing text is not replaced by accident.** Setting a description or notes
+**Existing text is not replaced by accident.** Setting a description, notes,
+design or acceptance criteria
 that already has text to *different* text (including `""`) is refused with
 exit **5**, naming the field, and nothing is written, unless `--force` is
 given. This is br's guard (br's `--force`). Filling an empty field, or setting

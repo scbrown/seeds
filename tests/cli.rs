@@ -1108,12 +1108,70 @@ fn create_file_imports_br_markdown_in_one_go() {
     assert_eq!(sb.json(&["count"])["count"], 2);
 
     // A section seeds cannot store refuses the whole file.
-    std::fs::write(&f, "## Three\n\n## Four\n### Design\nx\n").unwrap();
+    std::fs::write(&f, "## Three\n\n## Four\n### Nonsense\nx\n").unwrap();
     assert_eq!(code(&sb.run(&["create", "--file", path])), 2);
     assert_eq!(sb.json(&["count"])["count"], 2, "nothing written");
     assert_eq!(
         code(&sb.run(&["create", "--file", path, "--title", "x"])),
         2
+    );
+}
+
+#[test]
+fn design_acceptance_and_external_ref_round_trip() {
+    // aegis-w3k75d.13 step 2: br's design, acceptance_criteria, external_ref.
+    let sb = Sandbox::new("text-fields");
+    let made = sb.json(&[
+        "create",
+        "x",
+        "--acceptance",
+        "- [ ] one",
+        "--external-ref",
+        "gh-7",
+    ]);
+    let id = made["id"].as_str().unwrap().to_string();
+    assert_eq!(made["acceptance_criteria"], "- [ ] one", "{made}");
+    assert_eq!(made["external_ref"], "gh-7", "{made}");
+    assert!(made["design"].is_null(), "{made}");
+
+    sb.ok(&[
+        "update",
+        &id,
+        "--design",
+        "G1",
+        "--acceptance-criteria",
+        "- [ ] one",
+    ]);
+    let shown = sb.json(&["show", &id]);
+    assert_eq!(shown[0]["design"], "G1", "{shown}");
+    assert_eq!(shown[0]["acceptance_criteria"], "- [ ] one");
+
+    // Replacing non-empty text with different text needs --force, as notes do.
+    assert_eq!(
+        code(&sb.run(&["update", &id, "--design", "G2"])),
+        5,
+        "refused"
+    );
+    assert_eq!(
+        sb.json(&["show", &id])[0]["design"],
+        "G1",
+        "nothing written"
+    );
+    sb.ok(&["update", &id, "--design", "G2", "--force"]);
+    assert_eq!(sb.json(&["show", &id])[0]["design"], "G2");
+
+    // external_ref is a plain value: replaced freely, "" clears it.
+    sb.ok(&["update", &id, "--external-ref", "gh-8"]);
+    let csv = sb.ok(&["list", "--format", "csv", "--fields", "id,external_ref"]);
+    assert!(csv.contains(&format!("{id},gh-8")), "{csv}");
+    sb.ok(&["update", &id, "--external-ref", ""]);
+    assert!(sb.json(&["show", &id])[0]["external_ref"].is_null());
+
+    let text = sb.ok(&["show", &id]);
+    assert!(text.contains("  design:\n    G2"), "{text}");
+    assert!(
+        text.contains("  acceptance criteria:\n    - [ ] one"),
+        "{text}"
     );
 }
 
