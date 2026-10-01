@@ -396,6 +396,15 @@ pub struct SyncArgs {
 /// `sd create`.
 #[derive(Debug, Args)]
 pub struct CreateArgs {
+    /// Create every `## Title` item of a markdown file, in one transaction
+    /// (br's bulk import; sections: Description, Notes, Priority, Type,
+    /// Assignee, Labels, Dependencies). br's --file
+    #[arg(short = 'f', long = "file", value_name = "FILE", conflicts_with_all = [
+        "title", "title_flag", "issue_type", "priority", "description", "status", "defer",
+        "description_file", "assignee", "owner", "labels", "parent", "deps", "workflow_run",
+        "step", "visit",
+    ])]
+    pub file: Option<String>,
     /// Title (positional form)
     pub title: Option<String>,
     /// Title (flag form)
