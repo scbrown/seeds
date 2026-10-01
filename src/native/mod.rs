@@ -1993,6 +1993,7 @@ fn dispatch(cli: &Cli, cfg: &Resolved, ctx: &Ctx, b: &mut dyn Backend) -> Result
                 estimate: a.estimate.clone(),
                 labels: split_csv(&a.labels),
                 parent: a.parent.clone(),
+                slug: a.slug.clone(),
                 deps: split_csv(&a.deps),
                 workflow_run: a.workflow_run.clone(),
                 step: a.step.clone(),

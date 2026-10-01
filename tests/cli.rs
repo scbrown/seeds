@@ -1828,3 +1828,43 @@ fn config_list_project_and_user_show_only_what_that_file_sets() {
     );
     assert_eq!(code(&sb.run(&["config", "list", "--project", "--user"])), 2);
 }
+
+#[test]
+fn create_slug_embeds_a_normalized_slug_in_the_id() {
+    // aegis-w3k75d.13: br's create --slug, from br's --help and observed
+    // outputs only (aegis-fur6v8): <prefix>-<slug>-<hash>.
+    let sb = Sandbox::new("slug");
+    let id = sb
+        .ok(&["create", "x", "--slug", "Survey My Thing!", "--silent"])
+        .trim()
+        .to_string();
+    let (head, hash) = id.rsplit_once('-').unwrap();
+    assert!(head.ends_with("-survey-my-thing"), "{id}");
+    assert_eq!(hash.len(), 3, "{id}");
+    // The id round-trips: show finds the seed under it.
+    assert_eq!(sb.json(&["show", &id])[0]["id"], id.as_str());
+
+    // A slug that normalizes to nothing mints a plain id, as br does.
+    let plain = sb.ok(&["create", "y", "--slug", "!!!", "--silent"]);
+    assert_eq!(plain.trim().matches('-').count(), 1, "{plain}");
+
+    // Under --parent the child numbering wins and the slug is ignored, as br.
+    let kid = sb.ok(&["create", "z", "--parent", &id, "--slug", "kid", "--silent"]);
+    assert_eq!(kid.trim(), format!("{id}.1"));
+
+    // --step derives the id itself, so a slug is a usage error, nothing written.
+    let before = ids(&sb.json(&["list", "--all"])).len();
+    assert_eq!(before, 3, "control: the three seeds above must be listed");
+    let o = sb.run(&[
+        "create",
+        "w",
+        "--workflow-run",
+        "r1",
+        "--step",
+        "s",
+        "--slug",
+        "nope",
+    ]);
+    assert_eq!(code(&o), 2);
+    assert_eq!(ids(&sb.json(&["list", "--all"])).len(), before);
+}
