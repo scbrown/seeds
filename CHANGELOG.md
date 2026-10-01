@@ -2,6 +2,31 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.0.4] - 2026-10-01
+
+### Added
+
+- *(cli)* Br's --session as a claimed write attribution; --labels/--for visible (w3k75d.13) (#62) ([93c453f](https://github.com/scbrown/seeds/commit/93c453f6746c3fd28237bc275bf23eb39d2292a4))
+- *(sync)* --dry-run and --status previews that write nothing (#66) ([5d4d50d](https://github.com/scbrown/seeds/commit/5d4d50df79d3ff70dbfee82ab3dd0da6352829aa))
+- *(doctor)* --quick and --robot-triage (#67) ([f0254ca](https://github.com/scbrown/seeds/commit/f0254ca2467ed3f140a1f48bfea03842b6c544f2))
+- *(info)* --schema, --whats-new and --thanks (#68) ([9f85fda](https://github.com/scbrown/seeds/commit/9f85fda103b05a22eca6f39f118221e833209968))
+- *(version)* --check against the latest published release (#69) ([182303c](https://github.com/scbrown/seeds/commit/182303c04e56c85cca3e916dca5e2d197b426f1d))
+- *(orphans)* --fix, br's interactive close (#70) ([2616f00](https://github.com/scbrown/seeds/commit/2616f00b4566e0ca350d46c524d50f183df6e216))
+- *(update)* Refuse replacing existing text without --force, like br (#71) ([0578b98](https://github.com/scbrown/seeds/commit/0578b9839d2a242be7eb3c7db912f76e7c3a2973))
+- *(create)* --file, br's markdown bulk import, in one transaction (#72) ([b34f5f6](https://github.com/scbrown/seeds/commit/b34f5f6083348bd47d5a4f5e74e4f81527037d17))
+
+### Documentation
+
+- *(readme)* Add seeds to the stack table (#65) ([70aafbe](https://github.com/scbrown/seeds/commit/70aafbea91827f28456379b1780e7301c69d7257))
+
+### Fixed
+
+- *(model)* Carry facts this sd does not model through import, sync and renumber (#73) ([5f5b32b](https://github.com/scbrown/seeds/commit/5f5b32b9fdbb6780ebb2c317de79bbdf2bbe52a2))
+
+### Miscellaneous
+
+- *(parity)* 20 br-engine flags not applicable, with reasons (w3k75d.13) (#63) ([0db0541](https://github.com/scbrown/seeds/commit/0db054146a06a0362fcfd033fa73b6243c983dbf))
+
 ## [0.0.3] - 2026-10-01
 
 ### Added
