@@ -105,6 +105,12 @@ pub fn run(cli: &Cli) -> Outcome {
     }
     if let Command::Version(a) = &cli.command {
         // Needs no store and no configuration.
+        if a.check {
+            return match version_check(cli.json) {
+                Ok(o) => o,
+                Err(e) => error_outcome(cli.json, &e, Vec::new()),
+            };
+        }
         return version(cli.json, a.short);
     }
     if let Command::Info(a) = &cli.command {
@@ -159,6 +165,73 @@ fn version(json: bool, short: bool) -> Outcome {
         format!("sd {v} (seeds)")
     };
     ok(json, value, text, vec![])
+}
+
+/// Where `sd version --check` learns the latest release (GitHub's API for
+/// the repository's latest release; seeds is not on crates.io).
+const RELEASES_URL: &str = "https://api.github.com/repos/scbrown/seeds/releases/latest";
+
+/// `major.minor.patch` as numbers, from `1.2.3`, `v1.2.3` or a release tag
+/// such as `seeds-ai-v1.2.3`. `None` for anything else (a pre-release too):
+/// an answer that cannot be compared is not "up to date".
+fn release_version(s: &str) -> Option<(u64, u64, u64)> {
+    let v = s.rsplit_once('v').map_or(s, |(_, v)| v);
+    let mut parts = v.trim().split('.').map(|p| p.parse::<u64>().ok());
+    let out = (parts.next()??, parts.next()??, parts.next()??);
+    parts.next().is_none().then_some(out)
+}
+
+/// `sd version --check`.
+fn version_check(json: bool) -> Result<Outcome> {
+    let current = env!("CARGO_PKG_VERSION");
+    let url = std::env::var("SEEDS_RELEASES_URL").unwrap_or_else(|_| RELEASES_URL.into());
+    let cannot = |why: String| {
+        SdError::new(
+            crate::error::ErrorKind::Unreachable,
+            format!("cannot tell whether sd {current} is current: {why}"),
+        )
+    };
+    let agent = ureq::AgentBuilder::new()
+        .timeout(std::time::Duration::from_secs(10))
+        .build();
+    let text = agent
+        .get(&url)
+        .set("User-Agent", concat!("sd/", env!("CARGO_PKG_VERSION")))
+        .set("Accept", "application/vnd.github+json")
+        .call()
+        .map_err(|e| cannot(e.to_string()))?
+        .into_string()
+        .map_err(|e| cannot(format!("reading {url}: {e}")))?;
+    let body: serde_json::Value = serde_json::from_str(&text)
+        .map_err(|e| cannot(format!("{url} answered something other than JSON: {e}")))?;
+    let tag = body["tag_name"]
+        .as_str()
+        .ok_or_else(|| cannot(format!("{url} named no tag_name")))?;
+    let latest = release_version(tag)
+        .ok_or_else(|| cannot(format!("the latest release tag {tag:?} is not a version")))?;
+    let mine = release_version(current).ok_or_else(|| {
+        cannot(format!(
+            "this build's version {current:?} is not comparable"
+        ))
+    })?;
+    let latest_s = format!("{}.{}.{}", latest.0, latest.1, latest.2);
+    let available = latest > mine;
+    let value = serde_json::json!({
+        "current_version": current,
+        "latest_version": latest_s,
+        "update_available": available,
+        "source": url,
+    });
+    let text = if available {
+        format!("sd {current}: {latest_s} is available")
+    } else {
+        format!("sd {current} is up to date (latest release {latest_s})")
+    };
+    let mut o = ok(json, value, text, vec![]);
+    if available {
+        o.code = 1;
+    }
+    Ok(o)
 }
 
 fn location_parts(cfg: &Resolved) -> (Option<String>, Option<String>, &'static str) {
@@ -3060,5 +3133,16 @@ mod doctor_tests {
         assert_eq!(f["recommended_command"], "sd dep remove sd-a sd-b", "{t}");
         assert_eq!(t["recommended_command"], "sd dep remove sd-a sd-b", "{t}");
         assert_eq!(t["actions_planned"], Json::Array(vec![]), "{t}");
+    }
+
+    #[test]
+    fn release_versions_parse_from_versions_and_tags_and_nothing_else() {
+        assert_eq!(release_version("0.0.3"), Some((0, 0, 3)));
+        assert_eq!(release_version("v1.2.3"), Some((1, 2, 3)));
+        assert_eq!(release_version("seeds-ai-v0.10.0"), Some((0, 10, 0)));
+        assert!(release_version("seeds-ai-v0.10.0") > release_version("0.9.9"));
+        for bad in ["", "latest", "1.2", "1.2.3.4", "1.2.3-rc1", "seeds-ai-vX"] {
+            assert_eq!(release_version(bad), None, "{bad}");
+        }
     }
 }

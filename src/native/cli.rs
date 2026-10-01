@@ -296,6 +296,12 @@ pub struct VersionArgs {
     /// Print only the version number (for scripts)
     #[arg(short, long)]
     pub short: bool,
+    /// Check whether a newer release is published: exit 0 up to date, 1 an
+    /// update is available, 7 when it cannot tell (offline, or an answer it
+    /// cannot read). Asks GitHub's latest release of scbrown/seeds, or
+    /// SEEDS_RELEASES_URL. br's --check
+    #[arg(short, long)]
+    pub check: bool,
 }
 
 /// `sd info`.
