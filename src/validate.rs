@@ -32,6 +32,7 @@ pub fn functional_predicates() -> Vec<String> {
         term::description(),
         term::notes(),
         term::design(),
+        term::agent_context(),
         term::acceptance_criteria(),
         term::external_ref(),
         term::due_at(),

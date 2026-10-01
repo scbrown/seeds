@@ -6,6 +6,7 @@
 //! [`cli::Cli`] into calls on [`crate::engine`] and prints the result.
 #![allow(clippy::disallowed_methods, clippy::disallowed_types)]
 
+mod agent_context;
 pub mod attest;
 pub mod cli;
 pub mod config;
@@ -1994,6 +1995,7 @@ fn dispatch(cli: &Cli, cfg: &Resolved, ctx: &Ctx, b: &mut dyn Backend) -> Result
                 labels: split_csv(&a.labels),
                 parent: a.parent.clone(),
                 slug: a.slug.clone(),
+                agent_context: agent_context::resolve(&a.agent_context)?,
                 deps: split_csv(&a.deps),
                 workflow_run: a.workflow_run.clone(),
                 step: a.step.clone(),
@@ -2572,6 +2574,7 @@ fn dispatch(cli: &Cli, cfg: &Resolved, ctx: &Ctx, b: &mut dyn Backend) -> Result
                 },
                 notes: a.notes.clone(),
                 design: a.design.clone(),
+                agent_context: agent_context::resolve(&a.agent_context)?,
                 acceptance_criteria: a.acceptance_criteria.clone(),
                 external_ref: a.external_ref.clone(),
                 check_acceptance: a.check_acceptance.clone(),

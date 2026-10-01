@@ -17,6 +17,7 @@ use serde_json::Value;
 // seeds#35 review). schema.rs must equal it, and output must match both.
 const SEED_KEYS: &[&str] = &[
     "acceptance_criteria",
+    "agent_context",
     "assignee",
     "close_reason",
     "closed_at",

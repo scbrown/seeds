@@ -1868,3 +1868,53 @@ fn create_slug_embeds_a_normalized_slug_in_the_id() {
     assert_eq!(code(&o), 2);
     assert_eq!(ids(&sb.json(&["list", "--all"])).len(), before);
 }
+
+#[test]
+fn agent_context_round_trips_and_guards_replacement_like_br() {
+    // aegis-w3k75d.13: br's --agent-context on create and update, from br's
+    // --help and observed outputs only (aegis-fur6v8).
+    let sb = Sandbox::new("agent-context");
+    let ac = |id: &str| sb.json(&["show", id])[0]["agent_context"].clone();
+    let id = sb
+        .ok(&[
+            "create",
+            "x",
+            "--agent-context",
+            r#"{"b":2, "a":1}"#,
+            "--silent",
+        ])
+        .trim()
+        .to_string();
+    // Stored compact, key order kept.
+    assert_eq!(ac(&id), r#"{"b":2,"a":1}"#);
+
+    // "" on create leaves it unset.
+    let bare = sb
+        .ok(&["create", "y", "--agent-context", "", "--silent"])
+        .trim()
+        .to_string();
+    assert!(ac(&bare).is_null());
+    // Filling an empty field needs no --force.
+    sb.ok(&["update", &bare, "--agent-context", r#"{"z":0}"#]);
+    assert_eq!(ac(&bare), r#"{"z":0}"#);
+
+    // Replacing or clearing a non-empty one is refused without --force.
+    for v in [r#"{"k":"v"}"#, ""] {
+        let o = sb.run(&["update", &id, "--agent-context", v]);
+        assert_eq!(code(&o), 5, "{v:?}");
+        assert_eq!(ac(&id), r#"{"b":2,"a":1}"#, "{v:?}: nothing written");
+    }
+    // The same value is a no-op, not a refusal.
+    sb.ok(&["update", &id, "--agent-context", r#"{"b":2,"a":1}"#]);
+    sb.ok(&["update", &id, "--agent-context", r#"{"k":"v"}"#, "--force"]);
+    assert_eq!(ac(&id), r#"{"k":"v"}"#);
+    sb.ok(&["update", &id, "--agent-context", "", "--force"]);
+    assert!(ac(&id).is_null());
+
+    // Invalid JSON is a usage error and nothing is created.
+    let before = ids(&sb.json(&["list", "--all"])).len();
+    assert_eq!(before, 2, "control: both seeds above are listed");
+    let o = sb.run(&["create", "z", "--agent-context", "{bad"]);
+    assert_eq!(code(&o), 2);
+    assert_eq!(ids(&sb.json(&["list", "--all"])).len(), before);
+}

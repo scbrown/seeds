@@ -111,6 +111,9 @@ pub struct Seed {
     pub notes: Option<String>,
     /// Design notes (br's `design`).
     pub design: Option<String>,
+    /// Governing instructions for an agent (br's `agent_context`): compact
+    /// JSON text.
+    pub agent_context: Option<String>,
     /// Acceptance criteria (br's `acceptance_criteria`).
     pub acceptance_criteria: Option<String>,
     /// A reference to the same work elsewhere (br's `external_ref`).
@@ -285,6 +288,7 @@ impl Seed {
         opt(&mut f, term::description(), &self.description);
         opt(&mut f, term::notes(), &self.notes);
         opt(&mut f, term::design(), &self.design);
+        opt(&mut f, term::agent_context(), &self.agent_context);
         opt(
             &mut f,
             term::acceptance_criteria(),
@@ -369,6 +373,7 @@ impl Seed {
                 description: some("d"),
                 notes: some("n"),
                 design: some("g"),
+                agent_context: some("{}"),
                 acceptance_criteria: some("k"),
                 external_ref: some("e"),
                 due_at: some("2026-01-01"),
@@ -455,6 +460,7 @@ impl Seed {
             description: s(term::description()),
             notes: s(term::notes()),
             design: s(term::design()),
+            agent_context: s(term::agent_context()),
             acceptance_criteria: s(term::acceptance_criteria()),
             external_ref: s(term::external_ref()),
             due_at: s(term::due_at()),
@@ -571,6 +577,7 @@ impl Seed {
             "description": self.description,
             "notes": self.notes,
             "design": self.design,
+            "agent_context": self.agent_context,
             "acceptance_criteria": self.acceptance_criteria,
             "external_ref": self.external_ref,
             "due_at": self.due_at,

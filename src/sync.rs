@@ -276,6 +276,7 @@ pub fn diff_fields(a: &Seed, b: &Seed, a_name: &str, b_name: &str) -> Vec<String
     f("notes", format!("{:?}", a.notes), format!("{:?}", b.notes));
     for (name, x, y) in [
         ("design", &a.design, &b.design),
+        ("agent_context", &a.agent_context, &b.agent_context),
         (
             "acceptance_criteria",
             &a.acceptance_criteria,
@@ -461,6 +462,15 @@ fn merge_seed(base: Option<&Seed>, l: &Seed, r: &Seed, sides: Sides) -> (Seed, V
             base.map(|b| &b.design),
             &l.design,
             &r.design,
+            &mut c,
+            sides,
+            dbg,
+        ),
+        agent_context: pick(
+            "agent_context",
+            base.map(|b| &b.agent_context),
+            &l.agent_context,
+            &r.agent_context,
             &mut c,
             sides,
             dbg,
