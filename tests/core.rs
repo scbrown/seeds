@@ -2679,3 +2679,71 @@ fn acceptance_checklist_edits_in_place_like_br() {
         "- [ ] a\r\n- [x] b\r\n"
     );
 }
+
+#[test]
+fn ephemeral_seeds_stay_local_through_pendant_and_sync_and_are_never_ready() {
+    // aegis-w3k75d.13, lead ruling (a): ephemerals live in a sibling graph
+    // that every read sees and no ledger carries.
+    let mut local = backend();
+    let shared = mk(&mut local, "shared", 1);
+    let eph = engine::create(
+        &mut local,
+        &ctx(2),
+        &CreateReq {
+            title: "ephemeral".into(),
+            ephemeral: true,
+            ..CreateReq::default()
+        },
+    )
+    .unwrap()
+    .0
+    .id;
+    let snap = local.snapshot(None).unwrap();
+    assert!(snap.get(&eph).unwrap().ephemeral);
+    assert!(!snap.get(&shared).unwrap().ephemeral);
+
+    // Both ready definitions exclude it, and agree.
+    let mut by_model = engine::ready_by_model(&snap, &ctx(3).now);
+    by_model.sort();
+    assert_eq!(by_model, vec![shared.clone()]);
+    assert_eq!(ready_ids(&local, 3), vec![shared.clone()]);
+
+    // The pendant carries the shared seed (control) and not the ephemeral one.
+    let base = seeds::pendant::read(&seeds::pendant::export(&local).unwrap())
+        .unwrap()
+        .snapshot;
+    assert!(base.seeds.contains_key(&shared));
+    assert!(!base.seeds.contains_key(&eph));
+
+    // Sync with a second store: the ephemeral seed, even changed since the
+    // base, is never pushed, and the local copy is never removed.
+    let mut remote = QuipuBackend::in_memory("https://seeds.local/project/remote").unwrap();
+    seeds::sync::import(&mut remote, &ctx(4), &base, None, true).unwrap();
+    engine::update(
+        &mut local,
+        &ctx(5),
+        std::slice::from_ref(&eph),
+        &UpdateReq {
+            title: Some("ephemeral, edited".into()),
+            ..UpdateReq::default()
+        },
+    )
+    .unwrap();
+    let (_, lr, rr) = seeds::sync::sync(&base, &mut local, &mut remote, &ctx(6), false).unwrap();
+    assert!(
+        !lr.wrote && !rr.wrote,
+        "nothing shared changed: {lr:?} {rr:?}"
+    );
+    assert!(!remote.snapshot(None).unwrap().seeds.contains_key(&eph));
+    assert_eq!(
+        local.snapshot(None).unwrap().get(&eph).unwrap().title,
+        "ephemeral, edited"
+    );
+
+    // A replace-import (how a repo store follows its pendant after a pull)
+    // makes the SHARED part equal the ledger and leaves ephemerals alone.
+    seeds::sync::import(&mut local, &ctx(7), &base, None, true).unwrap();
+    let after = local.snapshot(None).unwrap();
+    assert!(after.get(&eph).unwrap().ephemeral);
+    assert!(after.seeds.contains_key(&shared));
+}

@@ -258,3 +258,42 @@ fn shapes(_nt: &str) -> Result<()> {
 pub fn runs_shapes() -> bool {
     cfg!(feature = "shacl")
 }
+
+/// Refuse an edge FROM a shared (non-ephemeral) seed TO an ephemeral one, of
+/// any dependency type. The edge would be shared while its target is not, so
+/// the ledger would carry an id no clone can resolve: br accepts such an
+/// edge, and its own `sync --import-only` then refuses the export (rc 6,
+/// observed; aegis-lq3eqt). Lead ruling W3K75D13-EPH-CROSSDEP on
+/// aegis-w3k75d.13. Edges from an ephemeral seed, to anything, are fine:
+/// they live in the ephemeral graph, which is never shared.
+pub fn no_shared_edge_to_ephemeral(
+    batch: &WriteBatch,
+    is_ephemeral: &mut dyn FnMut(&str) -> Result<bool>,
+) -> Result<()> {
+    let in_batch: BTreeMap<&str, bool> = batch
+        .seeds
+        .iter()
+        .map(|w| (w.seed.id.as_str(), w.seed.ephemeral))
+        .collect();
+    let mut bad = Vec::new();
+    for w in batch.seeds.iter().filter(|w| !w.seed.ephemeral) {
+        for (target, ty) in w.seed.dependencies() {
+            let eph = match in_batch.get(target.as_str()) {
+                Some(e) => *e,
+                None => is_ephemeral(&target)?,
+            };
+            if eph {
+                bad.push(format!("{} -> {target} ({ty})", w.seed.id));
+            }
+        }
+    }
+    if bad.is_empty() {
+        return Ok(());
+    }
+    Err(SdError::usage(format!(
+        "a shared seed cannot depend on an ephemeral one: the edge would be shared and \
+         its target would not, so the ledger would name a seed no clone can resolve. \
+         Nothing was written:\n  {}",
+        bad.join("\n  ")
+    )))
+}

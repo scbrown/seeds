@@ -1284,3 +1284,61 @@ fn typed_literals_a_newer_sd_wrote_cross_a_quipu_server_with_their_types() {
         "arrived through the server with their types"
     );
 }
+
+#[test]
+fn remote_mode_keeps_ephemeral_seeds_in_their_own_graph() {
+    // aegis-w3k75d.13, lead ruling (a), through a real quipu-server: the
+    // ephemeral graph is created on first use, read with the project graph,
+    // never ready, never exported, and a shared seed cannot depend on it.
+    let mut env = Env::new("remote-ephemeral");
+    let Some(url) = env.start_server() else {
+        eprintln!("SKIPPED: set SEEDS_TEST_QUIPU_SERVER to a quipu-server binary to run this");
+        return;
+    };
+    let work = env.dir("work");
+    let remote = [("SEEDS_QUIPU_URL", url.as_str())];
+    let s = env
+        .ok(&work, &["create", "shared", "--silent"], &remote)
+        .trim()
+        .to_string();
+    let e = env
+        .ok(
+            &work,
+            &["create", "eph", "--ephemeral", "--silent"],
+            &remote,
+        )
+        .trim()
+        .to_string();
+    let show = |id: &str| -> Value {
+        serde_json::from_str(&env.ok(&work, &["show", id, "--json"], &remote)).unwrap()
+    };
+    assert_eq!(show(&e)[0]["ephemeral"], true);
+    assert_eq!(show(&s)[0]["ephemeral"], false);
+    assert_eq!(env.ready(&work, &remote), vec![s.clone()]);
+
+    // Writes to it stay in its graph, comments included.
+    env.ok(&work, &["update", &e, "--title", "eph 2"], &remote);
+    env.ok(&work, &["comments", "add", &e, "over http"], &remote);
+    assert_eq!(show(&e)[0]["title"], "eph 2");
+    assert_eq!(show(&e)[0]["ephemeral"], true);
+
+    // Shared -> ephemeral is refused; ephemeral -> shared is fine.
+    let o = env.sd(&work, &["dep", "add", &s, &e], &remote);
+    assert_eq!(
+        o.status.code(),
+        Some(2),
+        "{}",
+        String::from_utf8_lossy(&o.stderr)
+    );
+    env.ok(&work, &["dep", "add", &e, &s], &remote);
+
+    // The export carries the shared seed (control), not the ephemeral one.
+    let dir = env.root.join("pendant");
+    env.ok(&work, &["export", "--to", dir.to_str().unwrap()], &remote);
+    let nt = std::fs::read_to_string(dir.join("export.nt")).unwrap();
+    assert!(
+        nt.contains(&format!("/item/{s}>")),
+        "control: shared seed exported"
+    );
+    assert!(!nt.contains(&format!("/item/{e}")), "ephemeral seed leaked");
+}

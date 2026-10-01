@@ -1996,6 +1996,7 @@ fn dispatch(cli: &Cli, cfg: &Resolved, ctx: &Ctx, b: &mut dyn Backend) -> Result
                 parent: a.parent.clone(),
                 slug: a.slug.clone(),
                 agent_context: agent_context::resolve(&a.agent_context)?,
+                ephemeral: a.ephemeral,
                 deps: split_csv(&a.deps),
                 workflow_run: a.workflow_run.clone(),
                 step: a.step.clone(),
