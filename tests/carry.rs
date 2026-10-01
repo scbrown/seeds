@@ -257,3 +257,112 @@ fn a_field_by_field_merge_keeps_unmodelled_facts() {
     assert_eq!(future_on(&remote, &iri), ["kept"]);
     assert_eq!(future_on(&local, &iri), ["kept"]);
 }
+
+// ---------------------------------------------------------------- typed literals (wu's review of seeds#73)
+
+const XSD_DATE: &str = "http://www.w3.org/2001/XMLSchema#date";
+
+/// Literals of every kind a newer sd may write besides plain strings.
+fn typed_values() -> Vec<Value> {
+    vec![
+        Value::Bool(true),
+        Value::Typed {
+            lexical: "2026-10-01".into(),
+            datatype: XSD_DATE.into(),
+        },
+        Value::Lang {
+            lexical: "bonjour".into(),
+            lang: "fr".into(),
+        },
+    ]
+}
+
+fn plant_values(b: &mut QuipuBackend, iri: &str, values: &[Value]) {
+    let graph = b.graph_iri().to_string();
+    let st = b.store_mut();
+    let g = st.graph_create(&graph).unwrap();
+    let e = st.intern(iri).unwrap();
+    let a = st.intern(FUTURE).unwrap();
+    let datums: Vec<Datum> = values
+        .iter()
+        .map(|v| Datum {
+            entity: e,
+            attribute: a,
+            value: v.clone(),
+            valid_from: "2026-10-01T00:00:00Z".into(),
+            valid_to: None,
+            op: Op::Assert,
+        })
+        .collect();
+    st.transact_to_graph(
+        &datums,
+        "2026-10-01T00:00:00Z",
+        Some("newer-sd"),
+        Some("test"),
+        g,
+    )
+    .unwrap();
+}
+
+/// Every `FUTURE` value on `iri`, as stored (type and all), sorted.
+fn future_values(b: &QuipuBackend, iri: &str) -> Vec<String> {
+    let st = b.store();
+    let (Ok(g), Some(e), Some(a)) = (
+        st.graph_create(b.graph_iri()),
+        st.lookup(iri).unwrap(),
+        st.lookup(FUTURE).unwrap(),
+    ) else {
+        return vec![];
+    };
+    let mut v: Vec<String> = st
+        .entity_facts_in_graph(e, g)
+        .unwrap()
+        .into_iter()
+        .filter(|f| f.attribute == a)
+        .map(|f| format!("{:?}", f.value))
+        .collect();
+    v.sort();
+    v
+}
+
+#[test]
+fn typed_and_language_tagged_literals_keep_their_type_through_import_and_sync() {
+    let mut a = backend("https://seeds.local/project/carry");
+    let id = mk(&mut a, "typed", 1);
+    let iri = seeds::vocab::item_iri(&id);
+    plant_values(&mut a, &iri, &typed_values());
+    let want = future_values(&a, &iri);
+    assert_eq!(
+        want.len(),
+        3,
+        "control: three typed facts planted: {want:?}"
+    );
+
+    // pendant -> store
+    let mut b = backend("https://seeds.local/project/carry");
+    sync::import(&mut b, &ctx(2), &ledger_of(&a), None, false).unwrap();
+    assert_eq!(future_values(&b, &iri), want, "import");
+
+    // sync
+    let mut c = backend("https://seeds.local/project/carry");
+    sync::sync(&Snapshot::default(), &mut a, &mut c, &ctx(3), false).unwrap();
+    assert_eq!(future_values(&c, &iri), want, "sync");
+
+    // a rewrite of the seed is no change to them (no retract-and-assert churn)
+    let before = a.store().transaction_head().unwrap();
+    engine::update(
+        &mut a,
+        &ctx(4),
+        std::slice::from_ref(&id),
+        &engine::UpdateReq {
+            priority: Some("1".into()),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    assert!(
+        a.store().transaction_head().unwrap() > before,
+        "control: it wrote"
+    );
+    assert_eq!(future_values(&a, &iri), want, "update");
+}

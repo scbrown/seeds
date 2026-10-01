@@ -109,7 +109,29 @@ impl QuipuBackend {
             Value::Ref(id) => Some(Obj::Iri(self.store.resolve(*id)?)),
             Value::Str(s) => Some(Obj::Str(s.clone())),
             Value::Int(n) => Some(Obj::Int(*n)),
-            _ => None,
+            // Everything else a NEWER sd can write, kept with its type
+            // (aegis-w3k75d.14): dropping it here would drop it from the
+            // seed, and so from every import, sync and renumber.
+            Value::Lang { lexical, lang } => Some(Obj::Lang {
+                lexical: lexical.clone(),
+                lang: lang.clone(),
+            }),
+            Value::Typed { lexical, datatype } => Some(Obj::Typed {
+                lexical: lexical.clone(),
+                datatype: datatype.clone(),
+            }),
+            Value::Bool(b) => Some(Obj::Typed {
+                lexical: b.to_string(),
+                datatype: crate::model::XSD_BOOLEAN.into(),
+            }),
+            Value::Float(f) => Some(Obj::Typed {
+                lexical: format!("{f:E}"),
+                datatype: crate::model::XSD_DOUBLE.into(),
+            }),
+            Value::Bytes(b) => Some(Obj::Typed {
+                lexical: b.iter().map(|x| format!("{x:02X}")).collect(),
+                datatype: "http://www.w3.org/2001/XMLSchema#hexBinary".into(),
+            }),
         })
     }
 
@@ -118,6 +140,19 @@ impl QuipuBackend {
             Obj::Iri(iri) => Value::Ref(self.store.intern(iri)?),
             Obj::Str(s) => Value::Str(s.clone()),
             Obj::Int(n) => Value::Int(*n),
+            Obj::Lang { lexical, lang } => Value::Lang {
+                lexical: lexical.clone(),
+                lang: lang.clone(),
+            },
+            // Stored as quipu's own ingest stores it, so a rewrite of the
+            // same fact is no change (no retract-and-assert churn).
+            Obj::Typed { lexical, datatype } if datatype == crate::model::XSD_BOOLEAN => {
+                Value::Bool(matches!(lexical.as_str(), "true" | "1"))
+            }
+            Obj::Typed { lexical, datatype } => Value::Typed {
+                lexical: lexical.clone(),
+                datatype: datatype.clone(),
+            },
         })
     }
 

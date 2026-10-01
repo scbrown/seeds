@@ -186,6 +186,62 @@ pub enum Obj {
     Str(String),
     /// An integer literal.
     Int(i64),
+    /// A language-tagged literal: the lexical form and the BCP47 tag, apart
+    /// (never `"x@en"` in a string). seeds writes none; a NEWER sd may, and
+    /// it must round-trip (aegis-w3k75d.14).
+    Lang {
+        /// The lexical form, without the tag.
+        lexical: String,
+        /// The tag, without the `@`.
+        lang: String,
+    },
+    /// Any other typed literal (`xsd:boolean`, `xsd:date`, `xsd:dateTime`,
+    /// `xsd:decimal`, a custom datatype ...), lexical form verbatim, so a
+    /// newer sd's dates and booleans keep their datatype through this sd.
+    Typed {
+        /// The lexical form, as written.
+        lexical: String,
+        /// The datatype IRI, in full.
+        datatype: String,
+    },
+}
+
+/// `xsd:integer`.
+pub const XSD_INTEGER: &str = "http://www.w3.org/2001/XMLSchema#integer";
+/// `xsd:string`.
+pub const XSD_STRING: &str = "http://www.w3.org/2001/XMLSchema#string";
+/// `xsd:boolean`.
+pub const XSD_BOOLEAN: &str = "http://www.w3.org/2001/XMLSchema#boolean";
+/// `xsd:double`.
+pub const XSD_DOUBLE: &str = "http://www.w3.org/2001/XMLSchema#double";
+
+impl Obj {
+    /// A literal from its RDF parts, classified the way quipu's own ingest
+    /// does (`rdf::literal_to_value`): a language tag wins; `xsd:integer`
+    /// that parses is [`Obj::Int`]; no datatype or `xsd:string` is
+    /// [`Obj::Str`]; anything else keeps its datatype as [`Obj::Typed`].
+    pub fn literal(lexical: String, datatype: Option<&str>, lang: Option<&str>) -> Obj {
+        if let Some(lang) = lang.filter(|l| !l.is_empty()) {
+            return Obj::Lang {
+                lexical,
+                lang: lang.to_string(),
+            };
+        }
+        match datatype {
+            None | Some("") | Some(XSD_STRING) => Obj::Str(lexical),
+            Some(XSD_INTEGER) => match lexical.parse() {
+                Ok(n) => Obj::Int(n),
+                Err(_) => Obj::Typed {
+                    lexical,
+                    datatype: XSD_INTEGER.into(),
+                },
+            },
+            Some(dt) => Obj::Typed {
+                lexical,
+                datatype: dt.to_string(),
+            },
+        }
+    }
 }
 
 /// A (predicate IRI, object) pair about one subject.
@@ -382,7 +438,7 @@ impl Seed {
                 v.iter().find_map(|o| match o {
                     Obj::Iri(iri) => vocab::principal_name(iri),
                     Obj::Str(s) => Some(s.clone()),
-                    Obj::Int(_) => None,
+                    _ => None,
                 })
             }),
             labels: strs(term::label()),

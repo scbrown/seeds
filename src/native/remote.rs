@@ -448,14 +448,11 @@ fn term(t: &Json) -> Option<Obj> {
     let value = t["value"].as_str()?.to_string();
     match t["type"].as_str()? {
         "uri" => Some(Obj::Iri(value)),
-        "literal" | "typed-literal" => {
-            let dt = t["datatype"].as_str().unwrap_or("");
-            if dt == "http://www.w3.org/2001/XMLSchema#integer" {
-                value.parse().ok().map(Obj::Int)
-            } else {
-                Some(Obj::Str(value))
-            }
-        }
+        "literal" | "typed-literal" => Some(Obj::literal(
+            value,
+            t["datatype"].as_str(),
+            t["xml:lang"].as_str(),
+        )),
         _ => None,
     }
 }
@@ -465,6 +462,10 @@ fn sparql_obj(o: &Obj) -> String {
         Obj::Iri(i) => format!("<{i}>"),
         Obj::Str(s) => format!("\"{}\"", escape_literal(s)),
         Obj::Int(n) => format!("\"{n}\"^^<http://www.w3.org/2001/XMLSchema#integer>"),
+        Obj::Lang { lexical, lang } => format!("\"{}\"@{lang}", escape_literal(lexical)),
+        Obj::Typed { lexical, datatype } => {
+            format!("\"{}\"^^<{datatype}>", escape_literal(lexical))
+        }
     }
 }
 
