@@ -170,7 +170,7 @@ pub enum Command {
     /// Show the ledger's location, mode and size
     Info,
     /// Check the ledger and configuration (read-only; exit 1 if any check fails)
-    Doctor,
+    Doctor(DoctorArgs),
     /// The key that signs your writes to a quipu server (no bearer on the wire)
     Key {
         #[command(subcommand)]
@@ -328,6 +328,20 @@ pub struct ImportArgs {
     /// Make the store exactly the pendant (removes seeds the pendant lacks)
     #[arg(long, conflicts_with = "prefer")]
     pub replace: bool,
+}
+
+/// `sd doctor`.
+#[derive(Debug, Args)]
+pub struct DoctorArgs {
+    /// Run only the cheap checks: skip validating the whole ledger against
+    /// its shapes (reported as skipped, never as passed). br's --quick
+    #[arg(long)]
+    pub quick: bool,
+    /// Print one JSON triage envelope for an agent (sd.doctor.triage.v1:
+    /// summary, findings with a recommended command, counts). sd doctor
+    /// never repairs, so it plans no actions. br's --robot-triage
+    #[arg(long)]
+    pub robot_triage: bool,
 }
 
 /// `sd sync`.
@@ -1127,7 +1141,7 @@ impl Command {
             | Command::Completions(_)
             | Command::Version(_)
             | Command::Where
-            | Command::Doctor
+            | Command::Doctor(_)
             | Command::Key { .. }
             | Command::Schema { .. }
             | Command::Capabilities { .. }
@@ -1209,7 +1223,7 @@ impl Command {
             Command::Version(_) => "version",
             Command::Where => "where",
             Command::Info => "info",
-            Command::Doctor => "doctor",
+            Command::Doctor(_) => "doctor",
             Command::Key { command } => match command {
                 KeyCommand::Init { .. } => "key init",
                 KeyCommand::Show => "key show",
