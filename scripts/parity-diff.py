@@ -98,6 +98,10 @@ NOT_APPLICABLE_ON = {
     "sync": {
         "--force": "br sync: bypasses the Empty/Stale DB export guards of a JSONL export; sd has no export guard, and its one sync guard (removals) is lifted only by the explicitly named --allow-remote-deletes, deliberately not by --force",
     },
+    "doctor": {
+        "--fix": "br doctor: alias of --repair (rebuild the SQLite DB from JSONL); sd doctor never repairs, and nothing in a quipu ledger is derived",
+        "--dry-run": "br doctor: previews --repair; without it br documents it as a no-op, and sd doctor is always read-only",
+    },
 }
 
 

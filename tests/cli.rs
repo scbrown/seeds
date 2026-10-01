@@ -865,6 +865,56 @@ fn doctor_passes_a_fresh_ledger_with_exit_0() {
 }
 
 #[test]
+fn doctor_quick_skips_only_the_ledger_validation_and_triage_names_a_fix() {
+    // aegis-w3k75d.13: br's --quick and --robot-triage.
+    let sb = Sandbox::new("doctor-quick");
+    sb.ok(&["create", "a"]);
+    sb.ok(&["init", "--force"]); // the .gitignore an init writes
+    let full = sb.json(&["doctor"]);
+    let quick = sb.json(&["doctor", "--quick"]);
+    let names = |v: &serde_json::Value| -> Vec<String> {
+        v["checks"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|c| c["name"].as_str().unwrap().to_string())
+            .collect()
+    };
+    assert_eq!(names(&full), names(&quick), "the same checks are listed");
+    for (f, q) in full["checks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .zip(quick["checks"].as_array().unwrap())
+    {
+        if q["name"] == "ledger.valid" {
+            assert_eq!(f["status"], "ok", "control: full validation ran\n{f}");
+            assert_eq!(q["status"], "skipped", "{q}");
+        } else {
+            assert_eq!(f, q, "every other check is the same");
+        }
+    }
+    assert_eq!(quick["ok"], true);
+
+    // Healthy: an empty triage that recommends nothing but doctor itself.
+    let t: serde_json::Value = serde_json::from_str(&sb.ok(&["doctor", "--robot-triage"])).unwrap();
+    assert_eq!(t["schema_version"], "sd.doctor.triage.v1", "{t}");
+    assert_eq!(t["findings"], serde_json::json!([]), "{t}");
+    assert_eq!(t["actions_planned"], serde_json::json!([]), "{t}");
+    assert_eq!(t["recommended_command"], "sd doctor", "{t}");
+
+    // A missing .gitignore: one warning, with the command that restores it,
+    // and that command does.
+    std::fs::remove_file(sb.work().join(".seeds/.gitignore")).unwrap();
+    let t: serde_json::Value = serde_json::from_str(&sb.ok(&["doctor", "--robot-triage"])).unwrap();
+    assert_eq!(t["quick_ref"]["warn"], 1, "{t}");
+    assert_eq!(t["findings"][0]["name"], ".gitignore", "{t}");
+    assert_eq!(t["recommended_command"], "sd init --force", "{t}");
+    sb.ok(&["init", "--force"]);
+    assert!(sb.work().join(".seeds/.gitignore").exists());
+}
+
+#[test]
 fn orphans_reads_the_git_log_of_the_current_repo() {
     let sb = Sandbox::new("orphans");
     let id = sb.ok(&["create", "x", "--silent"]).trim().to_string();

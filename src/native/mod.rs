@@ -344,8 +344,11 @@ fn config_outcome(
 
 /// `sd doctor`: read-only checks. Every check is reported; the exit code is 1
 /// when any check is an error (so a script or CI can gate on it), 0 otherwise.
-fn doctor(json: bool, cfg: &Resolved, b: &mut dyn Backend) -> Result<Outcome> {
+fn doctor(json: bool, cfg: &Resolved, b: &mut dyn Backend, a: &cli::DoctorArgs) -> Result<Outcome> {
     let mut checks: Vec<(String, &'static str, String)> = Vec::new();
+    // What to run for a check that is not ok, by check name (--robot-triage).
+    let mut hints: std::collections::BTreeMap<&'static str, String> =
+        std::collections::BTreeMap::new();
     let mut add = |name: &str, status: &'static str, msg: String| {
         checks.push((name.to_string(), status, msg));
     };
@@ -413,19 +416,24 @@ fn doctor(json: bool, cfg: &Resolved, b: &mut dyn Backend) -> Result<Outcome> {
     };
     if let Some(snap) = &snap {
         // The same validation `sd import` applies to a pendant: shapes,
-        // single-valued fields, dangling blocks edges.
-        match pendant_of(b).and_then(|p| {
-            let nt = p.export_nt().unwrap_or_default().to_string();
-            Ok(crate::validate::validate_ledger(
-                &nt,
-                &pendant::parse_ntriples(&nt)?,
-            ))
-        }) {
-            Ok(problems) if problems.is_empty() => {
-                add("ledger.valid", "ok", "shapes and fields conform".into())
+        // single-valued fields, dangling blocks edges. The one expensive
+        // check (it exports the whole ledger), so --quick skips it.
+        if a.quick {
+            add("ledger.valid", "skipped", "skipped by --quick".into());
+        } else {
+            match pendant_of(b).and_then(|p| {
+                let nt = p.export_nt().unwrap_or_default().to_string();
+                Ok(crate::validate::validate_ledger(
+                    &nt,
+                    &pendant::parse_ntriples(&nt)?,
+                ))
+            }) {
+                Ok(problems) if problems.is_empty() => {
+                    add("ledger.valid", "ok", "shapes and fields conform".into())
+                }
+                Ok(problems) => add("ledger.valid", "error", problems.join("; ")),
+                Err(e) => add("ledger.valid", "error", e.message.clone()),
             }
-            Ok(problems) => add("ledger.valid", "error", problems.join("; ")),
-            Err(e) => add("ledger.valid", "error", e.message.clone()),
         }
         let dangling: Vec<String> = snap
             .seeds
@@ -438,6 +446,13 @@ fn doctor(json: bool, cfg: &Resolved, b: &mut dyn Backend) -> Result<Outcome> {
             .filter(|(_, t, _)| !snap.seeds.contains_key(t))
             .map(|(s, t, ty)| format!("{s} -{ty}-> {t}"))
             .collect();
+        if let Some(first) = dangling.first() {
+            if let Some((from, rest)) = first.split_once(" -") {
+                if let Some((_, to)) = rest.split_once("-> ") {
+                    hints.insert("deps.targets_exist", format!("sd dep remove {from} {to}"));
+                }
+            }
+        }
         if dangling.is_empty() {
             add(
                 "deps.targets_exist",
@@ -481,12 +496,24 @@ fn doctor(json: bool, cfg: &Resolved, b: &mut dyn Backend) -> Result<Outcome> {
         }
         match cycle {
             None => add("deps.no_cycles", "ok", "no blocks cycle".into()),
-            Some(c) => add(
-                "deps.no_cycles",
-                "error",
-                format!("blocks cycle: {}", c.join(" -> ")),
-            ),
+            Some(c) => {
+                if c.len() >= 2 {
+                    hints.insert("deps.no_cycles", format!("sd dep remove {} {}", c[0], c[1]));
+                }
+                add(
+                    "deps.no_cycles",
+                    "error",
+                    format!("blocks cycle: {}", c.join(" -> ")),
+                )
+            }
         }
+    }
+    hints.insert("store.opens", "sd where".into());
+    // `sd init --force` restores a missing .gitignore and never touches the
+    // id, so it cannot fix project.id: that one carries no command.
+    hints.insert(".gitignore", "sd init --force".into());
+    if a.robot_triage {
+        return Ok(doctor_triage(&checks, &hints));
     }
     let failed = checks.iter().any(|(_, s, _)| *s == "error");
     let value = serde_json::json!({
@@ -503,6 +530,51 @@ fn doctor(json: bool, cfg: &Resolved, b: &mut dyn Backend) -> Result<Outcome> {
         o.code = 1;
     }
     Ok(o)
+}
+
+/// `sd doctor --robot-triage`: every triage signal in one JSON read, in the
+/// shape of br's `br.doctor.triage.v1` where sd has the same thing to say.
+fn doctor_triage(
+    checks: &[(String, &'static str, String)],
+    hints: &std::collections::BTreeMap<&'static str, String>,
+) -> Outcome {
+    let count = |st: &str| checks.iter().filter(|(_, s, _)| *s == st).count();
+    let (errors, warns) = (count("error"), count("warn"));
+    let findings: Vec<serde_json::Value> = checks
+        .iter()
+        .filter(|(_, s, _)| *s != "ok")
+        .map(|(n, s, m)| {
+            serde_json::json!({
+                "name": n, "status": s, "message": m,
+                "recommended_command": if *s == "skipped" { None } else { hints.get(n.as_str()) },
+            })
+        })
+        .collect();
+    let recommended = checks
+        .iter()
+        .filter(|(_, s, _)| *s == "error")
+        .chain(checks.iter().filter(|(_, s, _)| *s == "warn"))
+        .find_map(|(n, _, _)| hints.get(n.as_str()).cloned())
+        .unwrap_or_else(|| "sd doctor".into());
+    let summary = match (errors, warns) {
+        (0, 0) => "ledger healthy".to_string(),
+        (0, w) => format!("{w} warning(s)"),
+        (e, w) => format!("{e} error(s), {w} warning(s)"),
+    };
+    let value = serde_json::json!({
+        "schema_version": "sd.doctor.triage.v1",
+        "summary": summary,
+        "findings": findings,
+        "actions_planned": [],
+        "recommended_command": recommended,
+        "quick_ref": {"healthy": count("ok"), "warn": warns, "error": errors, "skipped": count("skipped")},
+    });
+    let text = serde_json::to_string_pretty(&value).unwrap_or_default();
+    let mut o = ok(true, value, text, vec![]);
+    if errors > 0 {
+        o.code = 1;
+    }
+    o
 }
 
 /// `sd info`: `where`, plus what the ledger holds.
@@ -2448,7 +2520,7 @@ fn dispatch(cli: &Cli, cfg: &Resolved, ctx: &Ctx, b: &mut dyn Backend) -> Result
             }
         },
         Command::Info => info_outcome(json, cfg, b),
-        Command::Doctor => doctor(json, cfg, b),
+        Command::Doctor(a) => doctor(json, cfg, b, a),
         Command::Export(_)
         | Command::Import(_)
         | Command::Sync(_)
@@ -2777,7 +2849,15 @@ mod doctor_tests {
     }
 
     fn run(b: &mut QuipuBackend) -> (i32, Json) {
-        let o = doctor(true, &cfg(), b).unwrap();
+        run_with(b, false)
+    }
+
+    fn run_with(b: &mut QuipuBackend, robot_triage: bool) -> (i32, Json) {
+        let a = cli::DoctorArgs {
+            quick: false,
+            robot_triage,
+        };
+        let o = doctor(true, &cfg(), b, &a).unwrap();
         (o.code, serde_json::from_str(&o.stdout).unwrap())
     }
 
@@ -2837,5 +2917,21 @@ mod doctor_tests {
         assert_eq!(code, 1, "{v}");
         assert_eq!(status(&v, "deps.no_cycles"), "error");
         assert_eq!(v["ok"], false);
+
+        // The triage names the cycle and an edge whose removal breaks it
+        // (sd-a depends on sd-b), with the same exit code (aegis-w3k75d.13).
+        let (code, t) = run_with(&mut b, true);
+        assert_eq!(code, 1, "{t}");
+        assert_eq!(t["schema_version"], "sd.doctor.triage.v1", "{t}");
+        assert_eq!(t["quick_ref"]["error"], 1, "{t}");
+        let f = t["findings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|f| f["name"] == "deps.no_cycles")
+            .unwrap();
+        assert_eq!(f["recommended_command"], "sd dep remove sd-a sd-b", "{t}");
+        assert_eq!(t["recommended_command"], "sd dep remove sd-a sd-b", "{t}");
+        assert_eq!(t["actions_planned"], Json::Array(vec![]), "{t}");
     }
 }
