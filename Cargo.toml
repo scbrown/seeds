@@ -1,6 +1,6 @@
 [package]
 name = "seeds-ai"
-version = "0.0.2"
+version = "0.0.3"
 edition = "2021"
 description = "A beads-compatible issue tracker for AI agents that stores work items as facts in a quipu knowledge graph"
 license = "MIT"
