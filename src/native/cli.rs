@@ -60,6 +60,10 @@ pub struct Cli {
     #[arg(long, global = true)]
     pub model: Option<String>,
 
+    /// Claimed session for this write (self-asserted, recorded as declared; br's --session) [env: SEEDS_SESSION]
+    #[arg(long, global = true)]
+    pub session: Option<String>,
+
     /// Quiet: print nothing on success (the exit code is the answer); errors still print
     #[arg(short, long, global = true)]
     pub quiet: bool,
@@ -176,7 +180,7 @@ pub enum Command {
     /// exit codes, environment, safety guarantees
     Capabilities {
         /// Detail for one command path, e.g. "create" or "comments add"
-        #[arg(long = "command", alias = "for", value_name = "COMMAND_PATH")]
+        #[arg(long = "command", visible_alias = "for", value_name = "COMMAND_PATH")]
         command_path: Option<String>,
     },
     /// JSON Schemas for sd's --json output, generated from the same tables the
@@ -800,7 +804,7 @@ pub struct UpdateArgs {
     #[arg(short = 't', long = "type")]
     pub issue_type: Option<String>,
     /// Replace ALL labels (repeatable; comma-separated allowed)
-    #[arg(long)]
+    #[arg(long, visible_alias = "labels")]
     pub set_labels: Vec<String>,
     /// Move under a new parent ("" detaches)
     #[arg(long)]

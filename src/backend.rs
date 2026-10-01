@@ -35,12 +35,17 @@ pub struct Claims {
     pub harness: Option<String>,
     /// The model it says it is.
     pub model: Option<String>,
+    /// The session it says it writes from (br's `--session`).
+    pub session: Option<String>,
 }
 
 impl Claims {
     /// Whether no claim was made.
     pub fn is_empty(&self) -> bool {
-        self.agent_name.is_none() && self.harness.is_none() && self.model.is_none()
+        self.agent_name.is_none()
+            && self.harness.is_none()
+            && self.model.is_none()
+            && self.session.is_none()
     }
 }
 
@@ -91,6 +96,7 @@ pub fn write_record(write_iri: &str, batch: &WriteBatch, ctx: &Ctx) -> Vec<(Stri
             ("agentName", &ctx.claims.agent_name),
             ("harness", &ctx.claims.harness),
             ("model", &ctx.claims.model),
+            ("session", &ctx.claims.session),
         ] {
             if let Some(v) = v {
                 c.push((vocab::seeds(p), s(v)));
@@ -186,6 +192,7 @@ pub fn claims_rows(
                     agent_name: get(r, "agent"),
                     harness: get(r, "harness"),
                     model: get(r, "model"),
+                    session: get(r, "session"),
                 },
             ))
         })
