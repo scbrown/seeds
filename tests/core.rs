@@ -2475,3 +2475,65 @@ fn stats_activity_counts_created_closed_updated_in_the_window() {
     let none = engine::stats(&b, &ctx(0), engine::StatsReq::default(), None).unwrap();
     assert!(none.activity.is_none());
 }
+
+// Forward compatibility (aegis-w3k75d.13, step 1): a fact whose predicate this
+// sd does not model (written by a NEWER sd) must survive this sd's write to the
+// same seed. Before, the write's diff retracted it, silently, with success.
+#[test]
+fn an_update_keeps_facts_this_sd_does_not_model() {
+    use quipu::store::Datum;
+    use quipu::types::{Op, Value};
+    let mut b = backend();
+    let id = mk(&mut b, "x", 1);
+    let future = "https://seeds.local/ontology/fieldFromTheFuture";
+    {
+        let graph = b.graph_iri().to_string();
+        let st = b.store_mut();
+        let g = st.graph_create(&graph).unwrap();
+        let e = st.intern(&seeds::vocab::item_iri(&id)).unwrap();
+        let a = st.intern(future).unwrap();
+        st.transact_to_graph(
+            &[Datum {
+                entity: e,
+                attribute: a,
+                value: Value::Str("kept".into()),
+                valid_from: "2026-09-30T00:00:02Z".into(),
+                valid_to: None,
+                op: Op::Assert,
+            }],
+            "2026-09-30T00:00:02Z",
+            Some("newer-sd"),
+            Some("test"),
+            g,
+        )
+        .unwrap();
+    }
+    let has_future = |b: &QuipuBackend| -> bool {
+        let st = b.store();
+        let g = st.graph_create(b.graph_iri());
+        let e = st.lookup(&seeds::vocab::item_iri(&id)).unwrap().unwrap();
+        let a = st.lookup(future).unwrap().unwrap();
+        st.entity_facts_in_graph(e, g.unwrap())
+            .unwrap()
+            .iter()
+            .any(|f| f.attribute == a && f.value == Value::Str("kept".into()))
+    };
+    assert!(
+        has_future(&b),
+        "control: the raw fact is there before the write"
+    );
+    engine::update(
+        &mut b,
+        &ctx(3),
+        std::slice::from_ref(&id),
+        &UpdateReq {
+            priority: Some("1".into()),
+            ..UpdateReq::default()
+        },
+    )
+    .unwrap();
+    assert!(
+        has_future(&b),
+        "this sd's update must not erase what it does not model"
+    );
+}
