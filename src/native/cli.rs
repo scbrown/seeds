@@ -403,6 +403,7 @@ pub struct CreateArgs {
         "title", "title_flag", "issue_type", "priority", "description", "status", "defer",
         "description_file", "assignee", "owner", "labels", "parent", "deps", "workflow_run",
         "step", "visit", "acceptance_criteria", "external_ref", "due", "estimate", "slug",
+        "agent_context",
     ])]
     pub file: Option<String>,
     /// Title (positional form)
@@ -452,6 +453,11 @@ pub struct CreateArgs {
     /// Parent seed; the new seed is minted as <parent>.<n>
     #[arg(long)]
     pub parent: Option<String>,
+    /// Governing instructions for an agent working this seed: inline JSON,
+    /// @path to a JSON file, or @path.yaml/.yml (normalized to JSON). "" leaves
+    /// it unset. br's --agent-context
+    #[arg(long, value_name = "JSON")]
+    pub agent_context: Option<String>,
     /// Human-readable slug embedded in the id: <prefix>-<slug>-<hash>.
     /// Normalized to lowercase ASCII letters, digits and single hyphens,
     /// at most 48 characters; ignored with --parent
@@ -876,8 +882,8 @@ pub struct UpdateArgs {
     /// Seed id(s)
     #[arg(required = true)]
     pub ids: Vec<String>,
-    /// Replace a non-empty description, notes, design or acceptance criteria
-    /// with different content (refused without it; the same content, or
+    /// Replace a non-empty description, notes, design, acceptance criteria or
+    /// agent context with different content (refused without it; the same content, or
     /// filling an empty field, needs no --force). br's --force
     #[arg(long)]
     pub force: bool,
@@ -905,6 +911,10 @@ pub struct UpdateArgs {
     /// New design notes
     #[arg(long, allow_hyphen_values = true)]
     pub design: Option<String>,
+    /// New agent context: inline JSON, @path (JSON), or @path.yaml/.yml.
+    /// "" clears it. Replacing a non-empty one needs --force
+    #[arg(long, value_name = "JSON")]
+    pub agent_context: Option<String>,
     /// New acceptance criteria. br's --acceptance-criteria
     #[arg(long, visible_alias = "acceptance", allow_hyphen_values = true)]
     pub acceptance_criteria: Option<String>,

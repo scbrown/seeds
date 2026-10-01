@@ -2520,6 +2520,7 @@ dependencies = [
  "toml 0.8.23",
  "ureq",
  "wasm-bindgen-test",
+ "yaml-rust2",
 ]
 
 [[package]]

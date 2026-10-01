@@ -92,6 +92,11 @@ pub mod term {
     pub fn design() -> String {
         seeds("design")
     }
+    /// `seeds:agentContext`: governing instructions for an agent working the
+    /// seed (br's `agent_context`), a compact JSON text.
+    pub fn agent_context() -> String {
+        seeds("agentContext")
+    }
     /// `seeds:acceptanceCriteria`: br's `acceptance_criteria`, often a
     /// `- [ ]` checklist.
     pub fn acceptance_criteria() -> String {

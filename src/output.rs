@@ -493,6 +493,9 @@ pub fn view_text(v: &SeedView) -> String {
     if let Some(e) = &s.external_ref {
         out.push(format!("  external ref: {e}"));
     }
+    if let Some(c) = &s.agent_context {
+        out.push(format!("  agent context: {c}"));
+    }
     if !v.dependencies.is_empty() {
         out.push(String::new());
         out.push("  depends on:".into());

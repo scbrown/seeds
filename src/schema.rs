@@ -37,6 +37,7 @@ pub const SEED: &[(&str, Kind)] = &[
     ("description", Kind::OptStr),
     ("notes", Kind::OptStr),
     ("design", Kind::OptStr),
+    ("agent_context", Kind::OptStr),
     ("acceptance_criteria", Kind::OptStr),
     ("external_ref", Kind::OptStr),
     ("due_at", Kind::OptStr),

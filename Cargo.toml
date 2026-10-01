@@ -28,7 +28,7 @@ required-features = ["native"]
 # core, which builds for wasm32-unknown-unknown with `--no-default-features`
 # (see `just wasm`).
 default = ["native"]
-native = ["dep:clap", "dep:clap_complete", "dep:toml", "dep:ureq", "dep:ed25519-dalek", "dep:getrandom", "dep:base64", "dep:jiff", "shacl"]
+native = ["dep:clap", "dep:clap_complete", "dep:toml", "dep:ureq", "dep:ed25519-dalek", "dep:getrandom", "dep:base64", "dep:jiff", "dep:yaml-rust2", "shacl"]
 # Validate every write against the WorkItem shapes (camayoc's, plus the seeds
 # shape). quipu's SHACL engine is not part of quipu's own wasm32 gate, so the
 # wasm build leaves it out and says so rather than claiming a check it did not
@@ -54,6 +54,8 @@ base64 = { version = "0.22", optional = true }
 # The local time zone (native only): a bare --due date means 09:00 local, as
 # br stores it. Unlicense OR MIT.
 jiff = { version = "0.2", optional = true }
+# --agent-context @file.yaml (already in the tree via shacl; MIT OR Apache-2.0).
+yaml-rust2 = { version = "0.10", optional = true }
 # quipu-ai 0.9 declares `shacl = "^0.3.16"`, but shacl 0.3.24 changed
 # `ShaclProcessor::validate`'s arity and quipu-ai 0.9.1 no longer compiles
 # against it. Pin the version quipu's own lockfile builds with, so an unlocked

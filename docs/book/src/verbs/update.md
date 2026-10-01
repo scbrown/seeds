@@ -13,12 +13,13 @@ sd update sd-a3f --defer 2026-10-15      # hide from ready until then
 | flag | meaning |
 |---|---|
 | `--title`, `-d, --description`, `--notes`, `--design`, `--acceptance-criteria` (alias `--acceptance`) | set the text (see below for replacing existing text) |
-| `--force` | allow replacing a non-empty description, notes, design or acceptance criteria with different content |
+| `--force` | allow replacing a non-empty description, notes, design, acceptance criteria or agent context with different content |
 | `-s, --status` | `open`, `in_progress`, `blocked`, `deferred`, `closed` |
 | `-p, --priority` | `0`-`4` or `P0`-`P4` |
 | `--assignee NAME` | set the assignee (`""` clears it) |
 | `--owner WHO` | set the owner (`""` clears it) |
 | `--external-ref REF` | a reference to the same work elsewhere, br's `external_ref` (`""` clears it) |
+| `--agent-context JSON` | br's `agent_context`: inline JSON, `@path` or `@path.yaml`/`.yml`, stored as compact JSON. `""` clears it; replacing or clearing a non-empty one needs `--force` |
 | `--due WHEN` | due date, the forms of `--defer`; a bare date or `tomorrow` is 09:00 local, stored as a UTC instant (`""` clears it) |
 | `--estimate MIN` | time estimate in minutes, 0 to 525960 |
 | `--check-acceptance ITEMS` | tick acceptance checklist items in place: 1-based numbers (`1,4,5`) or a text selector matching exactly one item (case-insensitive; an exact match wins, else a unique substring). Repeatable; needs no `--force`; the rest of the field is kept byte for byte |
@@ -39,7 +40,7 @@ else clears `closed_at` and `close_reason`. An update that changes nothing
 writes nothing.
 
 **Existing text is not replaced by accident.** Setting a description, notes,
-design or acceptance criteria
+design, acceptance criteria or agent context
 that already has text to *different* text (including `""`) is refused with
 exit **5**, naming the field, and nothing is written, unless `--force` is
 given. This is br's guard (br's `--force`). Filling an empty field, or setting

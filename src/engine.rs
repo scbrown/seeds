@@ -58,6 +58,8 @@ pub struct CreateReq {
     /// A human-readable slug embedded in the id (br's `--slug`); ignored under
     /// `parent`, as br does.
     pub slug: Option<String>,
+    /// Governing instructions for an agent (br's `agent_context`): JSON text.
+    pub agent_context: Option<String>,
     /// Dependencies, br's form: `id` (blocks) or `type:id`.
     pub deps: Vec<String>,
     /// The shuttle run that creates or drives this seed (an IRI or a bare run id).
@@ -121,6 +123,10 @@ fn new_seed(
         owner: non_empty(req.owner.as_deref().map(str::trim)),
         acceptance_criteria: non_empty(req.acceptance_criteria.as_deref()),
         external_ref: non_empty(req.external_ref.as_deref().map(str::trim)),
+        agent_context: match non_empty(req.agent_context.as_deref()) {
+            Some(c) => Some(agent_context(&c)?),
+            None => None,
+        },
         due_at: match non_empty(req.due.as_deref()) {
             Some(d) => Some(parse_when(&d, &ctx.now, "--due")?),
             None => None,
@@ -1827,6 +1833,8 @@ pub struct UpdateReq {
     pub notes: Option<String>,
     /// New design notes.
     pub design: Option<String>,
+    /// New agent context (JSON text); empty clears it.
+    pub agent_context: Option<String>,
     /// New acceptance criteria.
     pub acceptance_criteria: Option<String>,
     /// New external reference; empty clears it.
@@ -1867,8 +1875,8 @@ pub struct UpdateReq {
     pub set_labels: Option<Vec<String>>,
     /// New parent; empty detaches the seed.
     pub parent: Option<String>,
-    /// Allow replacing a non-empty description, notes, design or acceptance
-    /// criteria with different content (br's --force). Without it that is
+    /// Allow replacing a non-empty description, notes, design, acceptance
+    /// criteria or agent context with different content (br's --force). Without it that is
     /// refused, naming the field.
     pub force: bool,
 }
@@ -1925,6 +1933,14 @@ pub fn update(
         }
         if let Some(g) = &req.design {
             s.design = replace_text(id, "design", &before.design, g, req.force)?;
+        }
+        if let Some(c) = &req.agent_context {
+            let c = match non_empty(Some(c)) {
+                Some(c) => agent_context(&c)?,
+                None => String::new(),
+            };
+            s.agent_context =
+                replace_text(id, "agent context", &before.agent_context, &c, req.force)?;
         }
         let checklist_edit = !(req.check_acceptance.is_empty()
             && req.uncheck_acceptance.is_empty()
@@ -3301,6 +3317,14 @@ fn replace_text(
         )));
     }
     Ok(new)
+}
+
+/// An agent context must be JSON (any value, as br accepts). The native CLI
+/// has already normalized it to compact JSON; this guards other callers.
+fn agent_context(text: &str) -> Result<String> {
+    serde_json::from_str::<serde::de::IgnoredAny>(text)
+        .map_err(|e| SdError::usage(format!("agent context is not valid JSON: {e}")))?;
+    Ok(text.to_string())
 }
 
 fn non_empty(s: Option<&str>) -> Option<String> {
