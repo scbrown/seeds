@@ -60,7 +60,7 @@ pub struct Cli {
     #[arg(long, global = true)]
     pub model: Option<String>,
 
-    /// Claimed session for this write (self-asserted, recorded as declared; br's --session) [env: SEEDS_SESSION]
+    /// Claimed session for this write (self-asserted, recorded as declared; not the attested signing session of a signed write; br's --session) [env: SEEDS_SESSION]
     #[arg(long, global = true)]
     pub session: Option<String>,
 
