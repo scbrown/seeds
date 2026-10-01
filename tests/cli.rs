@@ -915,6 +915,48 @@ fn doctor_quick_skips_only_the_ledger_validation_and_triage_names_a_fix() {
 }
 
 #[test]
+fn info_schema_whats_new_and_thanks() {
+    // aegis-w3k75d.13: br's info --schema, --whats-new and --thanks.
+    use sha2::{Digest, Sha256};
+    let sb = Sandbox::new("info-flags");
+
+    // --whats-new and --thanks are about this build: no store, nothing created.
+    let w = sb.json(&["info", "--whats-new"]);
+    assert_eq!(w["version"], env!("CARGO_PKG_VERSION"), "{w}");
+    let release = w["release"].as_str().unwrap();
+    assert!(
+        release.starts_with('[')
+            && include_str!("../CHANGELOG.md").contains(&format!("## {release}")),
+        "the latest section of the shipped changelog: {w}"
+    );
+    assert!(!w["changes"].as_str().unwrap().is_empty(), "{w}");
+    let t = sb.json(&["info", "--thanks"]);
+    assert_eq!(t["thanks"].as_array().unwrap().len(), 3, "{t}");
+    assert!(!sb.work().join(".seeds").exists(), "nothing was created");
+    assert_eq!(code(&sb.run(&["info", "--whats-new", "--thanks"])), 2);
+
+    // --schema: the digest of the shapes sd validates against, and their classes.
+    sb.ok(&["create", "a"]);
+    let plain = sb.json(&["info"]);
+    assert!(plain.get("schema").is_none(), "only on request: {plain}");
+    let i = sb.json(&["info", "--schema"]);
+    let want = format!(
+        "{:x}",
+        Sha256::digest(include_str!("../shapes/seeds.shapes.ttl").as_bytes())
+    );
+    assert_eq!(i["schema"]["shapes_sha256"], want.as_str(), "{i}");
+    assert!(
+        i["schema"]["target_classes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|c| c.as_str().unwrap().ends_with("/WorkItem")),
+        "{i}"
+    );
+    assert_eq!(i["issue_count"], 1, "the plain info fields stay: {i}");
+}
+
+#[test]
 fn orphans_reads_the_git_log_of_the_current_repo() {
     let sb = Sandbox::new("orphans");
     let id = sb.ok(&["create", "x", "--silent"]).trim().to_string();

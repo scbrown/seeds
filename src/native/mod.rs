@@ -107,6 +107,15 @@ pub fn run(cli: &Cli) -> Outcome {
         // Needs no store and no configuration.
         return version(cli.json, a.short);
     }
+    if let Command::Info(a) = &cli.command {
+        // "Show and exit": about this build, not the ledger, so no store.
+        if a.whats_new {
+            return whats_new(cli.json);
+        }
+        if a.thanks {
+            return thanks(cli.json);
+        }
+    }
     if let Command::Init(a) = &cli.command {
         return match init(cli, a) {
             Ok(o) => o,
@@ -577,8 +586,107 @@ fn doctor_triage(
     o
 }
 
+/// This build's changelog, as released (the file release tooling writes).
+const CHANGELOG: &str = include_str!("../../CHANGELOG.md");
+
+/// The latest released section of [`CHANGELOG`]: its `## [x.y.z]` heading
+/// and body, up to the next release heading.
+fn latest_changes(changelog: &str) -> Option<(String, String)> {
+    let mut sections = changelog.split("\n## [").skip(1);
+    let first = sections.next()?;
+    let (heading, body) = first.split_once('\n').unwrap_or((first, ""));
+    Some((format!("[{heading}"), body.trim().to_string()))
+}
+
+/// `sd info --whats-new`.
+fn whats_new(json: bool) -> Outcome {
+    match latest_changes(CHANGELOG) {
+        Some((release, changes)) => ok(
+            json,
+            serde_json::json!({"version": env!("CARGO_PKG_VERSION"), "release": release, "changes": changes}),
+            format!("sd {} — {release}\n\n{changes}", env!("CARGO_PKG_VERSION")),
+            vec![],
+        ),
+        None => ok(
+            json,
+            serde_json::json!({"version": env!("CARGO_PKG_VERSION"), "release": null, "changes": null}),
+            format!(
+                "no released changes recorded for sd {}",
+                env!("CARGO_PKG_VERSION")
+            ),
+            vec![],
+        ),
+    }
+}
+
+/// `sd info --thanks`: where sd's shapes come from. Factual only.
+fn thanks(json: bool) -> Outcome {
+    let credits = [
+        (
+            "beads (bd)",
+            "sd's issue model and --json output shapes follow bd's",
+        ),
+        (
+            "beads_rust (br)",
+            "sd's verbs and flags follow br's, so br users' scripts keep working",
+        ),
+        (
+            "quipu",
+            "the knowledge-graph store every seeds ledger lives in",
+        ),
+    ];
+    let text = std::iter::once("Thanks to the projects sd builds on:".to_string())
+        .chain(credits.iter().map(|(n, w)| format!("  {n}: {w}")))
+        .collect::<Vec<_>>()
+        .join("\n");
+    ok(
+        json,
+        serde_json::json!({"thanks": credits.iter().map(|(n, w)| serde_json::json!({"project": n, "for": w})).collect::<Vec<_>>()}),
+        text,
+        vec![],
+    )
+}
+
+/// The `schema` block of `sd info --schema`: what identifies the shapes a
+/// ledger is validated against.
+fn schema_info() -> serde_json::Value {
+    use sha2::{Digest, Sha256};
+    let digest = Sha256::digest(crate::vocab::SHAPES_TURTLE.as_bytes());
+    let prefixes: std::collections::BTreeMap<&str, &str> = crate::vocab::SHAPES_TURTLE
+        .lines()
+        .filter_map(|l| {
+            let rest = l.trim().strip_prefix("@prefix")?.trim();
+            let (p, iri) = rest.split_once(':')?;
+            Some((
+                p.trim(),
+                iri.trim()
+                    .trim_end_matches('.')
+                    .trim()
+                    .trim_matches(['<', '>']),
+            ))
+        })
+        .collect();
+    let mut targets: Vec<String> = crate::vocab::SHAPES_TURTLE
+        .lines()
+        .filter_map(|l| l.trim().strip_prefix("sh:targetClass"))
+        .map(|t| t.trim().trim_end_matches([';', '.']).trim())
+        .map(|t| match t.split_once(':') {
+            Some((p, local)) if prefixes.contains_key(p) => format!("{}{local}", prefixes[p]),
+            _ => t.to_string(),
+        })
+        .collect();
+    targets.sort();
+    targets.dedup();
+    serde_json::json!({
+        "shapes_sha256": format!("{digest:x}"),
+        "target_classes": targets,
+        "vocabularies": {"seeds": crate::vocab::SEEDS, "aegis": crate::vocab::AEGIS},
+        "json_schemas": "sd schema",
+    })
+}
+
 /// `sd info`: `where`, plus what the ledger holds.
-fn info_outcome(json: bool, cfg: &Resolved, b: &dyn Backend) -> Result<Outcome> {
+fn info_outcome(json: bool, cfg: &Resolved, b: &dyn Backend, with_schema: bool) -> Result<Outcome> {
     let snap = b.snapshot(None)?;
     let (store, url, mode) = location_parts(cfg);
     let size = store
@@ -591,13 +699,32 @@ fn info_outcome(json: bool, cfg: &Resolved, b: &dyn Backend) -> Result<Outcome> 
         "issue_count": snap.seeds.len(), "comment_count": snap.comments.len(), "tx": snap.tx,
         "config": {"issue_prefix": cfg.prefix}, "db_size": size, "jsonl_path": null,
     });
-    let text = format!(
+    let mut value = value;
+    if with_schema {
+        value["schema"] = schema_info();
+    }
+    let mut text = format!(
         "{} seeds, {} comments at tx {} ({mode}: {})",
         snap.seeds.len(),
         snap.comments.len(),
         snap.tx,
         store.or(url).unwrap_or_default()
     );
+    if with_schema {
+        let s = &value["schema"];
+        text.push_str(&format!(
+            "\nshapes sha256 {}\ntarget classes: {}\njson schemas: sd schema",
+            s["shapes_sha256"].as_str().unwrap_or_default(),
+            s["target_classes"]
+                .as_array()
+                .map(|a| a
+                    .iter()
+                    .filter_map(|v| v.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", "))
+                .unwrap_or_default()
+        ));
+    }
     Ok(ok(json, value, text, vec![]))
 }
 
@@ -2519,7 +2646,7 @@ fn dispatch(cli: &Cli, cfg: &Resolved, ctx: &Ctx, b: &mut dyn Backend) -> Result
                 Ok(ok(json, output::dep_list_json(&rows), text, vec![]))
             }
         },
-        Command::Info => info_outcome(json, cfg, b),
+        Command::Info(a) => info_outcome(json, cfg, b, a.schema),
         Command::Doctor(a) => doctor(json, cfg, b, a),
         Command::Export(_)
         | Command::Import(_)

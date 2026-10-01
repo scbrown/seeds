@@ -168,7 +168,7 @@ pub enum Command {
     /// Show where the ledger lives: store file or server, graph, prefix, pendant
     Where,
     /// Show the ledger's location, mode and size
-    Info,
+    Info(InfoArgs),
     /// Check the ledger and configuration (read-only; exit 1 if any check fails)
     Doctor(DoctorArgs),
     /// The key that signs your writes to a quipu server (no bearer on the wire)
@@ -296,6 +296,21 @@ pub struct VersionArgs {
     /// Print only the version number (for scripts)
     #[arg(short, long)]
     pub short: bool,
+}
+
+/// `sd info`.
+#[derive(Debug, Args)]
+pub struct InfoArgs {
+    /// Include the schema: the shapes' digest and target classes, and the
+    /// vocabularies (sd schema prints the --json schemas). br's --schema
+    #[arg(long)]
+    pub schema: bool,
+    /// Show this build's latest changelog section and exit (needs no store)
+    #[arg(long, conflicts_with = "thanks")]
+    pub whats_new: bool,
+    /// Show acknowledgements and exit (needs no store)
+    #[arg(long)]
+    pub thanks: bool,
 }
 
 /// `sd init`.
@@ -1145,7 +1160,7 @@ impl Command {
             | Command::Key { .. }
             | Command::Schema { .. }
             | Command::Capabilities { .. }
-            | Command::Info
+            | Command::Info(_)
             | Command::Config { .. }
             | Command::Show(_)
             | Command::List(_)
@@ -1222,7 +1237,7 @@ impl Command {
             Command::Completions(_) => "completions",
             Command::Version(_) => "version",
             Command::Where => "where",
-            Command::Info => "info",
+            Command::Info(_) => "info",
             Command::Doctor(_) => "doctor",
             Command::Key { command } => match command {
                 KeyCommand::Init { .. } => "key init",
