@@ -7,7 +7,8 @@ sd status                                   # the same as sd stats
 
 - `q` is quick capture: the title words are joined, and only the id is
   printed (in `--json`, `{id, title, tx}`). It takes `-p`, `-t`, `-l`
-  (repeatable, comma-separated allowed), `-d`/`--body` and `--parent`.
+  (repeatable, comma-separated allowed), `-d`/`--body`, `--parent` and
+  `-e`/`--estimate` (minutes).
 - `status` is an alias of [stats](stats.md), as in br.
 
 ## br verbs that are not sd's

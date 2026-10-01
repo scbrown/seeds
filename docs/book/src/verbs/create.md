@@ -18,6 +18,8 @@ sd create "Blocked work" --deps sd-a3f,related:sd-b7c
 | `--owner` | who owns the work (br's `owner`, usually an email) |
 | `--acceptance-criteria TEXT` (alias `--acceptance`) | acceptance criteria, often a `- [ ]` checklist |
 | `--external-ref REF` | a reference to the same work elsewhere (br's `external_ref`) |
+| `--due WHEN` | due date: `+1d`, `tomorrow`, `YYYY-MM-DD` or an RFC 3339 instant (br's `due_at`) |
+| `-e, --estimate MIN` | time estimate in minutes, 0 to 525960 (br's `estimated_minutes`) |
 | `-l, --labels` | comma-separated labels |
 | `--parent ID` | parent seed; the new id is `<parent>.<n>` |
 | `--deps` | comma-separated: `ID` (a `blocks` dependency) or `TYPE:ID` |

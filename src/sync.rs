@@ -291,6 +291,16 @@ pub fn diff_fields(a: &Seed, b: &Seed, a_name: &str, b_name: &str) -> Vec<String
         format!("{:?}", a.external_ref),
         format!("{:?}", b.external_ref),
     );
+    f(
+        "due_at",
+        format!("{:?}", a.due_at),
+        format!("{:?}", b.due_at),
+    );
+    f(
+        "estimated_minutes",
+        format!("{:?}", a.estimated_minutes),
+        format!("{:?}", b.estimated_minutes),
+    );
     f("owner", format!("{:?}", a.owner), format!("{:?}", b.owner));
     f(
         "labels",
@@ -472,6 +482,24 @@ fn merge_seed(base: Option<&Seed>, l: &Seed, r: &Seed, sides: Sides) -> (Seed, V
             &mut c,
             sides,
             dbg,
+        ),
+        due_at: pick(
+            "due_at",
+            base.map(|b| &b.due_at),
+            &l.due_at,
+            &r.due_at,
+            &mut c,
+            sides,
+            dbg,
+        ),
+        estimated_minutes: pick(
+            "estimated_minutes",
+            base.map(|b| &b.estimated_minutes),
+            &l.estimated_minutes,
+            &r.estimated_minutes,
+            &mut c,
+            sides,
+            |v| format!("{v:?}"),
         ),
         owner: pick(
             "owner",

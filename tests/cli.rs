@@ -1176,6 +1176,79 @@ fn design_acceptance_and_external_ref_round_trip() {
 }
 
 #[test]
+fn due_estimate_and_overdue_round_trip() {
+    // aegis-w3k75d.13 step 2: br's due_at, estimated_minutes and --overdue.
+    let sb = Sandbox::new("due-estimate");
+    let made = sb.json(&["create", "late", "--due", "2001-01-01", "-e", "90"]);
+    let late = made["id"].as_str().unwrap().to_string();
+    assert_eq!(made["due_at"], "2001-01-01", "{made}");
+    assert_eq!(made["estimated_minutes"], 90, "{made}");
+    let soon = sb.json(&["create", "soon", "--due", "+1d"]);
+    let soon = soon["id"].as_str().unwrap().to_string();
+    let none = sb.ok(&["create", "undated", "--silent"]).trim().to_string();
+    let q = sb.json(&["q", "quick", "-e", "15"]);
+    let q = q["id"].as_str().unwrap().to_string();
+    assert_eq!(sb.json(&["show", &q])[0]["estimated_minutes"], 15);
+
+    let ids = |v: &serde_json::Value| -> Vec<String> {
+        v["issues"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|s| s["id"].as_str().unwrap().to_string())
+            .collect()
+    };
+    // Only the past-due seed is overdue; the future and undated ones are not.
+    assert_eq!(
+        ids(&sb.json(&["list", "--overdue"])),
+        std::slice::from_ref(&late)
+    );
+    assert_eq!(
+        ids(&sb.json(&["search", "late", "--overdue"])),
+        std::slice::from_ref(&late)
+    );
+    // A closed seed is never overdue, even with --all (br: terminal is excluded).
+    sb.ok(&["close", &late]);
+    assert!(ids(&sb.json(&["list", "--overdue", "--all"])).is_empty());
+
+    // update sets, clears and refuses out-of-range values like br.
+    sb.ok(&[
+        "update",
+        &soon,
+        "--due",
+        "2001-01-02T03:04:05Z",
+        "--estimate",
+        "0",
+    ]);
+    let s = sb.json(&["show", &soon]);
+    assert_eq!(s[0]["due_at"], "2001-01-02T03:04:05Z");
+    assert_eq!(s[0]["estimated_minutes"], 0);
+    assert_eq!(
+        ids(&sb.json(&["list", "--overdue"])),
+        std::slice::from_ref(&soon)
+    );
+    sb.ok(&["update", &soon, "--due", ""]);
+    assert!(sb.json(&["show", &soon])[0]["due_at"].is_null());
+    for bad in [
+        vec!["update", none.as_str(), "--estimate", "-1"],
+        vec!["update", none.as_str(), "--estimate", "525961"],
+        vec!["update", none.as_str(), "--due", "someday"],
+        vec!["create", "x", "--due", "nope"],
+    ] {
+        assert_eq!(code(&sb.run(&bad)), 2, "{bad:?}");
+    }
+    assert!(sb.json(&["show", &none])[0]["estimated_minutes"].is_null());
+
+    let csv = sb.ok(&["list", "--all", "--format", "csv", "--fields", "id,due_at"]);
+    assert!(csv.contains(&format!("{late},2001-01-01")), "{csv}");
+    let text = sb.ok(&["show", &late]);
+    assert!(
+        text.contains("  due 2001-01-01") && text.contains("  estimate 90m"),
+        "{text}"
+    );
+}
+
+#[test]
 fn orphans_reads_the_git_log_of_the_current_repo() {
     let sb = Sandbox::new("orphans");
     let id = sb.ok(&["create", "x", "--silent"]).trim().to_string();
@@ -1407,7 +1480,7 @@ fn format_csv_on_list_and_search_quotes_like_rfc4180_and_refuses_what_it_would_i
         format!("id\n{id}\n")
     );
     for bad in [
-        vec!["list", "--format", "csv", "--fields", "id,due_at"],
+        vec!["list", "--format", "csv", "--fields", "id,nonsense"],
         vec!["list", "--fields", "id"],
         vec!["list", "--format", "csv", "--json"],
         vec!["ready", "--format", "csv"],

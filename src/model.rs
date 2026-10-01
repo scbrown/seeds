@@ -115,6 +115,10 @@ pub struct Seed {
     pub acceptance_criteria: Option<String>,
     /// A reference to the same work elsewhere (br's `external_ref`).
     pub external_ref: Option<String>,
+    /// When the work is due (br's `due_at`): a date or an RFC 3339 instant.
+    pub due_at: Option<String>,
+    /// A time estimate in minutes (br's `estimated_minutes`).
+    pub estimated_minutes: Option<u32>,
     /// Who owns the work (br's `owner`, usually an email); distinct from the
     /// assignee, who is doing it now.
     pub owner: Option<String>,
@@ -287,6 +291,10 @@ impl Seed {
             &self.acceptance_criteria,
         );
         opt(&mut f, term::external_ref(), &self.external_ref);
+        opt(&mut f, term::due_at(), &self.due_at);
+        if let Some(m) = self.estimated_minutes {
+            f.push((term::estimated_minutes(), Obj::Int(i64::from(m))));
+        }
         opt(&mut f, term::owner(), &self.owner);
         opt(&mut f, term::created_by(), &self.created_by);
         opt(&mut f, term::closed_at(), &self.closed_at);
@@ -363,6 +371,8 @@ impl Seed {
                 design: some("g"),
                 acceptance_criteria: some("k"),
                 external_ref: some("e"),
+                due_at: some("2026-01-01"),
+                estimated_minutes: Some(30),
                 owner: some("o"),
                 status: "closed".into(),
                 issue_type: "task".into(),
@@ -447,6 +457,8 @@ impl Seed {
             design: s(term::design()),
             acceptance_criteria: s(term::acceptance_criteria()),
             external_ref: s(term::external_ref()),
+            due_at: s(term::due_at()),
+            estimated_minutes: i(term::estimated_minutes()).and_then(|m| u32::try_from(m).ok()),
             owner: s(term::owner()),
             status: s(term::status()).unwrap_or_else(|| "open".into()),
             priority: i(term::priority())
@@ -561,6 +573,8 @@ impl Seed {
             "design": self.design,
             "acceptance_criteria": self.acceptance_criteria,
             "external_ref": self.external_ref,
+            "due_at": self.due_at,
+            "estimated_minutes": self.estimated_minutes,
             "owner": self.owner,
             "status": self.status,
             "priority": self.priority,

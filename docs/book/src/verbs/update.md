@@ -19,6 +19,8 @@ sd update sd-a3f --defer 2026-10-15      # hide from ready until then
 | `--assignee NAME` | set the assignee (`""` clears it) |
 | `--owner WHO` | set the owner (`""` clears it) |
 | `--external-ref REF` | a reference to the same work elsewhere, br's `external_ref` (`""` clears it) |
+| `--due WHEN` | due date, the forms of `--defer` (`""` clears it) |
+| `--estimate MIN` | time estimate in minutes, 0 to 525960 |
 | `--claim` | set assignee to the actor and status to `in_progress`, only if the seed is open, unclaimed and unblocked |
 | `--add-label`, `--remove-label` | repeatable |
 | `--defer DATE` | hide from `ready` until this date or instant (`""` clears it) |

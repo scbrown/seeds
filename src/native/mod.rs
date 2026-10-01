@@ -1955,6 +1955,8 @@ fn dispatch(cli: &Cli, cfg: &Resolved, ctx: &Ctx, b: &mut dyn Backend) -> Result
                 owner: a.owner.clone(),
                 acceptance_criteria: a.acceptance_criteria.clone(),
                 external_ref: a.external_ref.clone(),
+                due: a.due.clone(),
+                estimate: a.estimate.clone(),
                 labels: split_csv(&a.labels),
                 parent: a.parent.clone(),
                 deps: split_csv(&a.deps),
@@ -1992,6 +1994,7 @@ fn dispatch(cli: &Cli, cfg: &Resolved, ctx: &Ctx, b: &mut dyn Backend) -> Result
                 priority: a.priority.clone(),
                 labels: a.labels.iter().flat_map(|l| split_csv(&Some(l.clone()))).collect(),
                 parent: a.parent.clone(),
+                estimate: a.estimate.clone(),
                 ..engine::CreateReq::default()
             };
             let (seed, tx) = engine::create(b, ctx, &req)?;
@@ -2024,6 +2027,7 @@ fn dispatch(cli: &Cli, cfg: &Resolved, ctx: &Ctx, b: &mut dyn Backend) -> Result
                     priority_min: a.priority_min.clone(),
                     priority_max: a.priority_max.clone(),
                     ids: a.id.clone(),
+                    overdue_at: a.overdue.then(|| ctx.now.clone()),
                 },
                 all: a.all,
                 limit: a.limit,
@@ -2104,6 +2108,7 @@ fn dispatch(cli: &Cli, cfg: &Resolved, ctx: &Ctx, b: &mut dyn Backend) -> Result
                     priority_min: a.priority_min.clone(),
                     priority_max: a.priority_max.clone(),
                     ids: a.id.clone(),
+                    overdue_at: a.overdue.then(|| ctx.now.clone()),
                 },
                 all: a.all,
                 limit: a.limit,
@@ -2534,6 +2539,8 @@ fn dispatch(cli: &Cli, cfg: &Resolved, ctx: &Ctx, b: &mut dyn Backend) -> Result
                 design: a.design.clone(),
                 acceptance_criteria: a.acceptance_criteria.clone(),
                 external_ref: a.external_ref.clone(),
+                due: a.due.clone(),
+                estimate: a.estimate.clone(),
                 owner: a.owner.clone(),
                 status: a.status.clone(),
                 priority: a.priority.clone(),

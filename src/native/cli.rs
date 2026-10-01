@@ -402,7 +402,7 @@ pub struct CreateArgs {
     #[arg(short = 'f', long = "file", value_name = "FILE", conflicts_with_all = [
         "title", "title_flag", "issue_type", "priority", "description", "status", "defer",
         "description_file", "assignee", "owner", "labels", "parent", "deps", "workflow_run",
-        "step", "visit", "acceptance_criteria", "external_ref",
+        "step", "visit", "acceptance_criteria", "external_ref", "due", "estimate",
     ])]
     pub file: Option<String>,
     /// Title (positional form)
@@ -440,6 +440,12 @@ pub struct CreateArgs {
     /// A reference to the same work elsewhere (a ticket, a URL)
     #[arg(long)]
     pub external_ref: Option<String>,
+    /// Due date: +1d, tomorrow, YYYY-MM-DD or an RFC 3339 instant
+    #[arg(long)]
+    pub due: Option<String>,
+    /// Time estimate in minutes
+    #[arg(short = 'e', long)]
+    pub estimate: Option<String>,
     /// Comma-separated labels
     #[arg(short, long)]
     pub labels: Option<String>,
@@ -517,6 +523,9 @@ pub struct ListArgs {
     /// Notes contain this (case-insensitive)
     #[arg(long)]
     pub notes_contains: Option<String>,
+    /// Only overdue seeds: due before now and not closed
+    #[arg(long)]
+    pub overdue: bool,
     /// Only seeds with ANY of these labels (repeatable)
     #[arg(long)]
     pub label_any: Vec<String>,
@@ -593,6 +602,9 @@ pub struct SearchArgs {
     /// Notes contain this (case-insensitive)
     #[arg(long)]
     pub notes_contains: Option<String>,
+    /// Only overdue seeds: due before now and not closed
+    #[arg(long)]
+    pub overdue: bool,
     /// Only seeds with ANY of these labels (repeatable)
     #[arg(long)]
     pub label_any: Vec<String>,
@@ -748,6 +760,9 @@ pub struct QArgs {
     /// Parent seed
     #[arg(long)]
     pub parent: Option<String>,
+    /// Time estimate in minutes
+    #[arg(short = 'e', long)]
+    pub estimate: Option<String>,
 }
 
 /// A br verb whose capability lives elsewhere in the stack: any arguments are
@@ -891,6 +906,12 @@ pub struct UpdateArgs {
     /// New external reference ("" clears it)
     #[arg(long)]
     pub external_ref: Option<String>,
+    /// New due date: +1d, tomorrow, YYYY-MM-DD or an RFC 3339 instant ("" clears it)
+    #[arg(long)]
+    pub due: Option<String>,
+    /// New time estimate in minutes
+    #[arg(long)]
+    pub estimate: Option<String>,
     /// New owner (usually an email; "" clears it)
     #[arg(long)]
     pub owner: Option<String>,
