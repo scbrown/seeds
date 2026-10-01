@@ -66,6 +66,7 @@ impl Env {
             "SEEDS_AGENT_NAME",
             "SEEDS_HARNESS",
             "SEEDS_MODEL",
+            "SEEDS_SESSION",
             "BR_AGENT_NAME",
             "BR_HARNESS",
             "BR_MODEL",
@@ -958,6 +959,13 @@ fn attribution_claims_read_back_identically_in_local_and_remote_modes() {
             &["update", &id, "-p", "2"],
             &e(&[("BR_MODEL", "br-model"), ("SEEDS_MODEL", "seeds-model")]),
         );
+        // br's `close --session`: a claim like the others, flag beats env.
+        env.ok(
+            dir,
+            &["close", &id, "--session", "sess-flag"],
+            &e(&[("SEEDS_SESSION", "sess-env")]),
+        );
+        env.ok(dir, &["reopen", &id], &e(&[("SEEDS_SESSION", "sess-env")]));
         let h: Value =
             serde_json::from_str(&env.ok(dir, &["history", &id, "--json"], &e(&[]))).unwrap();
         Value::Array(
@@ -970,14 +978,18 @@ fn attribution_claims_read_back_identically_in_local_and_remote_modes() {
         )
     };
     let want = serde_json::json!([
-        {"agent_name": "gennaro", "harness": "claude-code", "model": null, "source_kind": "declared"},
+        {"agent_name": "gennaro", "harness": "claude-code", "model": null, "session": null, "source_kind": "declared"},
         null,
-        {"agent_name": null, "harness": null, "model": "seeds-model", "source_kind": "declared"},
+        {"agent_name": null, "harness": null, "model": "seeds-model", "session": null, "source_kind": "declared"},
+        {"agent_name": null, "harness": null, "model": null, "session": "sess-flag", "source_kind": "declared"},
+        {"agent_name": null, "harness": null, "model": null, "session": "sess-env", "source_kind": "declared"},
     ]);
     let local = env.dir("local");
     assert_eq!(run(&env, &local, &[]), want);
     let o = env.sd(&local, &["list", "--model", "m"], &[]);
     assert_eq!(o.status.code(), Some(2), "a read verb refuses --model");
+    let o = env.sd(&local, &["list", "--session", "s"], &[]);
+    assert_eq!(o.status.code(), Some(2), "a read verb refuses --session");
 
     let Some(url) = env.start_server() else {
         eprintln!("SKIPPED (remote half): set SEEDS_TEST_QUIPU_SERVER to a quipu-server binary");

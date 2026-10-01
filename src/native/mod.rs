@@ -1411,10 +1411,10 @@ fn split_csv(s: &Option<String>) -> Vec<String> {
 /// would record nothing, so it is refused; the environment is ambient and is
 /// simply unused by reads.
 fn claims(cli: &Cli) -> Result<crate::backend::Claims> {
-    let flags = [&cli.agent_name, &cli.harness, &cli.model];
+    let flags = [&cli.agent_name, &cli.harness, &cli.model, &cli.session];
     if !cli.command.writes() && flags.iter().any(|f| f.is_some()) {
         return Err(SdError::usage(
-            "--agent-name/--harness/--model attribute a write; this verb writes nothing",
+            "--agent-name/--harness/--model/--session attribute a write; this verb writes nothing",
         ));
     }
     let pick = |flag: &Option<String>, ours: &str, br: &str| {
@@ -1428,6 +1428,12 @@ fn claims(cli: &Cli) -> Result<crate::backend::Claims> {
         agent_name: pick(&cli.agent_name, "SEEDS_AGENT_NAME", "BR_AGENT_NAME"),
         harness: pick(&cli.harness, "SEEDS_HARNESS", "BR_HARNESS"),
         model: pick(&cli.model, "SEEDS_MODEL", "BR_MODEL"),
+        session: cli
+            .session
+            .clone()
+            .or_else(|| std::env::var("SEEDS_SESSION").ok())
+            .map(|v| v.trim().to_string())
+            .filter(|v| !v.is_empty()),
     })
 }
 
@@ -1826,6 +1832,7 @@ fn dispatch(cli: &Cli, cfg: &Resolved, ctx: &Ctx, b: &mut dyn Backend) -> Result
                             "agent_name": c.agent_name,
                             "harness": c.harness,
                             "model": c.model,
+                            "session": c.session,
                             "source_kind": "declared",
                         });
                     }
@@ -1847,6 +1854,7 @@ fn dispatch(cli: &Cli, cfg: &Resolved, ctx: &Ctx, b: &mut dyn Backend) -> Result
                         ("agent", &c.agent_name),
                         ("harness", &c.harness),
                         ("model", &c.model),
+                        ("session", &c.session),
                     ]
                     .iter()
                     .filter_map(|(k, v)| v.as_ref().map(|v| format!("{k}={v}")))

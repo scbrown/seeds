@@ -44,6 +44,7 @@ impl Sandbox {
             "SEEDS_AGENT_NAME",
             "SEEDS_HARNESS",
             "SEEDS_MODEL",
+            "SEEDS_SESSION",
             "BR_AGENT_NAME",
             "BR_HARNESS",
             "BR_MODEL",
@@ -844,6 +845,10 @@ fn capabilities_are_derived_and_classify_every_verb() {
         "write"
     );
     assert_eq!(code(&sb.run(&["capabilities", "--for", "no such verb"])), 2);
+    // Visible, so a reader (and parity-diff.py) can find br's spelling.
+    assert!(sb
+        .ok(&["capabilities", "--help"])
+        .contains("[alias: --for]"));
     // Reads nothing from a ledger, creates nothing.
     assert!(!sb.work().join(".seeds").exists());
 }
@@ -933,6 +938,10 @@ fn update_changes_type_labels_parent_and_description_like_br() {
     assert_eq!(up[0]["issue_type"], "bug");
     assert_eq!(up[0]["labels"], serde_json::json!(["z"]));
     assert_eq!(up[0]["parent"], p.as_str());
+    // br's --labels is its alias for --set-labels: it also replaces all.
+    let up = sb.json(&["update", &a, "--labels", "w,v"]);
+    assert_eq!(up[0]["labels"], serde_json::json!(["v", "w"]));
+    assert!(sb.ok(&["update", "--help"]).contains("[alias: --labels]"));
     // A seed cannot become its own ancestor.
     assert_eq!(code(&sb.run(&["update", &p, "--parent", &a])), 5);
     // "" detaches; --body is --description; --description-file reads a file.
