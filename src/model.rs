@@ -244,6 +244,66 @@ impl Seed {
         f
     }
 
+    /// Every predicate this build writes on a seed or a comment. A write
+    /// replaces only these; any other predicate on the entity (written by a
+    /// NEWER sd that models more) is carried forward untouched, so an older
+    /// writer never erases what it does not understand (aegis-w3k75d.13). The
+    /// set is derived from `facts()` on a seed and a comment with every field
+    /// set, so it cannot fall behind `facts()`.
+    pub fn modelled_predicates() -> &'static BTreeSet<String> {
+        static SET: std::sync::OnceLock<BTreeSet<String>> = std::sync::OnceLock::new();
+        SET.get_or_init(|| {
+            let comment = Comment {
+                seed: "x".into(),
+                index: 1,
+                author: "a".into(),
+                text: "t".into(),
+                created_at: "c".into(),
+            };
+            Seed::maximal()
+                .facts()
+                .into_iter()
+                .chain(comment.facts())
+                .map(|(p, _)| p)
+                .collect()
+        })
+    }
+
+    /// A seed with EVERY field set, so its `facts()` names every predicate a
+    /// seed can carry. A test fails if a field is left unset here (a new field
+    /// must be added, or clearing it would stop working).
+    #[doc(hidden)]
+    pub fn maximal() -> Seed {
+        {
+            let some = |s: &str| Some(s.to_string());
+            let one = |s: &str| [s.to_string()].into_iter().collect::<BTreeSet<_>>();
+            Seed {
+                id: "x".into(),
+                title: "t".into(),
+                description: some("d"),
+                notes: some("n"),
+                owner: some("o"),
+                status: "closed".into(),
+                issue_type: "task".into(),
+                assignee: some("a"),
+                labels: one("l"),
+                created_at: "c".into(),
+                created_by: some("b"),
+                updated_at: "u".into(),
+                closed_at: some("c"),
+                close_reason: some("r"),
+                outcome: some("done"),
+                defer_until: some("f"),
+                blocked_on: one("y"),
+                related: one("y"),
+                parent: some("p"),
+                discovered_from: one("y"),
+                workflow_run: some("urn:w"),
+                ..Seed::default()
+            }
+        }
+    }
+
     /// Rebuild a seed from its facts. `None` when the facts do not describe a
     /// seed (no `aegis:WorkItem` type or no identifier).
     pub fn from_facts(facts: &[Fact]) -> Option<Seed> {
@@ -556,6 +616,22 @@ impl Snapshot {
 
 #[cfg(test)]
 mod tests {
+
+    // aegis-w3k75d.13: modelled_predicates() is derived from Seed::maximal(),
+    // so a field left unset there would drop out of it, and clearing that field
+    // would silently stop retracting its old value. Every field must be set.
+    #[test]
+    fn the_maximal_seed_sets_every_field_so_no_predicate_is_missed() {
+        let j = Seed::maximal().to_json();
+        for (k, v) in j.as_object().unwrap() {
+            let empty = v.is_null() || v.as_array().is_some_and(Vec::is_empty);
+            assert!(!empty, "Seed::maximal() leaves {k} unset; set it there");
+        }
+        let p = Seed::modelled_predicates();
+        assert!(p.contains(&term::outcome()) && p.contains(&term::workflow_run()));
+        assert!(p.contains(&term::text()), "comment predicates are in too");
+    }
+
     use super::*;
 
     fn sample() -> Seed {

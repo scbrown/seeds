@@ -323,6 +323,15 @@ impl Backend for QuipuBackend {
                 .iter()
                 .map(|c| (vocab::comment_iri(&c.seed, c.index), c.facts())),
         );
+        // Only predicates this build models are replaced; any other fact on
+        // the entity came from a newer sd and is carried forward
+        // (aegis-w3k75d.13). A predicate never interned is on no entity.
+        let mut modelled = std::collections::BTreeSet::new();
+        for p in crate::model::Seed::modelled_predicates() {
+            if let Some(id) = self.store.lookup(p)? {
+                modelled.insert(id);
+            }
+        }
         for (iri, new_facts) in &entities {
             let e = self.store.intern(iri)?;
             let facts = self.store.entity_facts_in_graph(e, g)?;
@@ -331,9 +340,10 @@ impl Backend for QuipuBackend {
                 desired.push((self.store.intern(p)?, self.value_of(o)?));
             }
             for f in &facts {
-                if !desired
-                    .iter()
-                    .any(|(a, v)| *a == f.attribute && *v == f.value)
+                if modelled.contains(&f.attribute)
+                    && !desired
+                        .iter()
+                        .any(|(a, v)| *a == f.attribute && *v == f.value)
                 {
                     datums.push(Datum {
                         entity: e,

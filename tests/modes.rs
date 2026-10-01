@@ -986,3 +986,85 @@ fn attribution_claims_read_back_identically_in_local_and_remote_modes() {
     let work = env.dir("remote-work");
     assert_eq!(run(&env, &work, &[("SEEDS_QUIPU_URL", url.as_str())]), want);
 }
+
+// Forward compatibility in remote mode (aegis-w3k75d.13): a fact whose
+// predicate this sd does not model survives this sd's update of the seed.
+// Released 0.0.2 erased it (measured: 1 row -> 0 after `update -p 1`).
+#[test]
+fn a_remote_update_keeps_facts_this_sd_does_not_model() {
+    let mut env = Env::new("remote-forward-compat");
+    let Some(url) = env.start_server() else {
+        eprintln!("SKIPPED: set SEEDS_TEST_QUIPU_SERVER to a quipu-server binary to run this");
+        return;
+    };
+    let work = env.dir("work");
+    let remote = [("SEEDS_QUIPU_URL", url.as_str())];
+    let id = env
+        .ok(&work, &["create", "x", "--silent"], &remote)
+        .trim()
+        .to_string();
+    let project = std::fs::read_to_string(work.join(".seeds/project-id")).unwrap();
+    // The project graph as the SERVER names it (prefix-id), not re-derived.
+    let graphs = Command::new("curl")
+        .args(["-s", "-m", "10", &format!("{url}/graphs")])
+        .output()
+        .unwrap();
+    let graphs: Value = serde_json::from_slice(&graphs.stdout).unwrap();
+    let graph = graphs["graphs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|g| g["iri"].as_str())
+        .find(|g| g.ends_with(project.trim()))
+        .expect("the project graph is registered")
+        .to_string();
+    let item = seeds::vocab::item_iri(&id);
+    let pred = "https://seeds.local/ontology/fieldFromTheFuture";
+    let post = |path: &str, ctype: &str, body: String| {
+        Command::new("curl")
+            .args([
+                "-s",
+                "-m",
+                "10",
+                "-X",
+                "POST",
+                "-H",
+                &format!("content-type: {ctype}"),
+            ])
+            .arg("--data-binary")
+            .arg(body)
+            .arg(format!("{url}{path}"))
+            .output()
+            .unwrap()
+    };
+    let o = post(
+        "/update",
+        "application/sparql-update",
+        format!("INSERT DATA {{ GRAPH <{graph}> {{ <{item}> <{pred}> \"kept\" }} }}"),
+    );
+    assert!(o.status.success());
+    let rows = |p: &str| -> usize {
+        let o = post(
+            "/query",
+            "application/json",
+            serde_json::json!({
+                "query": format!("SELECT ?v WHERE {{ GRAPH <{graph}> {{ <{item}> <{p}> ?v }} }}")
+            })
+            .to_string(),
+        );
+        let v: Value = serde_json::from_slice(&o.stdout).unwrap();
+        v["rows"].as_array().map_or(0, Vec::len)
+    };
+    let label = "http://www.w3.org/2000/01/rdf-schema#label";
+    assert_eq!(
+        (rows(pred), rows(label)),
+        (1, 1),
+        "control: both facts present"
+    );
+    env.ok(&work, &["update", &id, "-p", "1", "--title", "y"], &remote);
+    assert_eq!(rows(pred), 1, "the update kept the fact it does not model");
+    assert_eq!(rows(label), 1, "and replaced the one it does (title)");
+    let shown: Value =
+        serde_json::from_str(&env.ok(&work, &["show", &id, "--json"], &remote)).unwrap();
+    assert_eq!(shown[0]["title"], "y");
+}

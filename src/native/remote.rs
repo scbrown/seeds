@@ -525,17 +525,33 @@ impl Backend for RemoteBackend {
         let mut absent = String::new();
         let mut unions: Vec<String> = Vec::new();
         let mut var = 0usize;
-        let mut replace = |iri: &str, delete: &mut String, unions: &mut Vec<String>| {
-            delete.push_str(&format!("<{iri}> ?p{var} ?o{var} . "));
-            unions.push(format!("{{ GRAPH <{g}> {{ <{iri}> ?p{var} ?o{var} }} }}"));
-            var += 1;
-        };
+        // Replacing a seed deletes only the predicates this build models: any
+        // other fact on it came from a newer sd and is carried forward
+        // (aegis-w3k75d.13). Removing an entity outright deletes everything.
+        let modelled = crate::model::Seed::modelled_predicates()
+            .iter()
+            .map(|p| format!("<{p}>"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let mut replace =
+            |iri: &str, only_modelled: bool, delete: &mut String, unions: &mut Vec<String>| {
+                delete.push_str(&format!("<{iri}> ?p{var} ?o{var} . "));
+                let filter = if only_modelled {
+                    format!(" FILTER(?p{var} IN ({modelled}))")
+                } else {
+                    String::new()
+                };
+                unions.push(format!(
+                    "{{ GRAPH <{g}> {{ <{iri}> ?p{var} ?o{var} }}{filter} }}"
+                ));
+                var += 1;
+            };
         for w in &batch.seeds {
             let iri = vocab::item_iri(&w.seed.id);
             match w.expected_revision {
                 Some(r) => {
                     guards.push_str(&format!("<{iri}> <{rev}> {r} . "));
-                    replace(&iri, &mut delete, &mut unions);
+                    replace(&iri, true, &mut delete, &mut unions);
                 }
                 None => absent.push_str(&format!(
                     "FILTER NOT EXISTS {{ GRAPH <{g}> {{ <{iri}> ?x ?y }} }} "
@@ -548,10 +564,15 @@ impl Backend for RemoteBackend {
         for (id, r) in &batch.delete_seeds {
             let iri = vocab::item_iri(id);
             guards.push_str(&format!("<{iri}> <{rev}> {r} . "));
-            replace(&iri, &mut delete, &mut unions);
+            replace(&iri, false, &mut delete, &mut unions);
         }
         for (seed, index) in &batch.delete_comments {
-            replace(&vocab::comment_iri(seed, *index), &mut delete, &mut unions);
+            replace(
+                &vocab::comment_iri(seed, *index),
+                false,
+                &mut delete,
+                &mut unions,
+            );
         }
         for c in &batch.comments {
             let iri = vocab::comment_iri(&c.seed, c.index);
