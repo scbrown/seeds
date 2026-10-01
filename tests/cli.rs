@@ -34,6 +34,9 @@ impl Sandbox {
             .env("HOME", self.root.join("home"))
             .env("XDG_CONFIG_HOME", self.root.join("home/.config"))
             .env("SEEDS_ACTOR", "tester")
+            // A bare --due date is 09:00 LOCAL; pin the zone so results do
+            // not depend on the host.
+            .env("TZ", "America/New_York")
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
         for k in [
@@ -1181,7 +1184,8 @@ fn due_estimate_and_overdue_round_trip() {
     let sb = Sandbox::new("due-estimate");
     let made = sb.json(&["create", "late", "--due", "2001-01-01", "-e", "90"]);
     let late = made["id"].as_str().unwrap().to_string();
-    assert_eq!(made["due_at"], "2001-01-01", "{made}");
+    // A bare date is 09:00 local (br's rule): EST in January, so 14:00Z.
+    assert_eq!(made["due_at"], "2001-01-01T14:00:00Z", "{made}");
     assert_eq!(made["estimated_minutes"], 90, "{made}");
     let soon = sb.json(&["create", "soon", "--due", "+1d"]);
     let soon = soon["id"].as_str().unwrap().to_string();
@@ -1240,12 +1244,56 @@ fn due_estimate_and_overdue_round_trip() {
     assert!(sb.json(&["show", &none])[0]["estimated_minutes"].is_null());
 
     let csv = sb.ok(&["list", "--all", "--format", "csv", "--fields", "id,due_at"]);
-    assert!(csv.contains(&format!("{late},2001-01-01")), "{csv}");
+    assert!(
+        csv.contains(&format!("{late},2001-01-01T14:00:00Z")),
+        "{csv}"
+    );
     let text = sb.ok(&["show", &late]);
     assert!(
-        text.contains("  due 2001-01-01") && text.contains("  estimate 90m"),
+        text.contains("  due 2001-01-01T14:00:00Z") && text.contains("  estimate 90m"),
         "{text}"
     );
+}
+
+#[test]
+fn a_bare_due_date_is_nine_local_as_an_instant() {
+    // Spec (aegis-w3k75d.13, wu's review of seeds#75): a date-only --due, or
+    // `tomorrow`, is 09:00 in the local zone, stored as an RFC 3339 UTC
+    // instant; other forms pass through. The zone is America/New_York here.
+    let sb = Sandbox::new("due-local");
+    let due = |args: &[&str]| sb.json(args)["due_at"].as_str().unwrap().to_string();
+    // EDT (UTC-4) in October, EST (UTC-5) in December.
+    assert_eq!(
+        due(&["create", "a", "--due", "2026-10-01"]),
+        "2026-10-01T13:00:00Z"
+    );
+    assert_eq!(
+        due(&["create", "b", "--due", "2026-12-01"]),
+        "2026-12-01T14:00:00Z"
+    );
+    // An instant is kept as given.
+    assert_eq!(
+        due(&["create", "c", "--due", "2026-10-01T00:00:00Z"]),
+        "2026-10-01T00:00:00Z"
+    );
+    // `tomorrow` is an instant at 09:00 local too, never a bare date.
+    let t = due(&["create", "d", "--due", "tomorrow"]);
+    assert!(t.ends_with(":00:00Z") && t.len() == 20, "{t}");
+    // The same date under another zone moves with it.
+    let o = sb
+        .cmd(
+            &sb.work(),
+            &["create", "e", "--due", "2026-10-01", "--json"],
+        )
+        .env("TZ", "UTC")
+        .output()
+        .unwrap();
+    let v: Value = serde_json::from_slice(&o.stdout).unwrap();
+    assert_eq!(v["due_at"], "2026-10-01T09:00:00Z");
+    // An impossible date is refused; nothing is written.
+    let before = sb.json(&["count"])["count"].clone();
+    assert_eq!(code(&sb.run(&["create", "f", "--due", "2026-02-30"])), 2);
+    assert_eq!(sb.json(&["count"])["count"], before);
 }
 
 #[test]

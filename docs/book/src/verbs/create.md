@@ -18,7 +18,7 @@ sd create "Blocked work" --deps sd-a3f,related:sd-b7c
 | `--owner` | who owns the work (br's `owner`, usually an email) |
 | `--acceptance-criteria TEXT` (alias `--acceptance`) | acceptance criteria, often a `- [ ]` checklist |
 | `--external-ref REF` | a reference to the same work elsewhere (br's `external_ref`) |
-| `--due WHEN` | due date: `+1d`, `tomorrow`, `YYYY-MM-DD` or an RFC 3339 instant (br's `due_at`) |
+| `--due WHEN` | due date: `+1d`, `tomorrow`, `YYYY-MM-DD` or an RFC 3339 instant (br's `due_at`). A bare date and `tomorrow` mean 09:00 local time, stored as a UTC instant, as br does |
 | `-e, --estimate MIN` | time estimate in minutes, 0 to 525960 (br's `estimated_minutes`) |
 | `-l, --labels` | comma-separated labels |
 | `--parent ID` | parent seed; the new id is `<parent>.<n>` |
