@@ -166,6 +166,10 @@ pub struct Seed {
     pub workflow_run: Option<String>,
     /// The compare-and-set token: 1 at create, +1 on every write to the seed.
     pub revision: u64,
+    /// Whether the seed lives in the project's ephemeral graph (br's
+    /// `--ephemeral`): visible to every read, never shared or exported, never
+    /// ready. Not a fact: it is which graph the seed's facts are in.
+    pub ephemeral: bool,
     /// Facts this sd does not model (a NEWER sd wrote them), as
     /// (predicate, object). Read by `from_facts`, written back by `facts`,
     /// so import, sync and renumber carry them instead of dropping them
@@ -499,6 +503,8 @@ impl Seed {
             revision: i(term::revision())
                 .and_then(|r| u64::try_from(r).ok())
                 .unwrap_or(0),
+            // Set by Snapshot::from_graphs, which knows the graph.
+            ephemeral: false,
             extra: unmodelled(facts, &term::work_item()),
         })
     }
@@ -599,6 +605,7 @@ impl Seed {
             "dependency_count": self.dependencies().len(),
             "workflow_run": self.workflow_run,
             "revision": self.revision,
+            "ephemeral": self.ephemeral,
         })
     }
 }
@@ -692,7 +699,51 @@ pub struct Snapshot {
 }
 
 impl Snapshot {
-    /// Build a snapshot from facts grouped by subject IRI.
+    /// THE read of a project: the project graph and its ephemeral graph,
+    /// unioned, with every seed from the second marked ephemeral. Every
+    /// backend's `snapshot` goes through this, so no read path can see one
+    /// graph without the other.
+    pub fn from_graphs(
+        project: &BTreeMap<String, Vec<Fact>>,
+        ephemeral: &BTreeMap<String, Vec<Fact>>,
+    ) -> Snapshot {
+        let mut snap = Snapshot::from_subjects(project);
+        let eph = Snapshot::from_subjects(ephemeral);
+        for (id, mut seed) in eph.seeds {
+            seed.ephemeral = true;
+            snap.seeds.insert(id, seed);
+        }
+        snap.comments.extend(eph.comments);
+        snap.comments
+            .sort_by(|a, b| (&a.seed, a.index).cmp(&(&b.seed, b.index)));
+        snap
+    }
+
+    /// The part of the project a ledger carries: every seed except the
+    /// ephemeral ones, and their comments. sync, import and the pendant
+    /// compare THIS, so an ephemeral seed is never pushed, pulled or deleted
+    /// by a ledger that cannot hold it.
+    pub fn shared(&self) -> Snapshot {
+        let seeds: BTreeMap<String, Seed> = self
+            .seeds
+            .iter()
+            .filter(|(_, s)| !s.ephemeral)
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect();
+        let comments = self
+            .comments
+            .iter()
+            .filter(|c| seeds.contains_key(&c.seed))
+            .cloned()
+            .collect();
+        Snapshot {
+            seeds,
+            comments,
+            tx: self.tx,
+        }
+    }
+
+    /// Build a snapshot from facts grouped by subject IRI (one graph).
     pub fn from_subjects(by_subject: &BTreeMap<String, Vec<Fact>>) -> Snapshot {
         let mut snap = Snapshot::default();
         for facts in by_subject.values() {

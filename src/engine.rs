@@ -60,6 +60,9 @@ pub struct CreateReq {
     pub slug: Option<String>,
     /// Governing instructions for an agent (br's `agent_context`): JSON text.
     pub agent_context: Option<String>,
+    /// Create the seed in the project's ephemeral graph (br's `--ephemeral`):
+    /// visible to every read, never shared or exported, never ready.
+    pub ephemeral: bool,
     /// Dependencies, br's form: `id` (blocks) or `type:id`.
     pub deps: Vec<String>,
     /// The shuttle run that creates or drives this seed (an IRI or a bare run id).
@@ -139,6 +142,7 @@ fn new_seed(
         parent: req.parent.clone(),
         workflow_run: run,
         revision: 1,
+        ephemeral: req.ephemeral,
         ..Seed::default()
     };
     for spec in &req.deps {
@@ -1740,6 +1744,9 @@ pub fn ready_by_model(snap: &Snapshot, now: &str) -> Vec<String> {
         .values()
         .filter(|s| s.status == "open" && snap.open_blockers(s).is_empty())
         .filter(|s| !is_deferred(s, now))
+        // Ephemeral seeds are never ready (br); the SPARQL definition gets
+        // this by reading only the project graph.
+        .filter(|s| !s.ephemeral)
         .map(|s| s.id.clone())
         .collect()
 }

@@ -286,6 +286,17 @@ pub fn decode(s: &str) -> String {
     String::from_utf8_lossy(&out).into_owned()
 }
 
+/// The side graph holding a project's ephemeral seeds (br's `--ephemeral`):
+/// read by every snapshot, never shared, so a pendant or ledger carries only
+/// the project graph. A seed stays in the graph it was created in.
+pub fn ephemeral_graph(graph: &str) -> String {
+    if graph.contains('#') {
+        format!("{graph}-seeds-ephemeral")
+    } else {
+        format!("{graph}#seeds-ephemeral")
+    }
+}
+
 /// The side graph holding who wrote what (`seeds:Write` records and their
 /// attribution claims). Snapshots and exports never read it.
 pub fn provenance_graph(graph: &str) -> String {

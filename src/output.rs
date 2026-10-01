@@ -496,6 +496,9 @@ pub fn view_text(v: &SeedView) -> String {
     if let Some(c) = &s.agent_context {
         out.push(format!("  agent context: {c}"));
     }
+    if s.ephemeral {
+        out.push("  ephemeral: not in the shared ledger, never ready".into());
+    }
     if !v.dependencies.is_empty() {
         out.push(String::new());
         out.push("  depends on:".into());

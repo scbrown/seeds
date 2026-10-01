@@ -54,6 +54,7 @@ pub struct RemoteBackend {
     signer: Option<super::attest::Signer>,
     agent: ureq::Agent,
     graph_registered: bool,
+    ephemeral_registered: bool,
 }
 
 fn transport(url: &str, e: &ureq::Transport) -> SdError {
@@ -145,6 +146,7 @@ impl RemoteBackend {
             signer,
             agent,
             graph_registered: false,
+            ephemeral_registered: false,
         };
         match b.agent.get(&format!("{}/health", b.base)).call() {
             Ok(_) => Ok(b),
@@ -249,12 +251,9 @@ impl RemoteBackend {
         Ok(out)
     }
 
-    fn count(&self, at: Option<u64>) -> Result<usize> {
+    fn count(&self, graph: &str, at: Option<u64>) -> Result<usize> {
         let rows = self.select(
-            &format!(
-                "SELECT (COUNT(*) AS ?n) WHERE {{ GRAPH <{}> {{ ?s ?p ?o }} }}",
-                self.graph
-            ),
+            &format!("SELECT (COUNT(*) AS ?n) WHERE {{ GRAPH <{graph}> {{ ?s ?p ?o }} }}"),
             at,
         )?;
         match rows.first().and_then(|r| r.get("n")) {
@@ -266,18 +265,31 @@ impl RemoteBackend {
         }
     }
 
+    /// The project graph's facts, grouped by subject.
     fn facts(&self, at: Option<u64>) -> Result<BTreeMap<String, Vec<Fact>>> {
+        self.graph_facts(&self.graph, at)
+    }
+
+    /// The project's ephemeral graph's facts, grouped by subject.
+    fn ephemeral_facts(&self, at: Option<u64>) -> Result<BTreeMap<String, Vec<Fact>>> {
+        self.graph_facts(&crate::vocab::ephemeral_graph(&self.graph), at)
+    }
+
+    /// One graph's facts, grouped by subject, read consistently in pages.
+    fn graph_facts(&self, graph: &str, at: Option<u64>) -> Result<BTreeMap<String, Vec<Fact>>> {
         for _attempt in 0..3 {
-            let expected = self.count(at)?;
+            let expected = self.count(graph, at)?;
             let mut by_subject: BTreeMap<String, Vec<Fact>> = BTreeMap::new();
+            if expected == 0 {
+                return Ok(by_subject);
+            }
             let mut total = 0;
             let mut offset = 0;
             loop {
                 let rows = self.select(
                     &format!(
-                        "SELECT ?s ?p ?o WHERE {{ GRAPH <{}> {{ ?s ?p ?o }} }} \
-                         ORDER BY ?s ?p ?o LIMIT {PAGE} OFFSET {offset}",
-                        self.graph
+                        "SELECT ?s ?p ?o WHERE {{ GRAPH <{graph}> {{ ?s ?p ?o }} }} \
+                         ORDER BY ?s ?p ?o LIMIT {PAGE} OFFSET {offset}"
                     ),
                     at,
                 )?;
@@ -307,15 +319,21 @@ impl RemoteBackend {
         ))
     }
 
-    fn register_graph(&mut self) -> Result<()> {
-        if self.graph_registered {
+    fn register_graph(&mut self, ephemeral: bool) -> Result<()> {
+        if self.graph_registered && (!ephemeral || self.ephemeral_registered) {
             return Ok(());
         }
         // Create only what is missing. /graphs is an open read, so a client that
         // signs its writes (no bearer) can still write to graphs that exist;
         // /graph/create needs whatever write credential the server accepts.
         let existing = self.graph_iris();
-        for g in [self.graph.clone(), provenance_graph(&self.graph)] {
+        let mut graphs = vec![self.graph.clone(), provenance_graph(&self.graph)];
+        if ephemeral {
+            // Created on first use, so a project that never writes an
+            // ephemeral seed never has the graph.
+            graphs.push(crate::vocab::ephemeral_graph(&self.graph));
+        }
+        for g in graphs {
             if existing.as_ref().is_some_and(|e| e.contains(&g)) {
                 continue;
             }
@@ -332,6 +350,7 @@ impl RemoteBackend {
             }
         }
         self.graph_registered = true;
+        self.ephemeral_registered |= ephemeral;
         Ok(())
     }
 
@@ -471,7 +490,7 @@ fn sparql_obj(o: &Obj) -> String {
 
 impl Backend for RemoteBackend {
     fn snapshot(&self, at: Option<u64>) -> Result<Snapshot> {
-        let mut snap = Snapshot::from_subjects(&self.facts(at)?);
+        let mut snap = Snapshot::from_graphs(&self.facts(at)?, &self.ephemeral_facts(at)?);
         snap.tx = at.unwrap_or(0);
         Ok(snap)
     }
@@ -499,30 +518,75 @@ impl Backend for RemoteBackend {
         if batch.is_empty() {
             return Ok(0);
         }
-        self.register_graph()?;
         // Validate first, against the server's current state.
         let current = self.facts(None)?;
+        let current_eph = self.ephemeral_facts(None)?;
+        let in_eph = |id: &str| current_eph.contains_key(&vocab::item_iri(id));
         validate::validate_batch(batch, &mut |id| {
-            Ok(current.get(&vocab::item_iri(id)).cloned())
+            let iri = vocab::item_iri(id);
+            Ok(current.get(&iri).or_else(|| current_eph.get(&iri)).cloned())
         })?;
+        validate::no_shared_edge_to_ephemeral(batch, &mut |id| Ok(in_eph(id)))?;
+        // Which graph each written entity lives in (a comment with its seed).
+        // A seed never moves between the shared and the ephemeral graph.
+        let mut eph: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+        for w in &batch.seeds {
+            let id = &w.seed.id;
+            let in_main = current.contains_key(&vocab::item_iri(id));
+            if (w.seed.ephemeral && in_main) || (!w.seed.ephemeral && in_eph(id)) {
+                return Err(SdError::conflict(format!(
+                    "{id} already exists in the {} graph, and a seed cannot move between the \
+                     shared and the ephemeral graph; nothing was written",
+                    if in_eph(id) { "ephemeral" } else { "shared" }
+                )));
+            }
+            if w.seed.ephemeral {
+                eph.insert(id.clone());
+            }
+        }
+        for id in batch
+            .delete_seeds
+            .iter()
+            .map(|(id, _)| id)
+            .chain(batch.comments.iter().map(|c| &c.seed))
+            .chain(batch.delete_comments.iter().map(|(s, _)| s))
+        {
+            if !batch.seeds.iter().any(|w| &w.seed.id == id) && in_eph(id) {
+                eph.insert(id.clone());
+            }
+        }
         // Check the revisions locally too, so a stale write gets a precise
         // message; the update's WHERE clause is what makes it atomic.
-        let snap = Snapshot::from_subjects(&current);
+        let snap = Snapshot::from_graphs(&current, &current_eph);
         for w in &batch.seeds {
             let cur = snap.seeds.get(&w.seed.id);
+            let iri = vocab::item_iri(&w.seed.id);
             crate::quipu_backend::check_revision(
                 &w.seed.id,
                 w.expected_revision,
-                current.contains_key(&vocab::item_iri(&w.seed.id)),
+                current.contains_key(&iri) || current_eph.contains_key(&iri),
                 cur.map(|s| s.revision),
             )?;
         }
+        self.register_graph(!eph.is_empty())?;
 
-        let g = &self.graph;
+        let main_graph = self.graph.clone();
+        let eph_graph = crate::vocab::ephemeral_graph(&main_graph);
+        let graph_of = |id: &str| -> &str {
+            if eph.contains(id) {
+                &eph_graph
+            } else {
+                &main_graph
+            }
+        };
+        let g = &main_graph;
         let rev = term::revision();
-        let mut delete = String::new();
-        let mut insert = String::new();
-        let mut guards = String::new();
+        // Per graph: [0] the project graph, [1] its ephemeral graph.
+        let ix = |id: &str| usize::from(graph_of(id) != main_graph.as_str());
+        let graphs = [main_graph.as_str(), eph_graph.as_str()];
+        let mut delete = [String::new(), String::new()];
+        let mut insert = [String::new(), String::new()];
+        let mut guards = [String::new(), String::new()];
         let mut absent = String::new();
         let mut unions: Vec<String> = Vec::new();
         let mut var = 0usize;
@@ -534,41 +598,54 @@ impl Backend for RemoteBackend {
             .map(|p| format!("<{p}>"))
             .collect::<Vec<_>>()
             .join(", ");
-        let mut replace =
-            |iri: &str, only_modelled: bool, delete: &mut String, unions: &mut Vec<String>| {
-                delete.push_str(&format!("<{iri}> ?p{var} ?o{var} . "));
-                let filter = if only_modelled {
-                    format!(" FILTER(?p{var} IN ({modelled}))")
-                } else {
-                    String::new()
-                };
-                unions.push(format!(
-                    "{{ GRAPH <{g}> {{ <{iri}> ?p{var} ?o{var} }}{filter} }}"
-                ));
-                var += 1;
+        let mut replace = |gi: usize,
+                           iri: &str,
+                           only_modelled: bool,
+                           delete: &mut [String; 2],
+                           unions: &mut Vec<String>| {
+            delete[gi].push_str(&format!("<{iri}> ?p{var} ?o{var} . "));
+            let filter = if only_modelled {
+                format!(" FILTER(?p{var} IN ({modelled}))")
+            } else {
+                String::new()
             };
+            unions.push(format!(
+                "{{ GRAPH <{}> {{ <{iri}> ?p{var} ?o{var} }}{filter} }}",
+                graphs[gi]
+            ));
+            var += 1;
+        };
         for w in &batch.seeds {
+            let gi = ix(&w.seed.id);
             let iri = vocab::item_iri(&w.seed.id);
             match w.expected_revision {
                 Some(r) => {
-                    guards.push_str(&format!("<{iri}> <{rev}> {r} . "));
-                    replace(&iri, true, &mut delete, &mut unions);
+                    guards[gi].push_str(&format!("<{iri}> <{rev}> {r} . "));
+                    replace(gi, &iri, true, &mut delete, &mut unions);
                 }
-                None => absent.push_str(&format!(
-                    "FILTER NOT EXISTS {{ GRAPH <{g}> {{ <{iri}> ?x ?y }} }} "
-                )),
+                // A new seed must be absent from BOTH graphs: ids are unique
+                // across the project, whichever graph a seed lives in.
+                None => {
+                    for gr in graphs {
+                        absent.push_str(&format!(
+                            "FILTER NOT EXISTS {{ GRAPH <{gr}> {{ <{iri}> ?x ?y }} }} "
+                        ));
+                    }
+                }
             }
             for (p, o) in w.seed.facts() {
-                insert.push_str(&format!("<{iri}> <{p}> {} . ", sparql_obj(&o)));
+                insert[gi].push_str(&format!("<{iri}> <{p}> {} . ", sparql_obj(&o)));
             }
         }
         for (id, r) in &batch.delete_seeds {
+            let gi = ix(id);
             let iri = vocab::item_iri(id);
-            guards.push_str(&format!("<{iri}> <{rev}> {r} . "));
-            replace(&iri, false, &mut delete, &mut unions);
+            guards[gi].push_str(&format!("<{iri}> <{rev}> {r} . "));
+            replace(gi, &iri, false, &mut delete, &mut unions);
         }
         for (seed, index) in &batch.delete_comments {
             replace(
+                ix(seed),
                 &vocab::comment_iri(seed, *index),
                 false,
                 &mut delete,
@@ -576,6 +653,7 @@ impl Backend for RemoteBackend {
             );
         }
         for c in &batch.comments {
+            let gi = ix(&c.seed);
             let iri = vocab::comment_iri(&c.seed, c.index);
             if !batch
                 .delete_comments
@@ -583,17 +661,27 @@ impl Backend for RemoteBackend {
                 .any(|(s, i)| *s == c.seed && *i == c.index)
             {
                 absent.push_str(&format!(
-                    "FILTER NOT EXISTS {{ GRAPH <{g}> {{ <{iri}> ?x ?y }} }} "
+                    "FILTER NOT EXISTS {{ GRAPH <{}> {{ <{iri}> ?x ?y }} }} ",
+                    graphs[gi]
                 ));
             }
             for (p, o) in c.facts() {
-                insert.push_str(&format!("<{iri}> <{p}> {} . ", sparql_obj(&o)));
+                insert[gi].push_str(&format!("<{iri}> <{p}> {} . ", sparql_obj(&o)));
             }
         }
         unions.push("{ }".to_string());
+        // A block per graph that has content. The ephemeral graph only
+        // appears when this batch touches it, so a project that never uses it
+        // writes exactly the update it always did.
+        let blocks = |parts: &[String; 2]| -> String {
+            (0..2)
+                .filter(|&i| i == 0 || !parts[i].is_empty())
+                .map(|i| format!("GRAPH <{}> {{ {}}} ", graphs[i], parts[i]))
+                .collect()
+        };
         let mut update = String::new();
-        if !delete.is_empty() {
-            update.push_str(&format!("DELETE {{ GRAPH <{g}> {{ {delete}}} }}\n"));
+        if delete.iter().any(|d| !d.is_empty()) {
+            update.push_str(&format!("DELETE {{ {}}}\n", blocks(&delete)));
         }
         // Provenance: quipu's /update records every write as the same
         // anonymous "sparql-update", so seeds says who and why itself, in a
@@ -608,7 +696,11 @@ impl Backend for RemoteBackend {
         let write_iri = format!(
             "urn:seeds:write:{}",
             &crate::pendant::sha256(
-                format!("{}\n{}\n{update}{insert}{delete}", ctx.now, ctx.actor).as_bytes()
+                format!(
+                    "{}\n{}\n{update}{}{}{}{}",
+                    ctx.now, ctx.actor, insert[0], insert[1], delete[0], delete[1]
+                )
+                .as_bytes()
             )[7..31]
         );
         let mut prov = String::new();
@@ -618,14 +710,14 @@ impl Backend for RemoteBackend {
             }
         }
         update.push_str(&format!(
-            "INSERT {{ GRAPH <{g}> {{ {insert}}} GRAPH <{}> {{ {prov} }} }}\n",
+            "INSERT {{ {}GRAPH <{}> {{ {prov} }} }}\n",
+            blocks(&insert),
             provenance_graph(g)
         ));
-        let guard_block = if guards.is_empty() {
-            String::new()
-        } else {
-            format!("GRAPH <{g}> {{ {guards}}} ")
-        };
+        let guard_block: String = (0..2)
+            .filter(|&i| !guards[i].is_empty())
+            .map(|i| format!("GRAPH <{}> {{ {}}} ", graphs[i], guards[i]))
+            .collect();
         update.push_str(&format!(
             "WHERE {{ {guard_block}{absent}{} }}",
             unions.join(" UNION ")
@@ -693,7 +785,7 @@ impl RemoteBackend {
     /// /update reports no affected count, so this read-back is the only proof
     /// that the precondition held.
     fn unconfirmed(&self, batch: &WriteBatch) -> Result<Vec<String>> {
-        let after = Snapshot::from_subjects(&self.facts(None)?);
+        let after = Snapshot::from_graphs(&self.facts(None)?, &self.ephemeral_facts(None)?);
         let mut missing = Vec::new();
         for w in &batch.seeds {
             if after.seeds.get(&w.seed.id) != Some(&w.seed) {

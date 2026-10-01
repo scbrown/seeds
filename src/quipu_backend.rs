@@ -8,7 +8,7 @@
 //! The store is target-agnostic: the native CLI opens a file, wasm32 and the
 //! tests open one in memory. Nothing here touches the filesystem or a clock.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use quipu::sparql::{query_temporal, TemporalContext};
 use quipu::store::{Datum, Store};
@@ -223,12 +223,10 @@ pub(crate) fn check_revision(
     }
 }
 
-impl Backend for QuipuBackend {
-    fn snapshot(&self, at: Option<u64>) -> Result<Snapshot> {
-        let q = format!(
-            "SELECT ?s ?p ?o WHERE {{ GRAPH <{}> {{ ?s ?p ?o }} }}",
-            self.graph_iri
-        );
+impl QuipuBackend {
+    /// Every fact in one named graph, grouped by subject IRI.
+    fn subjects(&self, graph: &str, at: Option<u64>) -> Result<BTreeMap<String, Vec<Fact>>> {
+        let q = format!("SELECT ?s ?p ?o WHERE {{ GRAPH <{graph}> {{ ?s ?p ?o }} }}");
         let result = query_temporal(&self.store, &q, &Self::ctx(at)?)?;
         let mut by_subject: BTreeMap<String, Vec<Fact>> = BTreeMap::new();
         let mut names: BTreeMap<i64, String> = BTreeMap::new();
@@ -250,7 +248,15 @@ impl Backend for QuipuBackend {
             let p = self.store.resolve(*p)?;
             by_subject.entry(s).or_default().push((p, o));
         }
-        let mut snap = Snapshot::from_subjects(&by_subject);
+        Ok(by_subject)
+    }
+}
+
+impl Backend for QuipuBackend {
+    fn snapshot(&self, at: Option<u64>) -> Result<Snapshot> {
+        let project = self.subjects(&self.graph_iri, at)?;
+        let ephemeral = self.subjects(&vocab::ephemeral_graph(&self.graph_iri), at)?;
+        let mut snap = Snapshot::from_graphs(&project, &ephemeral);
         snap.tx = u64::try_from(self.store.transaction_head()?).unwrap_or(0);
         if let Some(at) = at {
             snap.tx = snap.tx.min(at);
@@ -306,18 +312,64 @@ impl Backend for QuipuBackend {
         }
         let g = self.store.graph_create(&self.graph_iri)?;
 
+        // 0. Which graph each written entity lives in: the project graph, or
+        // its ephemeral graph (never shared; created on first use). A seed
+        // never moves between them, and a comment lives with its seed.
+        let eph_iri = vocab::ephemeral_graph(&self.graph_iri);
+        let existing_ge = self.store.lookup(&eph_iri)?;
+        let lives_in_eph = |id: &str| -> Result<bool> {
+            match existing_ge {
+                Some(ge) => Ok(self.facts_of(ge, &vocab::item_iri(id))?.is_some()),
+                None => Ok(false),
+            }
+        };
+        let mut eph: BTreeSet<String> = BTreeSet::new();
+        for w in &batch.seeds {
+            let id = &w.seed.id;
+            let (in_main, _) = self.revision_of(g, &vocab::item_iri(id))?;
+            let in_eph = lives_in_eph(id)?;
+            if (w.seed.ephemeral && in_main) || (!w.seed.ephemeral && in_eph) {
+                return Err(SdError::conflict(format!(
+                    "{id} already exists in the {} graph, and a seed cannot move between the \
+                     shared and the ephemeral graph; nothing was written",
+                    if in_eph { "ephemeral" } else { "shared" }
+                )));
+            }
+            if w.seed.ephemeral {
+                eph.insert(id.clone());
+            }
+        }
+        let others = batch
+            .delete_seeds
+            .iter()
+            .map(|(id, _)| id)
+            .chain(batch.comments.iter().map(|c| &c.seed))
+            .chain(batch.delete_comments.iter().map(|(s, _)| s));
+        for id in others {
+            if !batch.seeds.iter().any(|w| &w.seed.id == id) && lives_in_eph(id)? {
+                eph.insert(id.clone());
+            }
+        }
+        let ge = match (eph.is_empty(), existing_ge) {
+            (false, _) => self.store.graph_create(&eph_iri)?,
+            (true, Some(ge)) => ge,
+            (true, None) => g,
+        };
+        let graph_of = |id: &str| if eph.contains(id) { ge } else { g };
+
         // 1. Every precondition, before anything is staged.
         for w in &batch.seeds {
-            let (exists, rev) = self.revision_of(g, &vocab::item_iri(&w.seed.id))?;
+            let (exists, rev) =
+                self.revision_of(graph_of(&w.seed.id), &vocab::item_iri(&w.seed.id))?;
             check_revision(&w.seed.id, w.expected_revision, exists, rev)?;
         }
         for (id, want) in &batch.delete_seeds {
-            let (exists, rev) = self.revision_of(g, &vocab::item_iri(id))?;
+            let (exists, rev) = self.revision_of(graph_of(id), &vocab::item_iri(id))?;
             check_revision(id, Some(*want), exists, rev)?;
         }
         for c in &batch.comments {
             if self
-                .facts_of(g, &vocab::comment_iri(&c.seed, c.index))?
+                .facts_of(graph_of(&c.seed), &vocab::comment_iri(&c.seed, c.index))?
                 .is_some()
                 && !batch
                     .delete_comments
@@ -330,12 +382,23 @@ impl Backend for QuipuBackend {
                 )));
             }
         }
-        validate::validate_batch(batch, &mut |id| self.facts_of(g, &vocab::item_iri(id)))?;
+        validate::validate_batch(batch, &mut |id| {
+            let iri = vocab::item_iri(id);
+            match self.facts_of(g, &iri)? {
+                Some(f) => Ok(Some(f)),
+                None => match existing_ge {
+                    Some(ge) => self.facts_of(ge, &iri),
+                    None => Ok(None),
+                },
+            }
+        })?;
+        validate::no_shared_edge_to_ephemeral(batch, &mut |id| lives_in_eph(id))?;
 
-        // 2. The diff: retract what changed, assert its replacement.
-        let mut datums = Vec::new();
+        // 2. The diff: retract what changed, assert its replacement, per graph.
+        let mut by_graph: BTreeMap<i64, Vec<Datum>> = BTreeMap::new();
         for (id, _) in &batch.delete_seeds {
-            self.retract_all(g, &vocab::item_iri(id), &mut datums)?;
+            let gg = graph_of(id);
+            self.retract_all(gg, &vocab::item_iri(id), by_graph.entry(gg).or_default())?;
         }
         for (seed, index) in &batch.delete_comments {
             // A comment deleted and re-added in the same batch is diffed below.
@@ -344,20 +407,32 @@ impl Backend for QuipuBackend {
                 .iter()
                 .any(|c| c.seed == *seed && c.index == *index)
             {
-                self.retract_all(g, &vocab::comment_iri(seed, *index), &mut datums)?;
+                let gg = graph_of(seed);
+                self.retract_all(
+                    gg,
+                    &vocab::comment_iri(seed, *index),
+                    by_graph.entry(gg).or_default(),
+                )?;
             }
         }
-        let mut entities: Vec<(String, Vec<Fact>)> = batch
+        let mut entities: Vec<(i64, String, Vec<Fact>)> = batch
             .seeds
             .iter()
-            .map(|w| (vocab::item_iri(&w.seed.id), w.seed.facts()))
+            .map(|w| {
+                (
+                    graph_of(&w.seed.id),
+                    vocab::item_iri(&w.seed.id),
+                    w.seed.facts(),
+                )
+            })
             .collect();
-        entities.extend(
-            batch
-                .comments
-                .iter()
-                .map(|c| (vocab::comment_iri(&c.seed, c.index), c.facts())),
-        );
+        entities.extend(batch.comments.iter().map(|c| {
+            (
+                graph_of(&c.seed),
+                vocab::comment_iri(&c.seed, c.index),
+                c.facts(),
+            )
+        }));
         // Only predicates this build models are replaced; any other fact on
         // the entity came from a newer sd and is carried forward
         // (aegis-w3k75d.13). A predicate never interned is on no entity.
@@ -367,9 +442,10 @@ impl Backend for QuipuBackend {
                 modelled.insert(id);
             }
         }
-        for (iri, new_facts) in &entities {
+        for (eg, iri, new_facts) in &entities {
+            let datums = by_graph.entry(*eg).or_default();
             let e = self.store.intern(iri)?;
-            let facts = self.store.entity_facts_in_graph(e, g)?;
+            let facts = self.store.entity_facts_in_graph(e, *eg)?;
             let mut desired = Vec::new();
             for (p, o) in new_facts {
                 desired.push((self.store.intern(p)?, self.value_of(o)?));
@@ -403,7 +479,8 @@ impl Backend for QuipuBackend {
                 }
             }
         }
-        if datums.is_empty() {
+        by_graph.retain(|_, d| !d.is_empty());
+        if by_graph.is_empty() {
             return Ok(u64::try_from(self.store.transaction_head()?).unwrap_or(0));
         }
         // The same provenance record remote mode writes, in the same
@@ -414,7 +491,7 @@ impl Backend for QuipuBackend {
         let write_iri = format!(
             "urn:seeds:write:{}",
             &crate::pendant::sha256(
-                format!("{}\n{}\n{}\n{datums:?}", ctx.now, ctx.actor, batch.source).as_bytes()
+                format!("{}\n{}\n{}\n{by_graph:?}", ctx.now, ctx.actor, batch.source).as_bytes()
             )[7..31]
         );
         let mut prov = Vec::new();
@@ -431,10 +508,16 @@ impl Backend for QuipuBackend {
                 });
             }
         }
+        // Provenance first, so the head afterwards is a data write's
+        // transaction: the tx sd reports and `--at` reads. The project graph
+        // precedes the ephemeral one (BTreeMap order is not graph order).
+        let mut batches = vec![(pg, prov)];
+        if let Some(d) = by_graph.remove(&g) {
+            batches.push((g, d));
+        }
+        batches.extend(by_graph);
         self.store.transact_graph_batches(
-            // Provenance first, so the head afterwards is the data write's
-            // transaction: the tx sd reports and `--at` reads.
-            &[(pg, prov), (g, datums)],
+            &batches,
             &ctx.now,
             Some(&ctx.actor),
             Some(&batch.source),

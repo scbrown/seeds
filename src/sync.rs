@@ -160,7 +160,7 @@ pub fn import(
     prefer: Option<Prefer>,
     replace: bool,
 ) -> Result<Report> {
-    let target = b.snapshot(None)?;
+    let target = b.snapshot(None)?.shared();
     let (merged, conflicts) = if replace {
         (incoming.clone(), Vec::new())
     } else {
@@ -606,6 +606,8 @@ fn merge_seed(base: Option<&Seed>, l: &Seed, r: &Seed, sides: Sides) -> (Seed, V
             dbg,
         ),
         revision: 0,
+        // sync never sees an ephemeral seed (they are not in any ledger).
+        ephemeral: false,
         // Facts this sd does not model merge as a set: every addition and
         // every removal from both sides (it cannot know their cardinality).
         extra: pick_set(base.map(|b| &b.extra), &l.extra, &r.extra),
@@ -790,8 +792,8 @@ impl SyncPlan {
 /// Plan a sync of `local` and `remote` against their common `base`. Reads
 /// both stores; writes neither.
 pub fn plan_sync(base: &Snapshot, local: &dyn Backend, remote: &dyn Backend) -> Result<SyncPlan> {
-    let l = local.snapshot(None)?;
-    let r = remote.snapshot(None)?;
+    let l = local.snapshot(None)?.shared();
+    let r = remote.snapshot(None)?.shared();
     let m = merge3(base, &l, &r);
     let remote_plan = plan(&r, &m.merged, "seeds:sync");
     let local_plan = plan(&l, &m.merged, "seeds:sync");

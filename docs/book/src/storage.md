@@ -14,6 +14,21 @@ by a separate metadata row. The default IRI is
 
 A seed is an entity in that graph, at `https://seeds.local/item/<id>`.
 
+**Ephemeral seeds** (`sd create --ephemeral`, br's flag) live in a sibling
+graph, `<project IRI>#seeds-ephemeral`, created the first time one is written.
+Every read (`show`, `list`, `search`, `count`, ...) sees both graphs as one
+project, and the seed's `--json` carries `"ephemeral": true`. A pendant, an
+export and `sd sync` carry only the project graph, so an ephemeral seed is
+never shared, pulled or removed by a ledger, and it is never `ready`. A seed
+stays in the graph it was created in; there is no verb to move it.
+
+A shared seed cannot depend on an ephemeral one, by any dependency type:
+the edge would be shared while its target is not, so the ledger would name a
+seed no clone can resolve. br accepts such an edge, and its own
+`sync --import-only` then refuses the export it wrote. seeds refuses the
+edge instead (exit 2, nothing written). An ephemeral seed may depend on
+anything.
+
 ## The vocabulary
 
 seeds reuses [camayoc](https://github.com/scbrown/camayoc)'s WorkItem

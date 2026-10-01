@@ -1918,3 +1918,104 @@ fn agent_context_round_trips_and_guards_replacement_like_br() {
     assert_eq!(code(&o), 2);
     assert_eq!(ids(&sb.json(&["list", "--all"])).len(), before);
 }
+
+#[test]
+fn ephemeral_seeds_are_read_everywhere_never_ready_never_shared() {
+    // aegis-w3k75d.13: br's create --ephemeral, from br's --help and observed
+    // outputs only (aegis-fur6v8); lead ruling: a sibling ephemeral graph.
+    let sb = Sandbox::new("ephemeral");
+    let n = sb
+        .ok(&["create", "shared zebra", "--silent"])
+        .trim()
+        .to_string();
+    let e = sb
+        .ok(&["create", "ephemeral zebra", "--ephemeral", "--silent"])
+        .trim()
+        .to_string();
+    let ids_of = |v: &Value| ids(v);
+
+    // Every read path sees it: show, list, search, count.
+    assert_eq!(sb.json(&["show", &e])[0]["ephemeral"], true);
+    assert_eq!(sb.json(&["show", &n])[0]["ephemeral"], false);
+    let listed = ids_of(&sb.json(&["list"]));
+    assert!(listed.contains(&e) && listed.contains(&n), "{listed:?}");
+    let found = ids_of(&sb.json(&["search", "zebra"]));
+    assert!(found.contains(&e) && found.contains(&n), "{found:?}");
+    assert_eq!(sb.json(&["count"])["count"], 2);
+
+    // Never ready; the shared seed is (control).
+    let ready = ids_of(&sb.json(&["ready"]));
+    assert!(ready.contains(&n), "control: {ready:?}");
+    assert!(!ready.contains(&e), "{ready:?}");
+
+    // Writes to it stay in its graph.
+    sb.ok(&["update", &e, "--title", "ephemeral zebra 2"]);
+    sb.ok(&["comments", "add", &e, "a note"]);
+    sb.ok(&["close", &e, "--reason", "done"]);
+    let shown = sb.json(&["show", &e]);
+    assert_eq!(shown[0]["ephemeral"], true);
+    assert_eq!(shown[0]["status"], "closed");
+
+    // A shared seed may NOT depend on an ephemeral one, by any edge: usage
+    // error, nothing written.
+    let before = sb.json(&["show", &n]);
+    for args in [
+        vec!["dep", "add", n.as_str(), e.as_str()],
+        vec!["dep", "add", n.as_str(), e.as_str(), "--type", "related"],
+    ] {
+        let o = sb.run(&args);
+        assert_eq!(code(&o), 2, "{args:?}");
+    }
+    assert_eq!(
+        sb.json(&["show", &n])[0]["dependencies"],
+        before[0]["dependencies"]
+    );
+    let count = || ids_of(&sb.json(&["list", "--all"])).len();
+    let total = count();
+    assert_eq!(total, 2, "control: both seeds are listed");
+    for args in [
+        vec!["create", "x", "--deps", e.as_str()],
+        vec!["create", "x", "--parent", e.as_str()],
+    ] {
+        let o = sb.run(&args);
+        assert_eq!(code(&o), 2, "{args:?}");
+    }
+    assert_eq!(count(), total, "nothing created");
+
+    // (After the refusals: N -> E checked above, so E -> N is no cycle.)
+    // An ephemeral seed may depend on a shared one, and be its child.
+    sb.ok(&["dep", "add", &e, &n]);
+    let kid = sb
+        .ok(&[
+            "create",
+            "eph kid",
+            "--ephemeral",
+            "--parent",
+            &n,
+            "--silent",
+        ])
+        .trim()
+        .to_string();
+    assert_eq!(sb.json(&["show", &kid])[0]["ephemeral"], true);
+
+    // The pendant carries the shared seed and not the ephemeral ones, and a
+    // fresh store importing it gets only the shared seed.
+    let dir = sb.root.join("pendant");
+    sb.ok(&["export", "--to", dir.to_str().unwrap()]);
+    let nt = std::fs::read_to_string(dir.join("export.nt")).unwrap();
+    assert!(
+        nt.contains(&format!("/item/{n}>")),
+        "control: shared seed exported"
+    );
+    assert!(!nt.contains(&format!("/item/{e}")), "ephemeral seed leaked");
+    assert!(
+        !nt.contains(&format!("/item/{kid}")),
+        "ephemeral child leaked"
+    );
+    let other = Sandbox::new("ephemeral-import");
+    other.ok(&["import", dir.to_str().unwrap()]);
+    assert_eq!(ids_of(&other.json(&["list", "--all"])), vec![n.clone()]);
+    // Importing back does not touch the local ephemerals.
+    sb.ok(&["import", dir.to_str().unwrap()]);
+    assert_eq!(sb.json(&["show", &e])[0]["ephemeral"], true);
+}

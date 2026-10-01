@@ -22,6 +22,8 @@ pub enum Kind {
     OptInt,
     /// A number (integer or fraction).
     Num,
+    /// A boolean.
+    Bool,
     /// An array of strings.
     Strs,
     /// One of these strings.
@@ -59,6 +61,7 @@ pub const SEED: &[(&str, Kind)] = &[
     ("dependency_count", Kind::Int),
     ("workflow_run", Kind::OptStr),
     ("revision", Kind::Int),
+    ("ephemeral", Kind::Bool),
 ];
 
 /// One end of a dependency, inside `show`'s `dependencies`/`dependents`.
@@ -93,6 +96,7 @@ fn kind(k: Kind) -> Json {
         Kind::Int => json!({"type": "integer"}),
         Kind::OptInt => json!({"type": ["integer", "null"]}),
         Kind::Num => json!({"type": "number"}),
+        Kind::Bool => json!({"type": "boolean"}),
         Kind::Strs => json!({"type": "array", "items": {"type": "string"}}),
         Kind::Enum(v) => json!({"type": "string", "enum": v}),
         Kind::OptEnum(v) => {

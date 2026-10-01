@@ -403,7 +403,7 @@ pub struct CreateArgs {
         "title", "title_flag", "issue_type", "priority", "description", "status", "defer",
         "description_file", "assignee", "owner", "labels", "parent", "deps", "workflow_run",
         "step", "visit", "acceptance_criteria", "external_ref", "due", "estimate", "slug",
-        "agent_context",
+        "agent_context", "ephemeral",
     ])]
     pub file: Option<String>,
     /// Title (positional form)
@@ -453,6 +453,11 @@ pub struct CreateArgs {
     /// Parent seed; the new seed is minted as <parent>.<n>
     #[arg(long)]
     pub parent: Option<String>,
+    /// Keep the seed out of the shared ledger: visible to every read here,
+    /// never synced, exported or ready. br's --ephemeral. A shared seed
+    /// cannot depend on an ephemeral one
+    #[arg(long)]
+    pub ephemeral: bool,
     /// Governing instructions for an agent working this seed: inline JSON,
     /// @path to a JSON file, or @path.yaml/.yml (normalized to JSON). "" leaves
     /// it unset. br's --agent-context

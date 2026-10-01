@@ -286,7 +286,7 @@ pub fn hydrate(b: &mut QuipuBackend, store: &Path, dir: &Path, ctx: &Ctx) -> Res
     let mine = pendant::export(b)?;
     let mine_hash = mine.export_hash().unwrap_or_default();
     let Some(disk) = read_pendant_dir(dir)? else {
-        let snap = b.snapshot(None)?;
+        let snap = b.snapshot(None)?.shared();
         if !snap.seeds.is_empty() || !snap.comments.is_empty() {
             export_to_pendant(b, store, dir)?;
             notes.push(format!("wrote the pendant at {}", dir.display()));
@@ -308,7 +308,7 @@ pub fn hydrate(b: &mut QuipuBackend, store: &Path, dir: &Path, ctx: &Ctx) -> Res
         }
         return Ok(notes);
     }
-    let snap = b.snapshot(None)?;
+    let snap = b.snapshot(None)?.shared();
     let store_empty = snap.seeds.is_empty() && snap.comments.is_empty();
     let store_clean = store_empty || marker.as_deref() == Some(mine_hash.as_str());
     let disk_clean = marker.as_deref() == Some(disk_hash.as_str());
