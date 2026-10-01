@@ -64,6 +64,30 @@ NOT_APPLICABLE = {
     "--no-wrap": "sd never truncates or wraps text output",
     "--verbose": "sd writes no log output for a level to raise",
     "--hard": "prunes tombstones from br's JSONL; sd keeps tombstones in quipu history by design",
+    # br-engine machinery (aegis-w3k75d.13): each one operates on br's SQLite DB, its JSONL
+    # export or its base snapshot, which a quipu ledger does not have. Each name is used by
+    # exactly one br verb (measured with br's --help on every verb), so listing it here hides
+    # nothing elsewhere.
+    "--merge": "br sync: three-way DB/JSONL/base merge; sd sync is always a three-way merge with its remote, so there is no mode to select",
+    "--reconcile": "br sync: JSONL -> SQLite reconcile; sd has no derived DB",
+    "--reconcile-additive": "br sync: JSONL -> SQLite reconcile plan; sd has no derived DB",
+    "--expect-plan-sha256": "br sync: token for an --apply of a reconcile/migration plan, which sd does not have",
+    "--resolve-source-id": "br sync: resolves a JSONL-vs-DB scalar-row conflict",
+    "--manifest": "br sync: manifest of a JSONL export",
+    "--error-policy": "br sync: JSONL export serialization policy",
+    "--skip-invalid-records": "br sync --import-only: drops invalid JSONL lines",
+    "--repair": "br doctor: rebuilds the SQLite DB from JSONL; the quipu store is the ledger, nothing is derived",
+    "--repair-indexes": "br doctor: SQLite REINDEX",
+    "--allow-repeated-repair": "br doctor: another JSONL rebuild after a failed one",
+    "--unsafe-auto-fix": "br doctor: opt-in to br's own repair fixers (only with --repair)",
+    "--only": "br doctor: selects br repair fixers (only with --repair)",
+    "--skip": "br doctor: skips br repair fixers (only with --repair)",
+    "--projections": "br info: graph projection cache health; sd keeps no projection cache",
+    "--source-repo": "br update: per-record repo name for JSONL cross-machine sync; a seed lives in a project graph",
+    "--source-repo-path": "br update: absolute local path stamped on records (aegis-19lsrv: it leaks home paths); seeds have none",
+    "--bypass-policy": "br close: bypasses .beads/policy.yaml gates; sd has no closure policy",
+    "--bypass-reason": "br close: reason for --bypass-policy",
+    "--backend": "br init: documented by br itself as ignored (always sqlite)",
 }
 
 
