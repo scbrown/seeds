@@ -274,6 +274,23 @@ pub fn diff_fields(a: &Seed, b: &Seed, a_name: &str, b_name: &str) -> Vec<String
         );
     }
     f("notes", format!("{:?}", a.notes), format!("{:?}", b.notes));
+    for (name, x, y) in [
+        ("design", &a.design, &b.design),
+        (
+            "acceptance_criteria",
+            &a.acceptance_criteria,
+            &b.acceptance_criteria,
+        ),
+    ] {
+        if x != y {
+            f(name, summary(x), format!("{} (text differs)", summary(y)));
+        }
+    }
+    f(
+        "external_ref",
+        format!("{:?}", a.external_ref),
+        format!("{:?}", b.external_ref),
+    );
     f("owner", format!("{:?}", a.owner), format!("{:?}", b.owner));
     f(
         "labels",
@@ -425,6 +442,33 @@ fn merge_seed(base: Option<&Seed>, l: &Seed, r: &Seed, sides: Sides) -> (Seed, V
             base.map(|b| &b.notes),
             &l.notes,
             &r.notes,
+            &mut c,
+            sides,
+            dbg,
+        ),
+        design: pick(
+            "design",
+            base.map(|b| &b.design),
+            &l.design,
+            &r.design,
+            &mut c,
+            sides,
+            dbg,
+        ),
+        acceptance_criteria: pick(
+            "acceptance_criteria",
+            base.map(|b| &b.acceptance_criteria),
+            &l.acceptance_criteria,
+            &r.acceptance_criteria,
+            &mut c,
+            sides,
+            dbg,
+        ),
+        external_ref: pick(
+            "external_ref",
+            base.map(|b| &b.external_ref),
+            &l.external_ref,
+            &r.external_ref,
             &mut c,
             sides,
             dbg,

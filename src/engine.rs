@@ -43,6 +43,10 @@ pub struct CreateReq {
     /// Owner (br's `owner`, usually an email).
     pub owner: Option<String>,
     pub assignee: Option<String>,
+    /// Acceptance criteria (br's `acceptance_criteria`).
+    pub acceptance_criteria: Option<String>,
+    /// A reference to the same work elsewhere (br's `external_ref`).
+    pub external_ref: Option<String>,
     /// Labels.
     pub labels: Vec<String>,
     /// Parent seed: the new seed is minted as `<parent>.<n>`.
@@ -108,6 +112,8 @@ fn new_seed(
         },
         assignee: non_empty(req.assignee.as_deref().map(str::trim)),
         owner: non_empty(req.owner.as_deref().map(str::trim)),
+        acceptance_criteria: non_empty(req.acceptance_criteria.as_deref()),
+        external_ref: non_empty(req.external_ref.as_deref().map(str::trim)),
         labels: clean_labels(&req.labels),
         created_at: ctx.now.clone(),
         created_by: non_empty(Some(&ctx.actor)),
@@ -143,14 +149,16 @@ fn new_seed(
     Ok(seed)
 }
 
-/// One seed of a bulk create: the request, plus notes (which `sd create`
-/// has no flag for, but a markdown item can carry).
+/// One seed of a bulk create: the request, plus notes and design (which
+/// `sd create` has no flag for, but a markdown item can carry).
 #[derive(Debug, Clone, Default)]
 pub struct BulkItem {
     /// The fields `sd create` takes.
     pub req: CreateReq,
     /// Notes.
     pub notes: Option<String>,
+    /// Design notes.
+    pub design: Option<String>,
 }
 
 /// `sd create --file`: every item becomes a seed in ONE transaction, or none
@@ -176,6 +184,7 @@ pub fn create_many(
         minted.insert(id.clone());
         let mut seed = new_seed(&snap, ctx, &item.req, id, title, None)?;
         seed.notes = non_empty(item.notes.as_deref());
+        seed.design = non_empty(item.design.as_deref());
         seeds.push(seed);
     }
     if dry_run || seeds.is_empty() {
@@ -266,23 +275,18 @@ pub fn parse_bulk_markdown(text: &str) -> Result<Vec<BulkItem>> {
             match name.to_ascii_lowercase().as_str() {
                 "description" => explicit = Some(value),
                 "notes" => item.notes = Some(value),
+                "design" => item.design = Some(value),
+                "acceptance criteria" => item.req.acceptance_criteria = Some(value),
                 "priority" => item.req.priority = Some(one),
                 "type" => item.req.issue_type = Some(one),
                 "assignee" => item.req.assignee = Some(one),
                 "labels" => item.req.labels = list(&value),
                 "dependencies" | "deps" => item.req.deps = list(&value),
-                "design" | "acceptance criteria" => {
-                    return Err(SdError::usage(format!(
-                        "item {:?}: seeds has no {} field yet, so `### {name}` would be lost; \
-                         nothing was written. Move it into the description or notes",
-                        raw.title,
-                        name.to_ascii_lowercase()
-                    )))
-                }
                 _ => {
                     return Err(SdError::usage(format!(
                         "item {:?}: unknown section `### {name}`; nothing was written. Known: \
-                         Description, Notes, Priority, Type, Assignee, Labels, Dependencies",
+                         Description, Notes, Design, Acceptance Criteria, Priority, Type, \
+                         Assignee, Labels, Dependencies",
                         raw.title
                     )))
                 }
@@ -1781,6 +1785,12 @@ pub struct UpdateReq {
     pub description: Option<String>,
     /// New notes.
     pub notes: Option<String>,
+    /// New design notes.
+    pub design: Option<String>,
+    /// New acceptance criteria.
+    pub acceptance_criteria: Option<String>,
+    /// New external reference; empty clears it.
+    pub external_ref: Option<String>,
     /// New owner; empty clears it.
     pub owner: Option<String>,
     /// New status.
@@ -1807,8 +1817,9 @@ pub struct UpdateReq {
     pub set_labels: Option<Vec<String>>,
     /// New parent; empty detaches the seed.
     pub parent: Option<String>,
-    /// Allow replacing a non-empty description or notes with different
-    /// content (br's --force). Without it that is refused, naming the field.
+    /// Allow replacing a non-empty description, notes, design or acceptance
+    /// criteria with different content (br's --force). Without it that is
+    /// refused, naming the field.
     pub force: bool,
 }
 
@@ -1861,6 +1872,21 @@ pub fn update(
         }
         if let Some(n) = &req.notes {
             s.notes = replace_text(id, "notes", &before.notes, n, req.force)?;
+        }
+        if let Some(g) = &req.design {
+            s.design = replace_text(id, "design", &before.design, g, req.force)?;
+        }
+        if let Some(a) = &req.acceptance_criteria {
+            s.acceptance_criteria = replace_text(
+                id,
+                "acceptance criteria",
+                &before.acceptance_criteria,
+                a,
+                req.force,
+            )?;
+        }
+        if let Some(e) = &req.external_ref {
+            s.external_ref = non_empty(Some(e.trim()));
         }
         if let Some(o) = &req.owner {
             s.owner = non_empty(Some(o.trim()));

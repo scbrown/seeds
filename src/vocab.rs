@@ -88,6 +88,20 @@ pub mod term {
     pub fn notes() -> String {
         seeds("notes")
     }
+    /// `seeds:design`: design notes (br's `design`).
+    pub fn design() -> String {
+        seeds("design")
+    }
+    /// `seeds:acceptanceCriteria`: br's `acceptance_criteria`, often a
+    /// `- [ ]` checklist.
+    pub fn acceptance_criteria() -> String {
+        seeds("acceptanceCriteria")
+    }
+    /// `seeds:externalRef`: a reference to the same work elsewhere (br's
+    /// `external_ref`), a plain string.
+    pub fn external_ref() -> String {
+        seeds("externalRef")
+    }
 
     /// `seeds:owner`: who owns the work (br's `owner`), a plain string.
     pub fn owner() -> String {
