@@ -469,6 +469,12 @@ pub fn view_text(v: &SeedView) -> String {
     if let Some(d) = &s.defer_until {
         out.push(format!("  deferred until {d}"));
     }
+    if let Some(d) = &s.due_at {
+        out.push(format!("  due {d}"));
+    }
+    if let Some(m) = s.estimated_minutes {
+        out.push(format!("  estimate {m}m"));
+    }
     if let Some(d) = &s.description {
         out.push(String::new());
         out.extend(d.lines().map(|l| format!("  {l}")));
@@ -534,8 +540,7 @@ pub fn count_text(c: &Count) -> String {
     }
 }
 
-/// The `--format csv` columns sd can fill (br's list, less `due_at`, which
-/// sd does not model).
+/// The `--format csv` columns sd can fill: br's list.
 pub const CSV_FIELDS: &[&str] = &[
     "id",
     "title",
@@ -548,6 +553,7 @@ pub const CSV_FIELDS: &[&str] = &[
     "created_at",
     "updated_at",
     "closed_at",
+    "due_at",
     "defer_until",
     "notes",
     "external_ref",
@@ -601,6 +607,7 @@ pub fn seeds_csv(seeds: &[Seed], fields: &[String]) -> String {
                     "defer_until" => s.defer_until.clone().unwrap_or_default(),
                     "notes" => s.notes.clone().unwrap_or_default(),
                     "external_ref" => s.external_ref.clone().unwrap_or_default(),
+                    "due_at" => s.due_at.clone().unwrap_or_default(),
                     _ => String::new(),
                 };
                 cell(&v)

@@ -47,6 +47,10 @@ pub struct CreateReq {
     pub acceptance_criteria: Option<String>,
     /// A reference to the same work elsewhere (br's `external_ref`).
     pub external_ref: Option<String>,
+    /// Due date, br's forms.
+    pub due: Option<String>,
+    /// Time estimate in minutes.
+    pub estimate: Option<String>,
     /// Labels.
     pub labels: Vec<String>,
     /// Parent seed: the new seed is minted as `<parent>.<n>`.
@@ -114,6 +118,11 @@ fn new_seed(
         owner: non_empty(req.owner.as_deref().map(str::trim)),
         acceptance_criteria: non_empty(req.acceptance_criteria.as_deref()),
         external_ref: non_empty(req.external_ref.as_deref().map(str::trim)),
+        due_at: match non_empty(req.due.as_deref()) {
+            Some(d) => Some(parse_when(&d, &ctx.now, "--due")?),
+            None => None,
+        },
+        estimated_minutes: req.estimate.as_deref().map(parse_estimate).transpose()?,
         labels: clean_labels(&req.labels),
         created_at: ctx.now.clone(),
         created_by: non_empty(Some(&ctx.actor)),
@@ -506,6 +515,9 @@ pub struct Filter {
     pub priority_max: Option<String>,
     /// Only these ids.
     pub ids: Vec<String>,
+    /// Only seeds overdue at this instant: due before it and not closed
+    /// (br's `--overdue`). The CLI passes the current time.
+    pub overdue_at: Option<String>,
 }
 
 impl Filter {
@@ -545,6 +557,12 @@ impl Filter {
                 .map(model::parse_priority)
                 .transpose()?,
             ids: self.ids.iter().cloned().collect(),
+            overdue_at: match &self.overdue_at {
+                Some(now) => Some(epoch_of(now).ok_or_else(|| {
+                    SdError::usage(format!("--overdue: cannot read the time {now:?}"))
+                })?),
+                None => None,
+            },
         })
     }
 }
@@ -564,6 +582,7 @@ struct CompiledFilter {
     priority_min: Option<u8>,
     priority_max: Option<u8>,
     ids: BTreeSet<String>,
+    overdue_at: Option<i64>,
 }
 
 impl CompiledFilter {
@@ -588,6 +607,14 @@ impl CompiledFilter {
             && self.priority_min.is_none_or(|p| s.priority >= p)
             && self.priority_max.is_none_or(|p| s.priority <= p)
             && (self.ids.is_empty() || self.ids.contains(&s.id))
+            && self.overdue_at.is_none_or(|now| {
+                s.status != "closed"
+                    && !s.is_tombstone()
+                    && s.due_at
+                        .as_deref()
+                        .and_then(epoch_of)
+                        .is_some_and(|d| d < now)
+            })
     }
 }
 
@@ -1791,6 +1818,10 @@ pub struct UpdateReq {
     pub acceptance_criteria: Option<String>,
     /// New external reference; empty clears it.
     pub external_ref: Option<String>,
+    /// New due date, br's forms; empty clears it.
+    pub due: Option<String>,
+    /// New time estimate in minutes.
+    pub estimate: Option<String>,
     /// New owner; empty clears it.
     pub owner: Option<String>,
     /// New status.
@@ -1887,6 +1918,15 @@ pub fn update(
         }
         if let Some(e) = &req.external_ref {
             s.external_ref = non_empty(Some(e.trim()));
+        }
+        if let Some(d) = &req.due {
+            s.due_at = match non_empty(Some(d.trim())) {
+                Some(d) => Some(parse_when(&d, &ctx.now, "--due")?),
+                None => None,
+            };
+        }
+        if let Some(m) = &req.estimate {
+            s.estimated_minutes = Some(parse_estimate(m)?);
         }
         if let Some(o) = &req.owner {
             s.owner = non_empty(Some(o.trim()));
@@ -2272,10 +2312,16 @@ pub fn undefer_with(
 /// Resolve a `--until` value against `now` (an RFC 3339 UTC instant). Dates and
 /// instants are kept as given; relative forms become a UTC instant or date.
 pub fn parse_until(value: &str, now: &str) -> Result<String> {
+    parse_when(value, now, "--until")
+}
+
+/// A date or instant in br's forms (`+30m`, `+2h`, `+1d`, `+1w`, `tomorrow`,
+/// `YYYY-MM-DD`, RFC 3339), relative to `now`. `flag` names the flag in an error.
+pub fn parse_when(value: &str, now: &str, flag: &str) -> Result<String> {
     let v = value.trim();
     let bad = || {
         SdError::usage(format!(
-            "cannot read --until {value:?}; use +30m, +2h, +1d, +1w, tomorrow, \
+            "cannot read {flag} {value:?}; use +30m, +2h, +1d, +1w, tomorrow, \
              YYYY-MM-DD or an RFC 3339 instant"
         ))
     };
@@ -2304,6 +2350,34 @@ pub fn parse_until(value: &str, now: &str) -> Result<String> {
         return Ok(v.to_string());
     }
     Err(bad())
+}
+
+/// br's bound on `estimated_minutes`: 0 to about a year.
+pub const MAX_ESTIMATE_MINUTES: u32 = 525_960;
+
+/// An `--estimate` in minutes, refused outside br's bounds.
+pub fn parse_estimate(value: &str) -> Result<u32> {
+    value
+        .trim()
+        .parse::<u32>()
+        .ok()
+        .filter(|m| *m <= MAX_ESTIMATE_MINUTES)
+        .ok_or_else(|| {
+            SdError::usage(format!(
+                "--estimate {value:?}: expected whole minutes from 0 to \
+                 {MAX_ESTIMATE_MINUTES} (about a year)"
+            ))
+        })
+}
+
+/// A stored date (`YYYY-MM-DD`, read as its first instant, UTC) or RFC 3339
+/// instant, as epoch seconds.
+fn epoch_of(v: &str) -> Option<i64> {
+    if v.len() == 10 {
+        parse_date(v).map(|d| d * 86_400)
+    } else {
+        parse_instant(v)
+    }
 }
 
 fn parse_date(d: &str) -> Option<i64> {

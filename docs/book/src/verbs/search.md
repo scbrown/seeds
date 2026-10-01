@@ -20,7 +20,9 @@ has_more}`, plus `total`.
 
 **Filters** (also on [search](search.md)): `--title-contains`,
 `--desc-contains`, `--notes-contains` (case-insensitive), `--label-any`
-(repeatable, any of), `--priority-min`/`--priority-max`, `--id` (repeatable).
+(repeatable, any of), `--priority-min`/`--priority-max`, `--id` (repeatable),
+`--overdue` (due before now and not closed, as br; deferred seeds stay hidden
+unless `--deferred`).
 **Paging**: `--offset N` skips N results (the envelope's `offset` and
 `has_more` account for it); `-r, --reverse` flips the sort.
 

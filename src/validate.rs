@@ -34,6 +34,8 @@ pub fn functional_predicates() -> Vec<String> {
         term::design(),
         term::acceptance_criteria(),
         term::external_ref(),
+        term::due_at(),
+        term::estimated_minutes(),
         term::owner(),
         term::closed_at(),
         term::close_reason(),

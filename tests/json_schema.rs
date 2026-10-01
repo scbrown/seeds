@@ -26,6 +26,8 @@ const SEED_KEYS: &[&str] = &[
     "dependency_count",
     "description",
     "design",
+    "due_at",
+    "estimated_minutes",
     "external_ref",
     "id",
     "issue_type",

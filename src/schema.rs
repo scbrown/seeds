@@ -18,6 +18,8 @@ pub enum Kind {
     OptStr,
     /// An integer.
     Int,
+    /// An integer or null.
+    OptInt,
     /// A number (integer or fraction).
     Num,
     /// An array of strings.
@@ -37,6 +39,8 @@ pub const SEED: &[(&str, Kind)] = &[
     ("design", Kind::OptStr),
     ("acceptance_criteria", Kind::OptStr),
     ("external_ref", Kind::OptStr),
+    ("due_at", Kind::OptStr),
+    ("estimated_minutes", Kind::OptInt),
     ("owner", Kind::OptStr),
     ("status", Kind::Enum(STATUSES)),
     ("priority", Kind::Int),
@@ -86,6 +90,7 @@ fn kind(k: Kind) -> Json {
         Kind::Str => json!({"type": "string"}),
         Kind::OptStr => json!({"type": ["string", "null"]}),
         Kind::Int => json!({"type": "integer"}),
+        Kind::OptInt => json!({"type": ["integer", "null"]}),
         Kind::Num => json!({"type": "number"}),
         Kind::Strs => json!({"type": "array", "items": {"type": "string"}}),
         Kind::Enum(v) => json!({"type": "string", "enum": v}),

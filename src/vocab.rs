@@ -102,6 +102,16 @@ pub mod term {
     pub fn external_ref() -> String {
         seeds("externalRef")
     }
+    /// `seeds:dueAt`: when the work is due (br's `due_at`), a date or an
+    /// RFC 3339 instant.
+    pub fn due_at() -> String {
+        seeds("dueAt")
+    }
+    /// `seeds:estimatedMinutes`: a time estimate in minutes (br's
+    /// `estimated_minutes`), an integer.
+    pub fn estimated_minutes() -> String {
+        seeds("estimatedMinutes")
+    }
 
     /// `seeds:owner`: who owns the work (br's `owner`), a plain string.
     pub fn owner() -> String {

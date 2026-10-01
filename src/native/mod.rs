@@ -1016,6 +1016,36 @@ fn now() -> String {
     quipu::time::now_iso()
 }
 
+/// A `--due` as br stores it: a bare `YYYY-MM-DD`, or `tomorrow`, means
+/// 09:00 in the LOCAL time zone (`$TZ`, else the system's), written as an
+/// RFC 3339 UTC instant. So `--due 2026-10-01` on a US-Eastern host in
+/// summer is `2026-10-01T13:00:00Z`, and `--overdue` agrees with br on the
+/// due day. Every other form (`+1d`, an instant) passes through to the core.
+fn resolve_due(value: &Option<String>) -> Result<Option<String>> {
+    use jiff::{civil::Date, tz::TimeZone, Zoned};
+    let Some(v) = value else { return Ok(None) };
+    let t = v.trim();
+    let tz = TimeZone::system();
+    let date: Date = if t.eq_ignore_ascii_case("tomorrow") {
+        let today = Zoned::now().with_time_zone(tz.clone()).date();
+        today
+            .tomorrow()
+            .map_err(|e| SdError::usage(format!("--due tomorrow: {e}")))?
+    } else if t.len() == 10 && t.as_bytes()[4] == b'-' && t.as_bytes()[7] == b'-' {
+        t.parse()
+            .map_err(|_| SdError::usage(format!("cannot read --due {v:?}: not a date")))?
+    } else {
+        return Ok(Some(v.clone()));
+    };
+    let at = date
+        .at(9, 0, 0, 0)
+        .to_zoned(tz)
+        .map_err(|e| SdError::usage(format!("--due {v:?}: {e}")))?;
+    Ok(Some(
+        at.timestamp().strftime("%Y-%m-%dT%H:%M:%SZ").to_string(),
+    ))
+}
+
 fn actor(cli: &Cli) -> String {
     cli.actor
         .clone()
@@ -1955,6 +1985,8 @@ fn dispatch(cli: &Cli, cfg: &Resolved, ctx: &Ctx, b: &mut dyn Backend) -> Result
                 owner: a.owner.clone(),
                 acceptance_criteria: a.acceptance_criteria.clone(),
                 external_ref: a.external_ref.clone(),
+                due: resolve_due(&a.due)?,
+                estimate: a.estimate.clone(),
                 labels: split_csv(&a.labels),
                 parent: a.parent.clone(),
                 deps: split_csv(&a.deps),
@@ -1992,6 +2024,7 @@ fn dispatch(cli: &Cli, cfg: &Resolved, ctx: &Ctx, b: &mut dyn Backend) -> Result
                 priority: a.priority.clone(),
                 labels: a.labels.iter().flat_map(|l| split_csv(&Some(l.clone()))).collect(),
                 parent: a.parent.clone(),
+                estimate: a.estimate.clone(),
                 ..engine::CreateReq::default()
             };
             let (seed, tx) = engine::create(b, ctx, &req)?;
@@ -2024,6 +2057,7 @@ fn dispatch(cli: &Cli, cfg: &Resolved, ctx: &Ctx, b: &mut dyn Backend) -> Result
                     priority_min: a.priority_min.clone(),
                     priority_max: a.priority_max.clone(),
                     ids: a.id.clone(),
+                    overdue_at: a.overdue.then(|| ctx.now.clone()),
                 },
                 all: a.all,
                 limit: a.limit,
@@ -2104,6 +2138,7 @@ fn dispatch(cli: &Cli, cfg: &Resolved, ctx: &Ctx, b: &mut dyn Backend) -> Result
                     priority_min: a.priority_min.clone(),
                     priority_max: a.priority_max.clone(),
                     ids: a.id.clone(),
+                    overdue_at: a.overdue.then(|| ctx.now.clone()),
                 },
                 all: a.all,
                 limit: a.limit,
@@ -2534,6 +2569,8 @@ fn dispatch(cli: &Cli, cfg: &Resolved, ctx: &Ctx, b: &mut dyn Backend) -> Result
                 design: a.design.clone(),
                 acceptance_criteria: a.acceptance_criteria.clone(),
                 external_ref: a.external_ref.clone(),
+                due: resolve_due(&a.due)?,
+                estimate: a.estimate.clone(),
                 owner: a.owner.clone(),
                 status: a.status.clone(),
                 priority: a.priority.clone(),
