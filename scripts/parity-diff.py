@@ -88,6 +88,16 @@ NOT_APPLICABLE = {
     "--bypass-policy": "br close: bypasses .beads/policy.yaml gates; sd has no closure policy",
     "--bypass-reason": "br close: reason for --bypass-policy",
     "--backend": "br init: documented by br itself as ignored (always sqlite)",
+    "--apply": "br sync: commits a reviewed reconcile/migration plan; sd sync has no such plan (--dry-run previews a sync, and a plain sync applies)",
+    "--orphans": "br sync --import-only: how JSONL import treats deps on deleted issues; sd sync is a merge of two ledgers, never a JSONL import",
+}
+
+# The same, for a flag name br also uses on OTHER verbs with a meaning sd may
+# share: n/a only on the verb named here, still counted everywhere else.
+NOT_APPLICABLE_ON = {
+    "sync": {
+        "--force": "br sync: bypasses the Empty/Stale DB export guards of a JSONL export; sd has no export guard, and its one sync guard (removals) is lifted only by the explicitly named --allow-remote-deletes, deliberately not by --force",
+    },
 }
 
 
@@ -107,7 +117,7 @@ def main():
         paths += [(verb, sub) for sub in sorted(subs)]
         for path in paths:
             fb, fs = flags(a.br, *path) - gb, flags(a.sd, *path) - gs
-            na = fb & set(NOT_APPLICABLE)
+            na = fb & (set(NOT_APPLICABLE) | set(NOT_APPLICABLE_ON.get(" ".join(path), {})))
             fb -= na
             # A br per-verb flag is present in sd if sd has it on the verb OR as a
             # global flag (br declares --robot per verb; sd declares it once).

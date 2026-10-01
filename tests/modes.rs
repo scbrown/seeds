@@ -1080,3 +1080,83 @@ fn a_remote_update_keeps_facts_this_sd_does_not_model() {
         serde_json::from_str(&env.ok(&work, &["show", &id, "--json"], &remote)).unwrap();
     assert_eq!(shown[0]["title"], "y");
 }
+
+// ---------------------------------------------------------------- sync previews (aegis-w3k75d.13)
+
+#[test]
+fn sync_dry_run_and_status_report_without_writing_anything() {
+    let mut env = Env::new("sync-preview");
+    let Some(url) = env.start_server() else {
+        eprintln!("SKIPPED: set SEEDS_TEST_QUIPU_SERVER to a quipu-server binary to run this");
+        return;
+    };
+    let repo = env.pendant_project("repo");
+    let (a, g) = board(&env, &repo);
+    let sync_env = [("SEEDS_SYNC_REMOTE", url.as_str())];
+    let base_dir = repo.join(".seeds/seeds.db.sync");
+    let status = |env: &Env| -> Value {
+        serde_json::from_str(&env.ok(&repo, &["sync", "--status", "--json"], &sync_env)).unwrap()
+    };
+
+    // Never synced: local is ahead, and neither preview writes the remote or a base.
+    let s = status(&env);
+    assert_eq!(s["sync"]["state"], "local-ahead", "{s}");
+    assert_eq!(s["sync"]["synced_before"], false, "{s}");
+    let d: Value =
+        serde_json::from_str(&env.ok(&repo, &["sync", "--dry-run", "--json"], &sync_env)).unwrap();
+    assert_eq!(d["dry_run"], true);
+    assert_eq!(d["remote"]["created"].as_array().unwrap().len(), 2, "{d}");
+    assert_eq!(d["remote"]["wrote"], false, "{d}");
+    assert_eq!(
+        count_remote(&env, &repo, &url),
+        0,
+        "dry run wrote the remote"
+    );
+    assert!(
+        !base_dir.exists() || std::fs::read_dir(&base_dir).unwrap().next().is_none(),
+        "dry run wrote a sync base"
+    );
+
+    // Control: a real sync writes, and then both sides agree.
+    env.ok(&repo, &["sync"], &sync_env);
+    assert_eq!(count_remote(&env, &repo, &url), 2);
+    assert_eq!(status(&env)["sync"]["state"], "in-sync");
+
+    // The remote moves: remote-ahead; a dry run names the local update and
+    // leaves the local store as it was.
+    let id = std::fs::read_to_string(repo.join(".seeds/project-id")).unwrap();
+    let graph = format!("https://seeds.local/project/sd-{}", id.trim());
+    let remote = [
+        ("SEEDS_QUIPU_URL", url.as_str()),
+        ("SEEDS_GRAPH", graph.as_str()),
+    ];
+    let work = env.dir("work");
+    env.ok(&work, &["close", &g, "--reason", "done remotely"], &remote);
+    assert_eq!(status(&env)["sync"]["state"], "remote-ahead");
+    let d: Value =
+        serde_json::from_str(&env.ok(&repo, &["sync", "--dry-run", "--json"], &sync_env)).unwrap();
+    assert_eq!(d["local"]["updated"], serde_json::json!([g.clone()]), "{d}");
+    let v: Value = serde_json::from_str(&env.ok(&repo, &["show", &g, "--json"], &[])).unwrap();
+    assert_eq!(v[0]["status"], "open", "dry run wrote the local store");
+
+    // Both sides change one field differently: status reports it and exits 0;
+    // a dry run fails exactly as the sync would (exit 4), writing nothing.
+    env.ok(&work, &["update", &a, "--priority", "0"], &remote);
+    env.ok(&repo, &["update", &a, "--priority", "3"], &[]);
+    let s = status(&env);
+    assert_eq!(s["sync"]["state"], "conflicted", "{s}");
+    assert_eq!(s["sync"]["would_refuse"], true, "{s}");
+    assert_eq!(s["sync"]["conflicts"][0]["id"], a.as_str(), "{s}");
+    let o = env.sd(&repo, &["sync", "--dry-run"], &sync_env);
+    assert_eq!(o.status.code(), Some(4));
+    let o = env.sd(&repo, &["sync"], &sync_env);
+    assert_eq!(
+        o.status.code(),
+        Some(4),
+        "control: the sync refuses the same way"
+    );
+
+    // The two previews are alternatives.
+    let o = env.sd(&repo, &["sync", "--dry-run", "--status"], &sync_env);
+    assert_eq!(o.status.code(), Some(2));
+}
