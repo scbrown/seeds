@@ -2316,7 +2316,7 @@ fn dispatch(cli: &Cli, cfg: &Resolved, ctx: &Ctx, b: &mut dyn Backend) -> Result
             };
             Ok(ok(json, value, text, vec![]))
         }
-        Command::Orphans { details } => {
+        Command::Orphans { details, fix } => {
             let out = std::process::Command::new("git")
                 .args(["log", "--format=%h%x1f%H%x1f%s%x1f%b%x1e"])
                 .output()
@@ -2349,6 +2349,42 @@ fn dispatch(cli: &Cli, cfg: &Resolved, ctx: &Ctx, b: &mut dyn Backend) -> Result
                 .filter(|c| !c.0.is_empty())
                 .collect();
             let found = engine::orphans(b, &commits, at)?;
+            // --fix: br's interactive close, one seed at a time. Only an
+            // explicit yes closes; EOF and anything else skip, so a script
+            // with no input changes nothing.
+            let mut fixed: std::collections::BTreeMap<String, &'static str> = Default::default();
+            let mut fix_lines = Vec::new();
+            if *fix {
+                use std::io::{BufRead, Write};
+                let stdin = std::io::stdin();
+                let mut input = stdin.lock();
+                for (s, _) in &found {
+                    eprint!("Close {} ({})? [y/N] ", s.id, s.title);
+                    let _ = std::io::stderr().flush();
+                    let mut answer = String::new();
+                    let yes = input.read_line(&mut answer).is_ok_and(|n| n > 0)
+                        && matches!(answer.trim().to_ascii_lowercase().as_str(), "y" | "yes");
+                    if !yes {
+                        eprintln!();
+                        fixed.insert(s.id.clone(), "skipped");
+                        fix_lines.push(format!("skipped {}", s.id));
+                        continue;
+                    }
+                    let (closed, tx, _) = engine::close_as(
+                        b,
+                        ctx,
+                        std::slice::from_ref(&s.id),
+                        Some("Implemented (detected by orphans scan)"),
+                        None,
+                        false,
+                        None,
+                    )?;
+                    fixed.insert(s.id.clone(), "closed");
+                    for c in &closed {
+                        fix_lines.push(format!("closed {}{}", output::seed_line(c), tx_note(tx)));
+                    }
+                }
+            }
             let value = serde_json::Value::Array(
                 found
                     .iter()
@@ -2359,6 +2395,9 @@ fn dispatch(cli: &Cli, cfg: &Resolved, ctx: &Ctx, b: &mut dyn Backend) -> Result
                         if *details {
                             o["commit_hash"] = serde_json::json!(full.get(&c.0));
                             o["commit_body"] = serde_json::json!(c.2);
+                        }
+                        if let Some(f) = fixed.get(&s.id) {
+                            o["fix"] = serde_json::json!(f);
                         }
                         o
                     })
@@ -2378,6 +2417,11 @@ fn dispatch(cli: &Cli, cfg: &Resolved, ctx: &Ctx, b: &mut dyn Backend) -> Result
                     }
                 }
                 lines.join("\n")
+            };
+            let text = if fix_lines.is_empty() {
+                text
+            } else {
+                format!("{text}\n{}", fix_lines.join("\n"))
             };
             Ok(ok(json, value, text, vec![]))
         }
