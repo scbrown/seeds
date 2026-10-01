@@ -2122,6 +2122,7 @@ fn transition(
                 author: ctx.actor.clone(),
                 text: text.to_string(),
                 created_at: ctx.now.clone(),
+                extra: Default::default(),
             });
         }
         done.push(Transition {
@@ -2464,6 +2465,7 @@ pub fn delete(
                 if reason.is_empty() { "delete" } else { reason }
             ),
             created_at: ctx.now.clone(),
+            extra: Default::default(),
         });
     }
     report.tx = if writes.is_empty() {
@@ -2685,6 +2687,7 @@ fn transition_comments(
             author: ctx.actor.clone(),
             text: text.to_string(),
             created_at: ctx.now.clone(),
+            extra: Default::default(),
         })
         .collect()
 }
@@ -2970,6 +2973,7 @@ pub fn comment_add(
             .unwrap_or_else(|| ctx.actor.clone()),
         text: text.to_string(),
         created_at: ctx.now.clone(),
+        extra: Default::default(),
     };
     let tx = b.commit(
         &WriteBatch {

@@ -55,6 +55,10 @@ pub fn push_ntriples(out: &mut String, subject: &str, facts: &[Fact]) {
             Obj::Iri(i) => format!("<{i}>"),
             Obj::Str(v) => format!("\"{}\"", escape_literal(v)),
             Obj::Int(n) => format!("\"{n}\"^^<http://www.w3.org/2001/XMLSchema#integer>"),
+            Obj::Lang { lexical, lang } => format!("\"{}\"@{lang}", escape_literal(lexical)),
+            Obj::Typed { lexical, datatype } => {
+                format!("\"{}\"^^<{datatype}>", escape_literal(lexical))
+            }
         };
         out.push_str(&format!("<{subject}> <{p}> {obj} .\n"));
     }
@@ -95,6 +99,8 @@ pub fn functional_problems(by_subject: &BTreeMap<String, Vec<Fact>>) -> Vec<Stri
                         Obj::Iri(i) => format!("<{i}>"),
                         Obj::Str(v) => format!("{v:?}"),
                         Obj::Int(n) => n.to_string(),
+                        Obj::Lang { lexical, lang } => format!("{lexical:?}@{lang}"),
+                        Obj::Typed { lexical, datatype } => format!("{lexical:?}^^<{datatype}>"),
                     })
                     .collect();
                 problems.push(format!(

@@ -1196,3 +1196,91 @@ fn update_refuses_replacing_text_without_force_on_a_remote_ledger_too() {
         assert_eq!(get(&env, key), "second");
     }
 }
+
+// ---------------------------------------------------------------- typed literals over a remote (wu's review of seeds#73)
+
+#[test]
+fn typed_literals_a_newer_sd_wrote_cross_a_quipu_server_with_their_types() {
+    // Local store -> sd sync -> quipu server -> sd sync -> a second local
+    // store. Exercises the remote WRITE (SPARQL text) and READ (SPARQL JSON)
+    // of a boolean, an xsd:date and a language-tagged literal.
+    use quipu::store::{Datum, Store};
+    use quipu::types::{Op, Value as Q};
+    let mut env = Env::new("typed-remote");
+    let Some(url) = env.start_server() else {
+        eprintln!("SKIPPED: set SEEDS_TEST_QUIPU_SERVER to a quipu-server binary to run this");
+        return;
+    };
+    let graph = "https://seeds.local/project/typed-remote";
+    let future = "https://seeds.local/ontology/fieldFromTheFuture";
+    let local = [("SEEDS_GRAPH", graph), ("SEEDS_SYNC_REMOTE", url.as_str())];
+    let one = env.dir("one");
+    let id = env
+        .ok(&one, &["create", "typed", "--silent"], &local)
+        .trim()
+        .to_string();
+    let iri = seeds::vocab::item_iri(&id);
+    let want = [
+        Q::Bool(true),
+        Q::Typed {
+            lexical: "2026-10-01".into(),
+            datatype: "http://www.w3.org/2001/XMLSchema#date".into(),
+        },
+        Q::Lang {
+            lexical: "bonjour".into(),
+            lang: "fr".into(),
+        },
+    ];
+    {
+        let mut st = Store::open(one.join(".seeds/seeds.db").to_str().unwrap()).unwrap();
+        let g = st.graph_create(graph).unwrap();
+        let e = st.intern(&iri).unwrap();
+        let a = st.intern(future).unwrap();
+        let datums: Vec<Datum> = want
+            .iter()
+            .map(|v| Datum {
+                entity: e,
+                attribute: a,
+                value: v.clone(),
+                valid_from: "2026-10-01T00:00:00Z".into(),
+                valid_to: None,
+                op: Op::Assert,
+            })
+            .collect();
+        st.transact_to_graph(
+            &datums,
+            "2026-10-01T00:00:00Z",
+            Some("newer-sd"),
+            Some("test"),
+            g,
+        )
+        .unwrap();
+    }
+    env.ok(&one, &["sync"], &local);
+    let two = env.dir("two");
+    env.ok(&two, &["sync"], &local);
+    let got = |dir: &Path| -> Vec<String> {
+        let st = Store::open_read_only(dir.join(".seeds/seeds.db").to_str().unwrap()).unwrap();
+        let g = st.graph_create(graph).unwrap();
+        let (Some(e), Some(a)) = (st.lookup(&iri).unwrap(), st.lookup(future).unwrap()) else {
+            return vec![];
+        };
+        let mut v: Vec<String> = st
+            .entity_facts_in_graph(e, g)
+            .unwrap()
+            .into_iter()
+            .filter(|f| f.attribute == a)
+            .map(|f| format!("{:?}", f.value))
+            .collect();
+        v.sort();
+        v
+    };
+    let mut expect: Vec<String> = want.iter().map(|v| format!("{v:?}")).collect();
+    expect.sort();
+    assert_eq!(got(&one), expect, "control: planted in the first store");
+    assert_eq!(
+        got(&two),
+        expect,
+        "arrived through the server with their types"
+    );
+}

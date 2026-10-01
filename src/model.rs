@@ -153,6 +153,11 @@ pub struct Seed {
     pub workflow_run: Option<String>,
     /// The compare-and-set token: 1 at create, +1 on every write to the seed.
     pub revision: u64,
+    /// Facts this sd does not model (a NEWER sd wrote them), as
+    /// (predicate, object). Read by `from_facts`, written back by `facts`,
+    /// so import, sync and renumber carry them instead of dropping them
+    /// (aegis-w3k75d.14).
+    pub extra: BTreeSet<(String, Obj)>,
 }
 
 /// One comment on a seed.
@@ -168,6 +173,8 @@ pub struct Comment {
     pub text: String,
     /// When (ISO-8601 UTC).
     pub created_at: String,
+    /// Facts this sd does not model, as on [`Seed::extra`].
+    pub extra: BTreeSet<(String, Obj)>,
 }
 
 /// The object of a fact, before it is interned into a particular store.
@@ -179,6 +186,62 @@ pub enum Obj {
     Str(String),
     /// An integer literal.
     Int(i64),
+    /// A language-tagged literal: the lexical form and the BCP47 tag, apart
+    /// (never `"x@en"` in a string). seeds writes none; a NEWER sd may, and
+    /// it must round-trip (aegis-w3k75d.14).
+    Lang {
+        /// The lexical form, without the tag.
+        lexical: String,
+        /// The tag, without the `@`.
+        lang: String,
+    },
+    /// Any other typed literal (`xsd:boolean`, `xsd:date`, `xsd:dateTime`,
+    /// `xsd:decimal`, a custom datatype ...), lexical form verbatim, so a
+    /// newer sd's dates and booleans keep their datatype through this sd.
+    Typed {
+        /// The lexical form, as written.
+        lexical: String,
+        /// The datatype IRI, in full.
+        datatype: String,
+    },
+}
+
+/// `xsd:integer`.
+pub const XSD_INTEGER: &str = "http://www.w3.org/2001/XMLSchema#integer";
+/// `xsd:string`.
+pub const XSD_STRING: &str = "http://www.w3.org/2001/XMLSchema#string";
+/// `xsd:boolean`.
+pub const XSD_BOOLEAN: &str = "http://www.w3.org/2001/XMLSchema#boolean";
+/// `xsd:double`.
+pub const XSD_DOUBLE: &str = "http://www.w3.org/2001/XMLSchema#double";
+
+impl Obj {
+    /// A literal from its RDF parts, classified the way quipu's own ingest
+    /// does (`rdf::literal_to_value`): a language tag wins; `xsd:integer`
+    /// that parses is [`Obj::Int`]; no datatype or `xsd:string` is
+    /// [`Obj::Str`]; anything else keeps its datatype as [`Obj::Typed`].
+    pub fn literal(lexical: String, datatype: Option<&str>, lang: Option<&str>) -> Obj {
+        if let Some(lang) = lang.filter(|l| !l.is_empty()) {
+            return Obj::Lang {
+                lexical,
+                lang: lang.to_string(),
+            };
+        }
+        match datatype {
+            None | Some("") | Some(XSD_STRING) => Obj::Str(lexical),
+            Some(XSD_INTEGER) => match lexical.parse() {
+                Ok(n) => Obj::Int(n),
+                Err(_) => Obj::Typed {
+                    lexical,
+                    datatype: XSD_INTEGER.into(),
+                },
+            },
+            Some(dt) => Obj::Typed {
+                lexical,
+                datatype: dt.to_string(),
+            },
+        }
+    }
 }
 
 /// A (predicate IRI, object) pair about one subject.
@@ -241,6 +304,7 @@ impl Seed {
         if let Some(r) = &self.workflow_run {
             f.push((term::workflow_run(), Obj::Iri(r.clone())));
         }
+        f.extend(self.extra.iter().cloned());
         f
     }
 
@@ -259,6 +323,7 @@ impl Seed {
                 author: "a".into(),
                 text: "t".into(),
                 created_at: "c".into(),
+                extra: BTreeSet::new(),
             };
             Seed::maximal()
                 .facts()
@@ -373,7 +438,7 @@ impl Seed {
                 v.iter().find_map(|o| match o {
                     Obj::Iri(iri) => vocab::principal_name(iri),
                     Obj::Str(s) => Some(s.clone()),
-                    Obj::Int(_) => None,
+                    _ => None,
                 })
             }),
             labels: strs(term::label()),
@@ -397,6 +462,7 @@ impl Seed {
             revision: i(term::revision())
                 .and_then(|r| u64::try_from(r).ok())
                 .unwrap_or(0),
+            extra: unmodelled(facts, &term::work_item()),
         })
     }
 
@@ -497,14 +563,16 @@ impl Seed {
 impl Comment {
     /// The facts that describe this comment.
     pub fn facts(&self) -> Vec<Fact> {
-        vec![
+        let mut f = vec![
             (vocab::RDF_TYPE.into(), Obj::Iri(term::comment())),
             (term::comment_on(), Obj::Iri(vocab::item_iri(&self.seed))),
             (term::comment_index(), Obj::Int(self.index as i64)),
             (term::author(), Obj::Str(self.author.clone())),
             (term::text(), Obj::Str(self.text.clone())),
             (term::created_at(), Obj::Str(self.created_at.clone())),
-        ]
+        ];
+        f.extend(self.extra.iter().cloned());
+        f
     }
 
     /// Rebuild a comment from its facts.
@@ -535,6 +603,7 @@ impl Comment {
             author: author.unwrap_or_default(),
             text: text.unwrap_or_default(),
             created_at: created_at.unwrap_or_default(),
+            extra: unmodelled(facts, &term::comment()),
         })
     }
 
@@ -548,6 +617,24 @@ impl Comment {
             "created_at": self.created_at,
         })
     }
+}
+
+/// The facts among `facts` this sd does not model: any predicate outside
+/// [`Seed::modelled_predicates`], and any `rdf:type` besides the entity's own
+/// class (`own_type`), which a newer sd may add as a second type.
+fn unmodelled(facts: &[Fact], own_type: &str) -> BTreeSet<(String, Obj)> {
+    let modelled = Seed::modelled_predicates();
+    facts
+        .iter()
+        .filter(|(p, o)| {
+            if p == vocab::RDF_TYPE {
+                *o != Obj::Iri(own_type.to_string())
+            } else {
+                !modelled.contains(p)
+            }
+        })
+        .cloned()
+        .collect()
 }
 
 /// Every seed and comment in one project, as of one transaction.

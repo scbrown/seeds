@@ -262,19 +262,20 @@ fn take_literal(rest: &mut &str) -> Option<Obj> {
         let mut r = dt;
         let datatype = take_iri(&mut r)?;
         *rest = r;
-        if datatype == "http://www.w3.org/2001/XMLSchema#integer" {
-            return lexical.parse::<i64>().ok().map(Obj::Int);
-        }
-        return Some(Obj::Str(lexical));
+        return Some(Obj::literal(lexical, Some(&datatype), None));
     }
+    let mut tag = None;
     if let Some(lang) = after.strip_prefix('@') {
         let len = lang
             .find(|c: char| !(c.is_ascii_alphanumeric() || c == '-'))
             .unwrap_or(lang.len());
+        tag = Some(&lang[..len]);
         after = &lang[len..];
     }
     *rest = after;
-    Some(Obj::Str(lexical))
+    // A language tag and a datatype are kept, never folded into a string
+    // (aegis-w3k75d.14).
+    Some(Obj::literal(lexical, None, tag))
 }
 
 fn unescape(s: &str) -> Option<String> {
