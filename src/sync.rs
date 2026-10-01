@@ -360,15 +360,15 @@ fn dbg<T: std::fmt::Debug>(v: &T) -> String {
     format!("{v:?}")
 }
 
-fn pick_set(
-    base: Option<&BTreeSet<String>>,
-    local: &BTreeSet<String>,
-    remote: &BTreeSet<String>,
-) -> BTreeSet<String> {
+fn pick_set<T: Ord + Clone>(
+    base: Option<&BTreeSet<T>>,
+    local: &BTreeSet<T>,
+    remote: &BTreeSet<T>,
+) -> BTreeSet<T> {
     let empty = BTreeSet::new();
     let base = base.unwrap_or(&empty);
     // Keep what neither side removed; add what either side added.
-    let kept: BTreeSet<String> = base
+    let kept: BTreeSet<T> = base
         .iter()
         .filter(|x| local.contains(*x) && remote.contains(*x))
         .cloned()
@@ -524,6 +524,9 @@ fn merge_seed(base: Option<&Seed>, l: &Seed, r: &Seed, sides: Sides) -> (Seed, V
             dbg,
         ),
         revision: 0,
+        // Facts this sd does not model merge as a set: every addition and
+        // every removal from both sides (it cannot know their cardinality).
+        extra: pick_set(base.map(|b| &b.extra), &l.extra, &r.extra),
     };
     let revision = if content(&m) == content(r) {
         r.revision
