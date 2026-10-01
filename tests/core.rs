@@ -2614,3 +2614,68 @@ fn create_many_writes_every_item_in_one_transaction_or_none() {
     assert!(engine::create_many(&mut b, &ctx(3), &bad, false).is_err());
     assert_eq!(b.snapshot(None).unwrap().seeds.len(), 3, "all or none");
 }
+
+#[test]
+fn acceptance_checklist_edits_in_place_like_br() {
+    // aegis-w3k75d.13: br's --check/--uncheck/--add-acceptance, from its CLI spec.
+    use seeds::engine::edit_checklist;
+    let v = |s: &[&str]| s.iter().map(|x| x.to_string()).collect::<Vec<_>>();
+    let body = "Intro line\n- [ ] parse input\n- [x] Write docs\n  * [ ] parse output\nfooter";
+
+    // By number: only the box character changes; every other byte is kept.
+    let out = edit_checklist(body, &v(&["1"]), &[], &[]).unwrap();
+    assert_eq!(
+        out,
+        body.replacen("- [ ] parse input", "- [x] parse input", 1)
+    );
+    // Comma list, and untick; an item already in the asked state is untouched.
+    let out = edit_checklist(body, &v(&["1,3"]), &v(&["2"]), &[]).unwrap();
+    assert_eq!(
+        out,
+        "Intro line\n- [x] parse input\n- [ ] Write docs\n  * [x] parse output\nfooter"
+    );
+    assert_eq!(edit_checklist(body, &v(&["2"]), &[], &[]).unwrap(), body);
+
+    // Text: case-insensitive; an exact match wins over substrings; a unique
+    // substring works; an ambiguous one is refused, naming the candidates.
+    let out = edit_checklist(body, &v(&["WRITE DOCS"]), &[], &[]).unwrap();
+    assert_eq!(out, body);
+    let out = edit_checklist(body, &[], &v(&["docs"]), &[]).unwrap();
+    assert!(out.contains("- [ ] Write docs"), "{out}");
+    let e = edit_checklist(body, &v(&["parse"]), &[], &[]).unwrap_err();
+    assert!(e.contains("matches 2 items") && e.contains("1, 3"), "{e}");
+    let exact = "- [ ] parse\n- [ ] parse output\n";
+    assert_eq!(
+        edit_checklist(exact, &v(&["parse"]), &[], &[]).unwrap(),
+        "- [x] parse\n- [ ] parse output\n"
+    );
+
+    // Refusals, before anything changes.
+    for (c, u, want) in [
+        (v(&["4"]), vec![], "no item 4"),
+        (v(&["0"]), vec![], "no item 0"),
+        (v(&["nothing like it"]), vec![], "matches no"),
+        (v(&["1"]), v(&["1"]), "both checked and unchecked"),
+    ] {
+        let e = edit_checklist(body, &c, &u, &[]).unwrap_err();
+        assert!(e.contains(want), "{want}: {e}");
+    }
+    let e = edit_checklist("just prose", &v(&["1"]), &[], &[]).unwrap_err();
+    assert!(e.contains("no acceptance checklist"), "{e}");
+
+    // Add appends unchecked items, to an empty field or after a missing newline.
+    assert_eq!(
+        edit_checklist("", &[], &[], &v(&["a", "b"])).unwrap(),
+        "- [ ] a\n- [ ] b\n"
+    );
+    assert_eq!(
+        edit_checklist("x", &[], &[], &v(&["- y"])).unwrap(),
+        "x\n- [ ] - y\n"
+    );
+    assert!(edit_checklist("", &[], &[], &v(&["  "])).is_err());
+    // CRLF lines keep their endings.
+    assert_eq!(
+        edit_checklist("- [ ] a\r\n- [ ] b\r\n", &v(&["b"]), &[], &[]).unwrap(),
+        "- [ ] a\r\n- [x] b\r\n"
+    );
+}
