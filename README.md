@@ -146,8 +146,14 @@ rewrites that to seeds before the tool call runs:
 dp alias --cmd bd --replace sd
 ```
 
-A `bd` verb seeds rejects is recorded, so `dp paths` becomes the seeds backlog
-(the alias itself lives in desire-path and is not wired up yet). seeds embeds
+[caboodle](https://github.com/scbrown/caboodle) sets this alias for you when a
+plan installs both seeds and desire-path. If the host already has a `bd` alias
+that points somewhere else, caboodle leaves it alone and reports it, because
+`dp alias` would otherwise replace it silently. Run the command above by hand
+only if you install seeds without caboodle.
+
+A `bd` verb seeds rejects is recorded, so `dp paths` becomes the seeds backlog.
+seeds embeds
 quipu as a library: every write is one quipu transaction in the project's
 named graph, validated against camayoc's WorkItem shape. How the pieces fit:
 [Architecture](docs/book/src/architecture.md) and
