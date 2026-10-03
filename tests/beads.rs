@@ -78,6 +78,21 @@ fn scalar_conflicts_and_multivalued_union() {
     assert_eq!(beads::merge(&base, &m, &m).unwrap(), m);
 }
 #[test]
+fn concurrent_label_union_is_canonical_without_reordering_imported_arrays() {
+    let mut base = records();
+    base.get_mut("br-a").unwrap()["labels"] = json!(["z", "a"]);
+    assert_eq!(beads::merge(&base, &base, &base).unwrap(), base);
+    let mut local = base.clone();
+    let mut peer = base.clone();
+    local.get_mut("br-a").unwrap()["labels"] = json!(["z", "a", "y"]);
+    peer.get_mut("br-a").unwrap()["labels"] = json!(["z", "a", "b"]);
+    let merged = beads::merge(&base, &local, &peer).unwrap();
+    assert_eq!(merged["br-a"]["labels"], json!(["a", "b", "y", "z"]));
+    assert_eq!(beads::merge(&base, &peer, &local).unwrap(), merged);
+    assert_eq!(beads::merge(&base, &local, &base).unwrap(), local);
+}
+
+#[test]
 fn duplicates_and_absent_null_are_not_silent() {
     let text = beads::render(&records());
     assert!(beads::parse(&(text.clone() + &text)).is_err());
