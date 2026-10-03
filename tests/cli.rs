@@ -2019,3 +2019,192 @@ fn ephemeral_seeds_are_read_everywhere_never_ready_never_shared() {
     sb.ok(&["import", dir.to_str().unwrap()]);
     assert_eq!(sb.json(&["show", &e])[0]["ephemeral"], true);
 }
+
+#[test]
+fn cutover_roundtrip_sync_dry_run_and_conflict_are_observable() {
+    let sb = Sandbox::new("cutover");
+    let input = serde_json::json!({"id":"br-one","title":"one","status":"open","priority":2,"issue_type":"task","created_at":"2026-01-01T00:00:00Z","updated_at":"2026-01-01T00:00:00Z","future":{"n":1}});
+    std::fs::write(sb.work().join("board.jsonl"), format!("{input}\n")).unwrap();
+    let common = [
+        "--store",
+        "local.db",
+        "--graph",
+        "https://seeds.local/project/cutover",
+    ];
+    let call = |args: &[&str]| {
+        let mut a = common.to_vec();
+        a.extend_from_slice(args);
+        sb.run(&a)
+    };
+    let ok = |args: &[&str]| {
+        let o = call(args);
+        assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+        serde_json::from_slice::<Value>(&o.stdout).unwrap()
+    };
+    let dry = ok(&[
+        "cutover",
+        "sync",
+        "--file",
+        "board.jsonl",
+        "--base",
+        "cursor.json",
+        "--dry-run",
+    ]);
+    assert_eq!(dry["created"], serde_json::json!(["br-one"]));
+    assert!(!sb.work().join("local.db").exists());
+    assert!(!sb.work().join("cursor.json").exists());
+    let verify = ok(&["cutover", "verify", "--file", "board.jsonl"]);
+    assert_eq!(verify["losses"], 0);
+    ok(&[
+        "cutover",
+        "sync",
+        "--file",
+        "board.jsonl",
+        "--base",
+        "cursor.json",
+    ]);
+    let second = ok(&[
+        "cutover",
+        "sync",
+        "--file",
+        "board.jsonl",
+        "--base",
+        "cursor.json",
+    ]);
+    assert_eq!(second["wrote"], false);
+    assert_eq!(second["store_differences"], serde_json::json!([]));
+    ok(&["cutover", "export", "--file", "out.jsonl"]);
+    assert_eq!(
+        std::fs::read_to_string(sb.work().join("out.jsonl")).unwrap(),
+        format!("{input}\n")
+    );
+    let changed = call(&["update", "br-one", "--title", "from seed"]);
+    assert!(changed.status.success());
+    ok(&[
+        "cutover",
+        "sync",
+        "--file",
+        "board.jsonl",
+        "--base",
+        "cursor.json",
+    ]);
+    let peer: Value =
+        serde_json::from_str(&std::fs::read_to_string(sb.work().join("board.jsonl")).unwrap())
+            .unwrap();
+    assert_eq!(peer["title"], "from seed");
+    assert_eq!(peer["future"], input["future"]);
+    let mut peer = peer;
+    peer["priority"] = serde_json::json!(0);
+    std::fs::write(sb.work().join("board.jsonl"), format!("{peer}\n")).unwrap();
+    assert!(call(&["update", "br-one", "--priority", "1"])
+        .status
+        .success());
+    let before = std::fs::read(sb.work().join("cursor.json")).unwrap();
+    let conflict = call(&[
+        "cutover",
+        "sync",
+        "--file",
+        "board.jsonl",
+        "--base",
+        "cursor.json",
+    ]);
+    assert_eq!(code(&conflict), 4);
+    assert!(String::from_utf8_lossy(&conflict.stderr).contains("priority"));
+    assert_eq!(
+        std::fs::read(sb.work().join("cursor.json")).unwrap(),
+        before
+    );
+}
+
+#[test]
+fn cutover_recovers_a_store_commit_before_peer_publication() {
+    let sb = Sandbox::new("cutover-recovery");
+    let common = [
+        "--store",
+        "local.db",
+        "--graph",
+        "https://seeds.local/project/recovery",
+    ];
+    let ok = |args: &[&str]| {
+        let mut a = common.to_vec();
+        a.extend_from_slice(args);
+        sb.ok(&a)
+    };
+    let item = serde_json::json!({"id":"br-one","title":"old","status":"open","priority":2,"issue_type":"task","created_at":"2026-01-01T00:00:00Z","updated_at":"2026-01-01T00:00:00Z"});
+    std::fs::write(sb.work().join("board.jsonl"), format!("{item}\n")).unwrap();
+    ok(&[
+        "cutover",
+        "sync",
+        "--file",
+        "board.jsonl",
+        "--base",
+        "cursor.json",
+    ]);
+    let base: Value =
+        serde_json::from_slice(&std::fs::read(sb.work().join("cursor.json")).unwrap()).unwrap();
+    ok(&["update", "br-one", "--title", "after crash"]);
+    ok(&["cutover", "export", "--file", "desired.jsonl"]);
+    let desired: Value =
+        serde_json::from_str(&std::fs::read_to_string(sb.work().join("desired.jsonl")).unwrap())
+            .unwrap();
+    let journal = serde_json::json!({"binding":base["binding"],"local":base["records"],"peer":base["records"],"desired":{"br-one":desired}});
+    std::fs::write(sb.work().join("cursor.json.pending"), journal.to_string()).unwrap();
+    ok(&[
+        "cutover",
+        "sync",
+        "--file",
+        "board.jsonl",
+        "--base",
+        "cursor.json",
+    ]);
+    assert!(!sb.work().join("cursor.json.pending").exists());
+    let peer: Value =
+        serde_json::from_str(&std::fs::read_to_string(sb.work().join("board.jsonl")).unwrap())
+            .unwrap();
+    assert_eq!(peer["title"], "after crash");
+    let second: Value = serde_json::from_str(&ok(&[
+        "cutover",
+        "sync",
+        "--file",
+        "board.jsonl",
+        "--base",
+        "cursor.json",
+    ]))
+    .unwrap();
+    assert_eq!(second["wrote"], false);
+    let mut args = common.to_vec();
+    args.extend_from_slice(&["cutover", "export", "--file", "local.db"]);
+    assert_eq!(code(&sb.run(&args)), 2);
+}
+
+#[test]
+fn cutover_refuses_sidecar_aliases_and_missing_dependency_in_dry_run() {
+    let sb = Sandbox::new("cutover-invalid");
+    let common = [
+        "--store",
+        "local.db",
+        "--graph",
+        "https://seeds.local/project/invalid",
+    ];
+    let call = |args: &[&str]| {
+        let mut a = common.to_vec();
+        a.extend_from_slice(args);
+        sb.run(&a)
+    };
+    let alias = call(&[
+        "cutover",
+        "sync",
+        "--file",
+        "cursor.json.pending",
+        "--base",
+        "cursor.json",
+    ]);
+    assert_eq!(code(&alias), 2);
+    assert!(!sb.work().join("local.db").exists());
+    let item = serde_json::json!({"id":"br-one","title":"one","status":"open","priority":2,"issue_type":"task","created_at":"2026-01-01T00:00:00Z","updated_at":"2026-01-01T00:00:00Z","dependencies":[{"depends_on_id":"br-missing","type":"blocks"}]});
+    std::fs::write(sb.work().join("board.jsonl"), format!("{item}\n")).unwrap();
+    let dry = call(&["cutover", "import", "--file", "board.jsonl", "--dry-run"]);
+    assert!(!dry.status.success());
+    assert!(String::from_utf8_lossy(&dry.stderr).contains("br-missing"));
+    assert!(!sb.work().join("local.db").exists());
+}

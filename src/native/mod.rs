@@ -10,6 +10,7 @@ mod agent_context;
 pub mod attest;
 pub mod cli;
 pub mod config;
+mod cutover;
 pub mod remote;
 pub mod store;
 
@@ -842,6 +843,15 @@ fn capabilities(command_path: Option<&str>) -> Result<Json> {
                 let n = a.get_num_args().map_or(1, |r| r.min_values().max(1));
                 argv.extend(std::iter::repeat_n(placeholder(a), n));
             }
+            for a in sub
+                .get_arguments()
+                .filter(|a| a.is_required_set() && a.get_long().is_some())
+            {
+                argv.push(format!("--{}", a.get_long().unwrap()));
+                if a.get_action().takes_values() {
+                    argv.push(placeholder(a));
+                }
+            }
             Cli::try_parse_from(&argv).ok()
         };
         let parsed = attempt(false).or_else(|| attempt(true));
@@ -1117,6 +1127,9 @@ pub fn run_with(cli: &Cli, cfg: &Resolved) -> Result<Outcome> {
         graph: Some(graph),
         ..cfg.clone()
     };
+    if let Command::Cutover(a) = &cli.command {
+        return cutover::run(cli, cfg, &ctx, a);
+    }
     let o = match &cfg.location {
         Location::Url(url) => run_remote(cli, cfg, &ctx, url),
         Location::Store(path) => run_local(cli, cfg, &ctx, path),
@@ -2841,7 +2854,8 @@ fn dispatch(cli: &Cli, cfg: &Resolved, ctx: &Ctx, b: &mut dyn Backend) -> Result
         },
         Command::Info(a) => info_outcome(json, cfg, b, a.schema),
         Command::Doctor(a) => doctor(json, cfg, b, a),
-        Command::Export(_)
+        Command::Cutover(_)
+        | Command::Export(_)
         | Command::Import(_)
         | Command::Sync(_)
         | Command::MergeDriver(_)
