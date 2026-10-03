@@ -10,6 +10,104 @@ use std::collections::{BTreeMap, BTreeSet};
 
 /// Records keyed by exact external ID, never fuzzy resolved.
 pub type Records = BTreeMap<String, Value>;
+
+/// Persistent bridge identity map. Deleted slots remain reserved; IDs never reuse.
+#[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct CommentIds {
+    pub high_water: i64,
+    pub slots: BTreeMap<String, BTreeMap<u64, i64>>,
+}
+
+fn comment_index(position: usize, value: &Value) -> u64 {
+    value
+        .get("_seeds")
+        .filter(|e| e["format"] == "seeds-facts-v1")
+        .and_then(|e| e["index"].as_u64())
+        .unwrap_or(position as u64 + 1)
+}
+
+/// Encode for a br store, reserving global integer IDs without changing imported IDs.
+/// Callers must persist the returned map before publishing the returned records.
+pub fn encode_mapped(snap: &Snapshot, ids: &mut CommentIds) -> Result<Records> {
+    let mut next = ids.clone();
+    let mut occupied = BTreeMap::new();
+    if next.high_water < 0 {
+        return Err(SdError::refused("negative comment ID high-water mark"));
+    }
+    for (seed, slots) in &next.slots {
+        for (index, id) in slots {
+            if *id <= 0
+                || *index == 0
+                || *index > i64::MAX as u64
+                || occupied.insert(*id, (seed.clone(), *index)).is_some()
+            {
+                return Err(SdError::refused("invalid or duplicate mapped comment ID"));
+            }
+            next.high_water = next.high_water.max(*id);
+        }
+    }
+    // Reserve all imported IDs before allocating any new one, including records
+    // that sort after a new native record. A changed identity is a conflict.
+    let mut imported = BTreeSet::new();
+    for (seed_id, s) in &snap.seeds {
+        if let Some(original) = raw(s)? {
+            for (position, c) in array(&original, "comments")?.iter().enumerate() {
+                let index = comment_index(position, c);
+                imported.insert((seed_id.clone(), index));
+                let Some(id) = c["id"].as_i64().filter(|id| *id > 0) else {
+                    continue; // Legacy non-integer IDs are carried, never rewritten.
+                };
+                let slot = (seed_id.clone(), index);
+                if occupied.get(&id).is_some_and(|old| old != &slot)
+                    || next
+                        .slots
+                        .get(seed_id)
+                        .and_then(|s| s.get(&index))
+                        .is_some_and(|old| *old != id)
+                {
+                    return Err(SdError::conflict(format!(
+                        "{seed_id}: comment identity collision at slot {index}"
+                    )));
+                }
+                occupied.insert(id, slot);
+                next.slots
+                    .entry(seed_id.clone())
+                    .or_default()
+                    .insert(index, id);
+                next.high_water = next.high_water.max(id);
+            }
+        }
+    }
+    let mut records = encode(snap)?;
+    for c in &snap.comments {
+        if imported.contains(&(c.seed.clone(), c.index)) {
+            continue;
+        }
+        let slots = next.slots.entry(c.seed.clone()).or_default();
+        let id = match slots.get(&c.index) {
+            Some(id) => *id,
+            None => {
+                next.high_water = next
+                    .high_water
+                    .checked_add(1)
+                    .ok_or_else(|| SdError::refused("global comment ID sequence exhausted"))?;
+                slots.insert(c.index, next.high_water);
+                next.high_water
+            }
+        };
+        let row = records
+            .get_mut(&c.seed)
+            .and_then(|v| v["comments"].as_array_mut())
+            .and_then(|cs| {
+                cs.iter_mut()
+                    .find(|v| v["_seeds"]["index"].as_u64() == Some(c.index))
+            })
+            .ok_or_else(|| SdError::failed("new comment lacks its native slot marker"))?;
+        row["id"] = json!(id);
+    }
+    *ids = next;
+    Ok(records)
+}
 fn shadow() -> String {
     vocab::seeds("beadsJson")
 }
@@ -305,7 +403,7 @@ pub fn encode(snap: &Snapshot) -> Result<Records> {
             .unwrap_or(&[]);
         let mut cs = Vec::new();
         for c in comments.get(id.as_str()).into_iter().flatten() {
-            let mut val = old_comments
+            let existing = old_comments
                 .iter()
                 .enumerate()
                 .find(|(i, v)| {
@@ -315,10 +413,11 @@ pub fn encode(snap: &Snapshot) -> Result<Records> {
                         .unwrap_or(*i as u64 + 1)
                         == c.index
                 })
-                .map(|(_, v)| v.clone())
-                .unwrap_or_else(|| json!({"id":c.index,"issue_id":id}));
+                .map(|(_, v)| v.clone());
+            let is_new = existing.is_none();
+            let mut val = existing.unwrap_or_else(|| json!({"id":c.index,"issue_id":id}));
             if !c.extra.is_empty()
-                || original.is_none()
+                || is_new
                 || val
                     .get("_seeds")
                     .is_some_and(|e| e["format"] == "seeds-facts-v1")

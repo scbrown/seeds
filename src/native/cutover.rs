@@ -13,6 +13,7 @@ use crate::{
     sync,
 };
 use serde_json::{json, Value};
+use sha2::{Digest, Sha256};
 use std::{fs, path::Path};
 
 fn read(path: &Path) -> Result<String> {
@@ -121,6 +122,32 @@ fn absolute(path: &Path) -> Result<std::path::PathBuf> {
     ))
 }
 
+fn comment_ids(path: &Path, binding: &Value) -> Result<beads::CommentIds> {
+    match fs::read_to_string(path) {
+        Ok(text) => {
+            let value: Value = serde_json::from_str(&text)
+                .map_err(|e| SdError::failed(format!("invalid comment identity map: {e}")))?;
+            if value["format"] != "seeds-br-comment-ids-v1" || value["binding"] != *binding {
+                return Err(SdError::refused("comment identity map binding differs"));
+            }
+            serde_json::from_value(value["ids"].clone())
+                .map_err(|e| SdError::failed(format!("invalid comment identity map: {e}")))
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Default::default()),
+        Err(e) => Err(SdError::failed(format!(
+            "cannot read comment identity map: {e}"
+        ))),
+    }
+}
+
+fn save_comment_ids(path: &Path, binding: &Value, ids: &beads::CommentIds) -> Result<()> {
+    let text = json!({"format":"seeds-br-comment-ids-v1","binding":binding,"ids":ids}).to_string();
+    if fs::read_to_string(path).ok().as_deref() != Some(&text) {
+        atomic(path, &text)?;
+    }
+    Ok(())
+}
+
 pub(super) fn run(cli: &Cli, cfg: &Resolved, ctx: &Ctx, a: &CutoverArgs) -> Result<Outcome> {
     // Requiring explicit destination prevents a cwd or user config from turning
     // a copied-board rehearsal into a production import.
@@ -139,12 +166,19 @@ pub(super) fn run(cli: &Cli, cfg: &Resolved, ctx: &Ctx, a: &CutoverArgs) -> Resu
     };
     let file = absolute(Path::new(&a.file))?;
     let store_path = absolute(path)?;
+    let graph = cfg.graph();
+    let graph_hash = format!("{:x}", Sha256::digest(graph.as_bytes()));
+    let ids_path = sibling(&store_path, &format!(".cutover-{graph_hash}.comments.json"));
+    let ids_lock_path = sibling(&ids_path, ".lock");
+    let ids_binding = json!({"store":store_path,"graph":graph});
     let base_owned = a.base.as_deref().map(Path::new).map(absolute).transpose()?;
     let base_path = base_owned.as_deref();
     let mut paths = vec![
         store_path.clone(),
         file.clone(),
         sibling(&file, ".cutover.lock"),
+        ids_path.clone(),
+        ids_lock_path.clone(),
     ];
     paths.extend(
         ["-wal", "-shm", ".lock"]
@@ -167,6 +201,11 @@ pub(super) fn run(cli: &Cli, cfg: &Resolved, ctx: &Ctx, a: &CutoverArgs) -> Resu
     if paths.iter().any(|p| p.is_symlink()) {
         return Err(SdError::refused("cutover sidecars must not be symlinks"));
     }
+    let _ids_lock = if !a.dry_run && a.operation != "verify" {
+        Some(lock(&ids_lock_path)?)
+    } else {
+        None
+    };
     let _cursor_lock = if !a.dry_run && a.operation == "sync" {
         base_path.map(|p| lock(&sibling(p, ".lock"))).transpose()?
     } else {
@@ -177,7 +216,6 @@ pub(super) fn run(cli: &Cli, cfg: &Resolved, ctx: &Ctx, a: &CutoverArgs) -> Resu
     } else {
         None
     };
-    let graph = cfg.graph();
     if a.operation == "verify" {
         let input = beads::parse(&read(&file)?)?;
         let decoded = beads::decode(&input)?;
@@ -193,9 +231,12 @@ pub(super) fn run(cli: &Cli, cfg: &Resolved, ctx: &Ctx, a: &CutoverArgs) -> Resu
             if differences.is_empty() { 0 } else { 1 },
         ));
     }
+    let mut ids = comment_ids(&ids_path, &ids_binding)?;
     if a.operation == "export" {
-        let records = beads::encode(&snapshot(path, graph)?)?;
+        let records = beads::encode_mapped(&snapshot(path, graph)?, &mut ids)?;
         if !a.dry_run {
+            // Reserve first: a failed output publication must not reuse an ID.
+            save_comment_ids(&ids_path, &ids_binding, &ids)?;
             atomic(&file, &beads::render(&records))?;
         }
         return Ok(outcome(
@@ -221,7 +262,7 @@ pub(super) fn run(cli: &Cli, cfg: &Resolved, ctx: &Ctx, a: &CutoverArgs) -> Resu
             "cutover requires a ledger without ephemeral seeds",
         ));
     }
-    let local = beads::encode(&current)?;
+    let local = beads::encode_mapped(&current, &mut ids)?;
     let binding = json!({"store":store_path,"graph":graph,"file":file});
 
     let mut base = Records::new();
@@ -295,7 +336,7 @@ pub(super) fn run(cli: &Cli, cfg: &Resolved, ctx: &Ctx, a: &CutoverArgs) -> Resu
         m
     };
     let desired = prepared(&current, &merged)?;
-    let merged = beads::encode(&desired)?;
+    let merged = beads::encode_mapped(&desired, &mut ids)?;
     let (batch, report) = sync::plan(&current, &desired, "beads-sync");
     let peer_diff = beads::diff(&input, &merged);
     let local_diff = beads::diff(&local, &merged);
@@ -319,6 +360,7 @@ pub(super) fn run(cli: &Cli, cfg: &Resolved, ctx: &Ctx, a: &CutoverArgs) -> Resu
                 "JSONL changed during sync; nothing written",
             ));
         }
+        save_comment_ids(&ids_path, &ids_binding, &ids)?;
         if a.operation == "sync"
             && pending.is_none()
             && (!batch.is_empty() || !peer_diff.is_empty())

@@ -2208,3 +2208,67 @@ fn cutover_refuses_sidecar_aliases_and_missing_dependency_in_dry_run() {
     assert!(String::from_utf8_lossy(&dry.stderr).contains("br-missing"));
     assert!(!sb.work().join("local.db").exists());
 }
+
+#[test]
+fn cutover_comment_ids_survive_processes_and_dry_run_never_reserves() {
+    let sb = Sandbox::new("cutover-comment-map");
+    let common = [
+        "--store",
+        "local.db",
+        "--graph",
+        "https://seeds.local/project/comments",
+    ];
+    let call = |args: &[&str]| {
+        let mut a = common.to_vec();
+        a.extend_from_slice(args);
+        sb.run(&a)
+    };
+    let ok = |args: &[&str]| {
+        let out = call(args);
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        String::from_utf8(out.stdout).unwrap()
+    };
+    let first = ok(&["create", "first", "--silent"]).trim().to_string();
+    ok(&["comments", "add", &first, "first comment"]);
+    ok(&["cutover", "export", "--file", "dry.jsonl", "--dry-run"]);
+    let maps = || {
+        std::fs::read_dir(sb.work())
+            .unwrap()
+            .filter_map(|e| {
+                let p = e.unwrap().path();
+                p.file_name()
+                    .unwrap()
+                    .to_string_lossy()
+                    .ends_with(".comments.json")
+                    .then_some(p)
+            })
+            .collect::<Vec<_>>()
+    };
+    assert!(maps().is_empty());
+    assert!(!sb.work().join("dry.jsonl").exists());
+    ok(&["cutover", "export", "--file", "first.jsonl"]);
+    let read = |name: &str| {
+        seeds::beads::parse(&std::fs::read_to_string(sb.work().join(name)).unwrap()).unwrap()
+    };
+    let before = read("first.jsonl");
+    let second = ok(&["create", "second", "--silent"]).trim().to_string();
+    ok(&["comments", "add", &second, "second comment"]);
+    ok(&["cutover", "export", "--file", "second.jsonl"]);
+    let after = read("second.jsonl");
+    assert_eq!(before[&first], after[&first]);
+    assert_ne!(
+        after[&first]["comments"][0]["id"],
+        after[&second]["comments"][0]["id"]
+    );
+    let paths = maps();
+    assert_eq!(paths.len(), 1);
+    std::fs::write(&paths[0], "invalid").unwrap();
+    assert!(!call(&["cutover", "export", "--file", "refused.jsonl"])
+        .status
+        .success());
+    assert!(!sb.work().join("refused.jsonl").exists());
+}

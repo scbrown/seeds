@@ -210,3 +210,93 @@ fn native_export_uses_br_defaults_without_changing_imported_nulls() {
         imported
     );
 }
+
+#[test]
+fn mapped_comments_reserve_imported_ids_and_survive_new_earlier_seeds() {
+    use seeds::model::{Comment, Seed};
+    let mut snap = beads::decode(&records()).unwrap();
+    let add = |snap: &mut Snapshot, id: &str| {
+        let seed = Seed {
+            id: id.into(),
+            title: id.into(),
+            status: "open".into(),
+            priority: 2,
+            issue_type: "task".into(),
+            created_at: "2026-01-01T00:00:00Z".into(),
+            updated_at: "2026-01-01T00:00:00Z".into(),
+            revision: 1,
+            ..Seed::default()
+        };
+        snap.comments.push(Comment {
+            seed: id.into(),
+            index: 1,
+            author: "writer".into(),
+            text: id.into(),
+            created_at: seed.created_at.clone(),
+            extra: Default::default(),
+        });
+        snap.seeds.insert(id.into(), seed);
+    };
+    add(&mut snap, "sd-z");
+    let mut ids = beads::CommentIds::default();
+    let first = beads::encode_mapped(&snap, &mut ids).unwrap();
+    assert_eq!(first["br-a"]["comments"][0]["id"], 903);
+    assert_eq!(first["sd-z"]["comments"][0]["id"], 904);
+    // Reload the durable state, then add a seed that sorts before every other one.
+    ids = serde_json::from_str(&serde_json::to_string(&ids).unwrap()).unwrap();
+    add(&mut snap, "aa-new");
+    let second = beads::encode_mapped(&snap, &mut ids).unwrap();
+    assert_eq!(second["sd-z"], first["sd-z"]);
+    assert_eq!(second["aa-new"]["comments"][0]["id"], 905);
+    assert_eq!(
+        beads::encode_mapped(&beads::decode(&second).unwrap(), &mut ids).unwrap(),
+        second
+    );
+    snap.seeds.remove("aa-new");
+    snap.comments.retain(|c| c.seed != "aa-new");
+    add(&mut snap, "aa-next");
+    assert_eq!(
+        beads::encode_mapped(&snap, &mut ids).unwrap()["aa-next"]["comments"][0]["id"],
+        906
+    );
+}
+
+#[test]
+fn mapped_comment_collisions_refuse_without_mutating_the_map() {
+    let snap = beads::decode(&records()).unwrap();
+    let mut ids = beads::CommentIds::default();
+    ids.slots.entry("other".into()).or_default().insert(1, 903);
+    let before = ids.clone();
+    assert!(beads::encode_mapped(&snap, &mut ids)
+        .unwrap_err()
+        .message
+        .contains("collision"));
+    assert_eq!(ids, before);
+}
+
+#[test]
+fn new_comment_on_an_imported_seed_gets_a_slot_marker_and_checks_exhaustion() {
+    let mut snap = beads::decode(&records()).unwrap();
+    let mut comment = snap.comments[0].clone();
+    comment.index = 2;
+    comment.text = "new native comment".into();
+    snap.comments.push(comment);
+    let mut ids = beads::CommentIds::default();
+    let out = beads::encode_mapped(&snap, &mut ids).unwrap();
+    assert_eq!(out["br-a"]["comments"][1]["id"], 904);
+    assert_eq!(out["br-a"]["comments"][1]["_seeds"]["index"], 2);
+    assert_eq!(
+        beads::encode_mapped(&beads::decode(&out).unwrap(), &mut ids).unwrap(),
+        out
+    );
+    let mut full = beads::CommentIds {
+        high_water: i64::MAX,
+        ..Default::default()
+    };
+    let before = full.clone();
+    assert!(beads::encode_mapped(&snap, &mut full)
+        .unwrap_err()
+        .message
+        .contains("exhausted"));
+    assert_eq!(full, before);
+}
