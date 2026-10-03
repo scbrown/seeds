@@ -2117,6 +2117,64 @@ fn cutover_roundtrip_sync_dry_run_and_conflict_are_observable() {
 }
 
 #[test]
+fn cutover_repeated_peer_edits_replace_only_the_owned_json_shadow() {
+    let sb = Sandbox::new("cutover-shadow-replacement");
+    let common = [
+        "--store",
+        "local.db",
+        "--graph",
+        "https://example.org/cutover",
+        "--actor",
+        "peer-editor",
+    ];
+    let ok = |args: &[&str]| {
+        let mut a = common.to_vec();
+        a.extend_from_slice(args);
+        sb.ok(&a)
+    };
+    let sync = [
+        "cutover",
+        "sync",
+        "--file",
+        "board.jsonl",
+        "--base",
+        "cursor.json",
+    ];
+    let foreign = serde_json::json!([[
+        "https://example.org/future",
+        seeds::model::Obj::Str("preserve".into())
+    ]]);
+    let mut row = serde_json::json!({"id":"br-one","title":"before","status":"open","priority":2,"issue_type":"task","created_at":"2026-01-01T00:00:00Z","updated_at":"2026-01-01T00:00:00Z","future":{"n":1},"_seeds":{"format":"seeds-facts-v1","revision":1,"facts":foreign}});
+    std::fs::write(sb.work().join("board.jsonl"), format!("{row}\n")).unwrap();
+    ok(&sync);
+    for title in [
+        "first peer change",
+        "second peer change",
+        "third peer change",
+    ] {
+        row["title"] = serde_json::json!(title);
+        std::fs::write(sb.work().join("board.jsonl"), format!("{row}\n")).unwrap();
+        ok(&sync);
+        // Fresh process reads the committed graph, not the planned candidate.
+        ok(&["cutover", "export", "--file", "actual.jsonl"]);
+        let actual: Value =
+            serde_json::from_str(&std::fs::read_to_string(sb.work().join("actual.jsonl")).unwrap())
+                .unwrap();
+        let peer: Value =
+            serde_json::from_str(&std::fs::read_to_string(sb.work().join("board.jsonl")).unwrap())
+                .unwrap();
+        assert_eq!(actual, peer);
+        assert_eq!(actual["title"], title);
+        assert_eq!(actual["future"], serde_json::json!({"n":1}));
+        assert_eq!(actual["_seeds"]["facts"], foreign);
+        row = actual;
+        let second: Value = serde_json::from_str(&ok(&sync)).unwrap();
+        assert_eq!(second["wrote"], false);
+        assert_eq!(second["store_difference_count"], 0);
+    }
+}
+
+#[test]
 fn cutover_recovers_a_store_commit_before_peer_publication() {
     let sb = Sandbox::new("cutover-recovery");
     let common = [
