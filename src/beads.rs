@@ -372,6 +372,12 @@ pub fn encode(snap: &Snapshot) -> Result<Records> {
             .transpose()?
             .unwrap_or(&[]);
         let mut deps = Vec::new();
+        let origins = s.dependency_origins()?;
+        let prior_origins = baseline
+            .as_ref()
+            .map(Seed::dependency_origins)
+            .transpose()?
+            .unwrap_or_default();
         let current_deps = s.dependencies();
         for d in old_deps {
             let kind = required(d, "type")?;
@@ -382,7 +388,18 @@ pub fn encode(snap: &Snapshot) -> Result<Records> {
                 kind
             };
             if !crate::model::DEP_TYPES.contains(&normalized) || s.has_dep(target, normalized) {
-                deps.push(d.clone());
+                let mut carried = d.clone();
+                let key = (target.to_string(), normalized.to_string());
+                // A native remove/re-add is a new edge. A peer metadata edit on
+                // an imported edge remains verbatim when origin facts agree.
+                if let Some((at, actor)) = origins
+                    .get(&key)
+                    .filter(|value| prior_origins.get(&key) != Some(*value))
+                {
+                    carried["created_at"] = json!(at);
+                    carried["created_by"] = json!(actor);
+                }
+                deps.push(carried);
             }
         }
         for (target, kind) in current_deps {
@@ -390,10 +407,12 @@ pub fn encode(snap: &Snapshot) -> Result<Records> {
                 d["depends_on_id"] == target
                     && (d["type"] == kind || (kind == "related" && d["type"] == "relates-to"))
             }) {
-                deps.push(json!({"issue_id":id,"depends_on_id":target,"type":kind,"created_at":s.updated_at,"created_by":s.created_by.clone().unwrap_or_default(),"metadata":"{}","thread_id":""}));
+                let (at, actor) = origins.get(&(target.clone(), kind.into())).ok_or_else(|| SdError::refused(format!("{id}: dependency {target}/{kind} lacks creation provenance; cannot infer it from the item creator")))?;
+                deps.push(json!({"issue_id":id,"depends_on_id":target,"type":kind,"created_at":at,"created_by":actor,"metadata":"{}","thread_id":""}));
             }
         }
         if deps != old_deps || original.is_none() {
+            sort_dependencies(&mut deps);
             v["dependencies"] = json!(deps);
         }
         let old_comments = original
@@ -595,6 +614,8 @@ pub fn merge(base: &Records, local: &Records, peer: &Records) -> Result<Records>
                             // Unchanged/imported arrays retain their exact order.
                             if k == "labels" {
                                 u.sort_by(|a, b| a.as_str().cmp(&b.as_str()));
+                            } else if k == "dependencies" {
+                                sort_dependencies(&mut u);
                             }
                             Some(json!(u))
                         }
@@ -629,4 +650,13 @@ pub fn merge(base: &Records, local: &Records, peer: &Records) -> Result<Records>
         )));
     }
     Ok(out)
+}
+
+fn sort_dependencies(deps: &mut [Value]) {
+    deps.sort_by(|a, b| {
+        a["depends_on_id"]
+            .as_str()
+            .cmp(&b["depends_on_id"].as_str())
+            .then_with(|| a["type"].as_str().cmp(&b["type"].as_str()))
+    });
 }

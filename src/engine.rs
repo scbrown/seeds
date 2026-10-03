@@ -150,6 +150,9 @@ fn new_seed(
         snap.get(&target)?;
         seed.add_dep(&target, &dep_type);
     }
+    for (target, kind) in seed.dependencies() {
+        seed.set_dependency_origin(&target, kind, &ctx.now, &ctx.actor)?;
+    }
     if let Some(st) = &req.status {
         let st = model::parse_status(st)?;
         if st == model::TOMBSTONE || st == "closed" {
@@ -2013,6 +2016,11 @@ pub fn update(
         }
         if let Some(p) = &req.parent {
             s.parent = reparent(&snap, id, p)?;
+            if s.parent != before.parent {
+                if let Some(parent) = s.parent.clone() {
+                    s.set_dependency_origin(&parent, "parent-child", &ctx.now, &ctx.actor)?;
+                }
+            }
         }
         for l in clean_labels(&req.add_labels) {
             s.labels.insert(l);
@@ -3101,6 +3109,7 @@ pub fn dep_add(
     }
     let mut s = before.clone();
     s.add_dep(depends_on, &dep_type);
+    s.set_dependency_origin(depends_on, &dep_type, &ctx.now, &ctx.actor)?;
     s.updated_at = ctx.now.clone();
     s.revision = before.revision + 1;
     let tx = b.commit(

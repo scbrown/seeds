@@ -524,6 +524,54 @@ impl Seed {
         out
     }
 
+    /// Bridge-owned carry stays in `extra` on reads, but replaces old values on writes.
+    pub(crate) fn owned_extra_predicates() -> [String; 2] {
+        [vocab::seeds("beadsJson"), vocab::seeds("dependencyOrigin")]
+    }
+
+    /// Creation attribution keyed by (target, dependency type), never item creator.
+    pub(crate) fn dependency_origins(
+        &self,
+    ) -> Result<BTreeMap<(String, String), (String, String)>> {
+        let mut origins = BTreeMap::new();
+        for (_, value) in self
+            .extra
+            .iter()
+            .filter(|(p, _)| *p == vocab::seeds("dependencyOrigin"))
+        {
+            let Obj::Str(text) = value else {
+                return Err(SdError::refused("dependency origin must be a JSON string"));
+            };
+            let (target, kind, at, actor): (String, String, String, String) =
+                serde_json::from_str(text)
+                    .map_err(|_| SdError::refused("malformed dependency origin"))?;
+            if origins.insert((target, kind), (at, actor)).is_some() {
+                return Err(SdError::conflict("duplicate dependency origin"));
+            }
+        }
+        Ok(origins)
+    }
+
+    pub(crate) fn set_dependency_origin(
+        &mut self,
+        target: &str,
+        kind: &str,
+        at: &str,
+        actor: &str,
+    ) -> Result<()> {
+        let mut origins = self.dependency_origins()?;
+        origins.insert((target.into(), kind.into()), (at.into(), actor.into()));
+        let predicate = vocab::seeds("dependencyOrigin");
+        self.extra.retain(|(p, _)| *p != predicate);
+        for ((target, kind), (at, actor)) in origins {
+            self.extra.insert((
+                predicate.clone(),
+                Obj::Str(json!([target, kind, at, actor]).to_string()),
+            ));
+        }
+        Ok(())
+    }
+
     /// Whether this seed declares a dependency of `dep_type` on `target`.
     pub fn has_dep(&self, target: &str, dep_type: &str) -> bool {
         match dep_type {
