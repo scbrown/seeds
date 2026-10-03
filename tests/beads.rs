@@ -165,3 +165,48 @@ fn concurrent_update_times_compare_fractional_seconds_numerically() {
         "2026-02-01T00:00:00.5Z"
     );
 }
+
+#[test]
+fn native_export_uses_br_defaults_without_changing_imported_nulls() {
+    use seeds::model::Seed;
+    let seed = Seed {
+        id: "sd-native".into(),
+        title: "native".into(),
+        status: "open".into(),
+        priority: 2,
+        issue_type: "task".into(),
+        created_at: "2026-01-01T00:00:00Z".into(),
+        updated_at: "2026-01-01T00:00:00Z".into(),
+        revision: 1,
+        ..Seed::default()
+    };
+    let mut snap = Snapshot::default();
+    snap.seeds.insert(seed.id.clone(), seed);
+    let encoded = beads::encode(&snap).unwrap();
+    let row = &encoded["sd-native"];
+    for key in [
+        "owner",
+        "description",
+        "created_by",
+        "labels",
+        "dependencies",
+        "comments",
+    ] {
+        assert!(row.get(key).is_none(), "{key}");
+    }
+    assert_eq!(row["source_repo"], ".");
+    assert_eq!(row["compaction_level"], 0);
+    assert_eq!(row["original_size"], 0);
+    assert_eq!(
+        beads::encode(&beads::decode(&encoded).unwrap()).unwrap(),
+        encoded
+    );
+
+    let mut imported = encoded;
+    imported.get_mut("sd-native").unwrap()["owner"] = json!(null);
+    imported.get_mut("sd-native").unwrap()["labels"] = json!([]);
+    assert_eq!(
+        beads::encode(&beads::decode(&imported).unwrap()).unwrap(),
+        imported
+    );
+}

@@ -341,6 +341,30 @@ pub fn encode(snap: &Snapshot) -> Result<Records> {
         if cs != old_comments || original.is_none() {
             v["comments"] = json!(cs);
         }
+        if original.is_none() {
+            // Start native records in br's exported shape. Imported records keep
+            // their exact absent/null/empty distinctions in the original carry.
+            let object = v.as_object_mut().unwrap();
+            for key in FIELDS {
+                if !matches!(*key, "outcome" | "workflow_run")
+                    && object.get(*key).is_some_and(Value::is_null)
+                {
+                    object.remove(*key);
+                }
+            }
+            for key in ["labels", "dependencies", "comments"] {
+                if object
+                    .get(key)
+                    .and_then(Value::as_array)
+                    .is_some_and(Vec::is_empty)
+                {
+                    object.remove(key);
+                }
+            }
+            object.insert("compaction_level".into(), json!(0));
+            object.insert("original_size".into(), json!(0));
+            object.insert("source_repo".into(), json!("."));
+        }
         out.insert(id.clone(), v);
     }
     Ok(out)
