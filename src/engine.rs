@@ -341,7 +341,6 @@ pub fn create_outcome(b: &mut dyn Backend, ctx: &Ctx, req: &CreateReq) -> Result
     if title.is_empty() {
         return Err(SdError::usage("a seed needs a non-empty title"));
     }
-    let snap = b.snapshot(None)?;
     let run = non_empty(req.workflow_run.as_deref()).map(|r| vocab::run_iri(&r));
     let keyed = match (non_empty(req.step.as_deref()), &run) {
         (Some(step), Some(run)) => {
@@ -369,6 +368,12 @@ pub fn create_outcome(b: &mut dyn Backend, ctx: &Ctx, req: &CreateReq) -> Result
         }
         (None, _) => None,
     };
+    let mut referenced: Vec<String> = req.parent.iter().cloned().collect();
+    referenced.extend(keyed.iter().cloned());
+    for dependency in &req.deps {
+        referenced.push(parse_dep_spec(dependency)?.1);
+    }
+    let mut snap = b.snapshot_items(&referenced)?;
     if let Some(id) = &keyed {
         if let Some(existing) = existing_keyed(&snap, id, run.as_deref())? {
             return Ok(Created {
@@ -378,18 +383,30 @@ pub fn create_outcome(b: &mut dyn Backend, ctx: &Ctx, req: &CreateReq) -> Result
             });
         }
     }
-    let id = match (&keyed, &req.parent) {
-        (Some(id), _) => id.clone(),
-        (None, Some(p)) => {
-            snap.get(p)?;
-            ids::child(p, |c| snap.seeds.contains_key(c))
+    let id = loop {
+        let candidate = match (&keyed, &req.parent) {
+            (Some(id), _) => id.clone(),
+            (None, Some(p)) => {
+                snap.get(p)?;
+                ids::child(p, |c| snap.seeds.contains_key(c))
+            }
+            (None, None) => match req.slug.as_deref().and_then(ids::slug) {
+                Some(slug) => ids::mint_slugged(&ctx.prefix, &slug, title, &ctx.now, |c| {
+                    snap.seeds.contains_key(c)
+                }),
+                None => ids::mint(&ctx.prefix, title, &ctx.now, |c| snap.seeds.contains_key(c)),
+            },
+        };
+        if keyed.is_some() {
+            break candidate;
         }
-        (None, None) => match req.slug.as_deref().and_then(ids::slug) {
-            Some(slug) => ids::mint_slugged(&ctx.prefix, &slug, title, &ctx.now, |c| {
-                snap.seeds.contains_key(c)
-            }),
-            None => ids::mint(&ctx.prefix, title, &ctx.now, |c| snap.seeds.contains_key(c)),
-        },
+        let occupied = b.snapshot_items(std::slice::from_ref(&candidate))?;
+        if !occupied.seeds.contains_key(&candidate) {
+            break candidate;
+        }
+        // Feed only observed collisions back into the unchanged ID generator.
+        // Native commit still requires absence atomically under the write lock.
+        snap.seeds.extend(occupied.seeds);
     };
     let seed = new_seed(&snap, ctx, req, id, title, run.clone())?;
     if req.dry_run {
@@ -1924,7 +1941,11 @@ pub fn update(
             return Err(SdError::usage("a seed needs a non-empty title"));
         }
     }
-    let snap = b.snapshot(None)?;
+    let snap = if req.claim || req.parent.is_some() {
+        b.snapshot(None)?
+    } else {
+        b.snapshot_items(ids)?
+    };
     let mut writes = Vec::new();
     for id in ids {
         let before = snap.get(id)?;
@@ -2101,7 +2122,7 @@ pub fn label_change(
     if ids.is_empty() {
         return Err(SdError::usage("at least one seed id is required"));
     }
-    let snap = b.snapshot(None)?;
+    let snap = b.snapshot_items(&ids)?;
     let (mut writes, mut changes) = (Vec::new(), Vec::new());
     for id in &ids {
         let before = snap.get(id)?;
@@ -3072,7 +3093,11 @@ pub fn dep_add(
     if issue == depends_on {
         return Err(SdError::refused(format!("{issue} cannot depend on itself")));
     }
-    let snap = b.snapshot(None)?;
+    let snap = if matches!(dep_type.as_str(), "blocks" | "parent-child") {
+        b.snapshot(None)?
+    } else {
+        b.snapshot_items(&[issue.into(), depends_on.into()])?
+    };
     let before = snap.get(issue)?;
     let target = snap.get(depends_on)?;
     for s in [before, target] {
@@ -3270,7 +3295,7 @@ pub fn comment_add(
     if text.trim().is_empty() {
         return Err(SdError::usage("a comment needs non-empty text"));
     }
-    let snap = b.snapshot(None)?;
+    let snap = b.snapshot_items(&[id.to_string()])?;
     snap.get(id)?;
     let index = snap
         .comments_on(id)

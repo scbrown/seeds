@@ -7,6 +7,67 @@ use seeds::{
     sync,
 };
 use serde_json::json;
+
+#[test]
+fn changed_comments_match_native_export_order_with_equal_timestamps() {
+    let original = records();
+    let mut snapshot = beads::decode(&original).unwrap();
+    let mut later = snapshot.comments[0].clone();
+    later.index = 2;
+    later.author = "zulu".into();
+    later.text = "first new comment".into();
+    snapshot.comments.push(later.clone());
+    later.index = 3;
+    later.author = "alpha".into();
+    later.text = "second new comment".into();
+    snapshot.comments.push(later);
+    let encoded = beads::encode(&snapshot).unwrap();
+    let comments = encoded["br-a"]["comments"].as_array().unwrap();
+    assert_eq!(
+        comments
+            .iter()
+            .map(|v| v["author"].as_str().unwrap())
+            .collect::<Vec<_>>(),
+        vec!["alpha", "writer", "zulu"]
+    );
+    for (key, value) in original["br-a"]["comments"][0].as_object().unwrap() {
+        assert_eq!(&comments[1][key], value);
+    }
+    assert_eq!(comments[1]["_seeds"]["index"], 1);
+    assert_eq!(
+        beads::encode(&beads::decode(&encoded).unwrap()).unwrap(),
+        encoded
+    );
+    let mut map = beads::CommentIds::default();
+    let mut mapped = beads::encode_mapped(&snapshot, &mut map).unwrap();
+    let next = map.high_water + 1;
+    // br adds an unmarked comment, sorted between existing explicit slots.
+    mapped.get_mut("br-a").unwrap()["comments"]
+        .as_array_mut()
+        .unwrap()
+        .insert(
+            1,
+            json!({"id":next,"issue_id":"br-a","author":"br-new","text":"concurrent br write",
+               "created_at":"2026-01-01T00:00:00Z"}),
+        );
+    let decoded = beads::decode(&mapped).unwrap();
+    assert_eq!(
+        decoded
+            .comments
+            .iter()
+            .map(|c| c.index)
+            .collect::<std::collections::BTreeSet<_>>()
+            .len(),
+        4
+    );
+    let exported = beads::encode_mapped(&decoded, &mut map).unwrap();
+    assert_eq!(exported["br-a"]["comments"].as_array().unwrap().len(), 4);
+    assert!(exported["br-a"]["comments"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|v| v["id"] == next && v["author"] == "br-new"));
+}
 fn records() -> Records {
     beads::parse(&json!({"id":"br-a","title":"original","status":"hooked","priority":1,"issue_type":"decision","created_at":"2026-01-01T00:00:00Z","updated_at":"2026-01-01T00:00:00Z","owner":null,"labels":["z","a"],"opaque":{"nested":[1,null,"雪"]},"comments":[{"id":903,"issue_id":"br-a","author":"writer","text":"hello","created_at":"2026-01-01T00:00:00Z","future":true}],"dependencies":[{"issue_id":"br-a","depends_on_id":"br-a","type":"relates-to","metadata":"{}","created_by":"writer"}]}).to_string()).unwrap()
 }

@@ -155,6 +155,13 @@ pub trait Backend {
     /// `None`).
     fn snapshot(&self, at: Option<u64>) -> Result<Snapshot>;
 
+    /// Current named items and their comments, for edits that need no graph-wide
+    /// context. Backends without an indexed read retain the full-snapshot path.
+    /// Claim, reparent and dependency validation must still use `snapshot`.
+    fn snapshot_items(&self, _ids: &[String]) -> Result<Snapshot> {
+        self.snapshot(None)
+    }
+
     /// The ids the ready definition ([`crate::vocab::ready_query`]) selects, as
     /// of `at`. Filters and the defer date are applied by the caller.
     fn ready_ids(&self, at: Option<u64>) -> Result<Vec<String>>;

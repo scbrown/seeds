@@ -27,6 +27,48 @@ fn ctx(n: u32) -> Ctx {
 }
 
 #[test]
+fn item_snapshot_matches_full_state_without_unrelated_seeds() {
+    let mut b = backend();
+    let first = mk(&mut b, "first", 1);
+    let other = mk(&mut b, "other", 2);
+    engine::comment_add(&mut b, &ctx(3), &first, "one", Some("alice")).unwrap();
+    engine::comment_add(&mut b, &ctx(4), &first, "two", Some("bob")).unwrap();
+    engine::comment_add(&mut b, &ctx(5), &other, "unrelated", None).unwrap();
+    let full = b.snapshot(None).unwrap();
+    let scoped = b.snapshot_items(std::slice::from_ref(&first)).unwrap();
+    assert_eq!(scoped.seeds.len(), 1);
+    assert_eq!(scoped.get(&first).unwrap(), full.get(&first).unwrap());
+    assert_eq!(
+        scoped.comments,
+        full.comments_on(&first)
+            .into_iter()
+            .cloned()
+            .collect::<Vec<_>>()
+    );
+    assert_eq!(scoped.tx, full.tx);
+    assert!(b
+        .snapshot_items(&["absent".into()])
+        .unwrap()
+        .seeds
+        .is_empty());
+    engine::update(
+        &mut b,
+        &ctx(6),
+        std::slice::from_ref(&first),
+        &UpdateReq {
+            title: Some("edited".into()),
+            transition_comment: Some("transition".into()),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let after = b.snapshot(None).unwrap();
+    assert_eq!(after.get(&other).unwrap(), full.get(&other).unwrap());
+    assert_eq!(after.comments_on(&first).len(), 3);
+    assert_eq!(after.comments_on(&first)[2].index, 3);
+}
+
+#[test]
 fn exported_dependency_keeps_its_own_actor_and_creation_time() {
     let mut b = backend();
     let source = mk(&mut b, "source", 1);

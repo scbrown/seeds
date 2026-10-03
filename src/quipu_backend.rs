@@ -253,6 +253,38 @@ impl QuipuBackend {
 }
 
 impl Backend for QuipuBackend {
+    fn snapshot_items(&self, ids: &[String]) -> Result<Snapshot> {
+        let mut graphs = Vec::new();
+        for graph in [&self.graph_iri, &vocab::ephemeral_graph(&self.graph_iri)] {
+            let mut subjects = BTreeMap::new();
+            if let Some(g) = self.store.lookup(graph)? {
+                for id in ids {
+                    let iri = vocab::item_iri(id);
+                    if let Some(facts) = self.facts_of(g, &iri)? {
+                        subjects.insert(iri.clone(), facts);
+                    }
+                    let query = format!(
+                        "SELECT ?c WHERE {{ GRAPH <{graph}> {{ ?c <{}> <{iri}> }} }}",
+                        term::comment_on()
+                    );
+                    let result = query_temporal(&self.store, &query, &Self::ctx(None)?)?;
+                    for row in result.rows() {
+                        if let Some(Value::Ref(c)) = row.get("c") {
+                            let comment = self.store.resolve(*c)?;
+                            if let Some(facts) = self.facts_of(g, &comment)? {
+                                subjects.insert(comment, facts);
+                            }
+                        }
+                    }
+                }
+            }
+            graphs.push(subjects);
+        }
+        let mut snapshot = Snapshot::from_graphs(&graphs[0], &graphs[1]);
+        snapshot.tx = u64::try_from(self.store.transaction_head()?).unwrap_or(0);
+        Ok(snapshot)
+    }
+
     fn snapshot(&self, at: Option<u64>) -> Result<Snapshot> {
         let project = self.subjects(&self.graph_iri, at)?;
         let ephemeral = self.subjects(&vocab::ephemeral_graph(&self.graph_iri), at)?;
