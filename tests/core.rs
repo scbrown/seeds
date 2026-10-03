@@ -2853,3 +2853,88 @@ fn ephemeral_seeds_stay_local_through_pendant_and_sync_and_are_never_ready() {
     assert!(after.get(&eph).unwrap().ephemeral);
     assert!(after.seeds.contains_key(&shared));
 }
+
+/// A positive control that graph-aware edits use indexed context reads, while
+/// still refusing if successive reads observe different transaction heads.
+struct IndexedContext {
+    inner: QuipuBackend,
+    reads: std::cell::Cell<usize>,
+    skew: bool,
+}
+impl Backend for IndexedContext {
+    fn snapshot(&self, _: Option<u64>) -> seeds::error::Result<seeds::model::Snapshot> {
+        panic!("unexpected full-board read")
+    }
+    fn snapshot_items(&self, ids: &[String]) -> seeds::error::Result<seeds::model::Snapshot> {
+        let n = self.reads.get() + 1;
+        self.reads.set(n);
+        let mut snap = self.inner.snapshot_items(ids)?;
+        if self.skew && n > 1 {
+            snap.tx += 1;
+        }
+        Ok(snap)
+    }
+    fn ready_ids(&self, at: Option<u64>) -> seeds::error::Result<Vec<String>> {
+        self.inner.ready_ids(at)
+    }
+    fn claims_of(&self, id: &str) -> seeds::error::Result<Vec<(u64, seeds::backend::Claims)>> {
+        self.inner.claims_of(id)
+    }
+    fn commit(&mut self, batch: &WriteBatch, ctx: &Ctx) -> seeds::error::Result<u64> {
+        self.inner.commit(batch, ctx)
+    }
+}
+
+#[test]
+fn indexed_claim_checks_real_blockers_and_allows_closed_ones() {
+    let mut inner = backend();
+    let a = mk(&mut inner, "claim candidate", 1);
+    let blocker = mk(&mut inner, "blocker", 2);
+    engine::dep_add(&mut inner, &ctx(3), &a, &blocker, "blocks").unwrap();
+    let mut b = IndexedContext {
+        inner,
+        reads: Default::default(),
+        skew: false,
+    };
+    let req = UpdateReq {
+        claim: true,
+        ..Default::default()
+    };
+    let before = b.inner.snapshot(None).unwrap();
+    let err = engine::update(&mut b, &ctx(4), std::slice::from_ref(&a), &req).unwrap_err();
+    assert_eq!(err.kind, ErrorKind::Conflict);
+    assert!(err.message.contains(&blocker));
+    assert_eq!(b.inner.snapshot(None).unwrap().seeds, before.seeds);
+    assert_eq!(b.reads.get(), 2);
+    engine::close(&mut b.inner, &ctx(5), &[blocker], Some("done"), false).unwrap();
+    let (items, _) = engine::update(&mut b, &ctx(6), &[a], &req).unwrap();
+    assert_eq!(items[0].status, "in_progress");
+}
+
+#[test]
+fn indexed_dependency_walk_keeps_long_cycle_and_revision_guards() {
+    let mut inner = backend();
+    let ids: Vec<_> = (0..12)
+        .map(|i| mk(&mut inner, &format!("chain {i}"), i))
+        .collect();
+    for pair in ids.windows(2) {
+        engine::dep_add(&mut inner, &ctx(20), &pair[0], &pair[1], "blocks").unwrap();
+    }
+    let mut b = IndexedContext {
+        inner,
+        reads: Default::default(),
+        skew: false,
+    };
+    let before = b.inner.snapshot(None).unwrap();
+    let err = engine::dep_add(&mut b, &ctx(21), &ids[11], &ids[0], "blocks").unwrap_err();
+    assert_eq!(err.kind, ErrorKind::Refused);
+    assert!(err.message.contains("cycle"));
+    assert_eq!(b.reads.get(), 11);
+    assert_eq!(b.inner.snapshot(None).unwrap().seeds, before.seeds);
+    b.skew = true;
+    b.reads.set(0);
+    let err = engine::dep_add(&mut b, &ctx(22), &ids[11], &ids[0], "blocks").unwrap_err();
+    assert_eq!(err.kind, ErrorKind::Conflict);
+    assert!(err.message.contains("context changed"));
+    assert_eq!(b.inner.snapshot(None).unwrap().seeds, before.seeds);
+}
