@@ -2330,3 +2330,415 @@ fn cutover_comment_ids_survive_processes_and_dry_run_never_reserves() {
         .success());
     assert!(!sb.work().join("refused.jsonl").exists());
 }
+
+#[test]
+fn cutover_selected_export_reserves_unselected_identities_and_refuses_bad_scope() {
+    let sb = Sandbox::new("cutover-selected-export");
+    let common = [
+        "--store",
+        "local.db",
+        "--graph",
+        "https://example.org/scoped",
+    ];
+    let call = |args: &[&str]| {
+        let mut a = common.to_vec();
+        a.extend_from_slice(args);
+        sb.run(&a)
+    };
+    let ok = |args: &[&str]| {
+        let out = call(args);
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        String::from_utf8(out.stdout).unwrap()
+    };
+    let imported = serde_json::json!({
+        "id":"zz-imported", "title":"unselected", "status":"open", "priority":2,
+        "issue_type":"task", "created_at":"2026-01-01T00:00:00Z",
+        "updated_at":"2026-01-01T00:00:00Z", "future":{"nested":[null,1]},
+        "comments":[{"id":1,"issue_id":"zz-imported","author":"peer",
+            "text":"keep identity", "created_at":"2026-01-01T00:00:00Z",
+            "future":{"keep":true}}]
+    });
+    std::fs::write(sb.work().join("input.jsonl"), format!("{imported}\n")).unwrap();
+    ok(&["cutover", "import", "--file", "input.jsonl"]);
+    let native = ok(&["create", "native", "--silent"]).trim().to_string();
+    ok(&["comments", "add", &native, "native comment"]);
+    let map = std::fs::read_dir(sb.work())
+        .unwrap()
+        .find_map(|e| {
+            let p = e.unwrap().path();
+            p.file_name()
+                .unwrap()
+                .to_string_lossy()
+                .ends_with(".comments.json")
+                .then_some(p)
+        })
+        .unwrap();
+    // A missing map is valid on a first export. The unselected imported ID
+    // must still be reserved before the native comment gets an allocation.
+    std::fs::remove_file(&map).unwrap();
+    ok(&[
+        "cutover",
+        "export",
+        "--file",
+        "dry.jsonl",
+        "--id",
+        &native,
+        "--dry-run",
+    ]);
+    assert!(!map.exists());
+    assert!(!sb.work().join("dry.jsonl").exists());
+    ok(&[
+        "cutover",
+        "export",
+        "--file",
+        "selected.jsonl",
+        "--id",
+        &native,
+    ]);
+    let read = |name: &str| {
+        seeds::beads::parse(&std::fs::read_to_string(sb.work().join(name)).unwrap()).unwrap()
+    };
+    let selected = read("selected.jsonl");
+    assert_eq!(selected.len(), 1);
+    assert_ne!(selected[&native]["comments"][0]["id"], 1);
+    ok(&["cutover", "export", "--file", "full.jsonl"]);
+    let full = read("full.jsonl");
+    assert_eq!(selected[&native], full[&native]);
+    assert_eq!(full["zz-imported"], imported);
+    ok(&[
+        "cutover",
+        "export",
+        "--file",
+        "both.jsonl",
+        "--id",
+        &native,
+        "--id",
+        "zz-imported",
+    ]);
+    assert_eq!(read("both.jsonl"), full);
+    let map_before = std::fs::read(&map).unwrap();
+    let output_before = std::fs::read(sb.work().join("selected.jsonl")).unwrap();
+    for args in [
+        vec![
+            "cutover",
+            "export",
+            "--file",
+            "selected.jsonl",
+            "--id",
+            "absent",
+        ],
+        vec![
+            "cutover",
+            "export",
+            "--file",
+            "selected.jsonl",
+            "--id",
+            &native,
+            "--id",
+            &native,
+        ],
+        vec!["cutover", "export", "--file", "selected.jsonl", "--id", ""],
+        vec![
+            "cutover",
+            "import",
+            "--file",
+            "selected.jsonl",
+            "--id",
+            &native,
+        ],
+        vec![
+            "cutover",
+            "verify",
+            "--file",
+            "selected.jsonl",
+            "--id",
+            &native,
+        ],
+        vec![
+            "cutover",
+            "sync",
+            "--file",
+            "selected.jsonl",
+            "--id",
+            &native,
+        ],
+    ] {
+        assert_eq!(code(&call(&args)), 2);
+        assert_eq!(std::fs::read(&map).unwrap(), map_before);
+        assert_eq!(
+            std::fs::read(sb.work().join("selected.jsonl")).unwrap(),
+            output_before
+        );
+    }
+}
+
+#[test]
+fn cutover_native_effects_keep_slots_and_require_exact_preimages() {
+    let sb = Sandbox::new("native-effects");
+    let run = |db: &str, args: &[&str]| {
+        let mut a = vec!["--store", db, "--graph", "https://example.org/effects"];
+        a.extend_from_slice(args);
+        sb.run(&a)
+    };
+    let ok = |db: &str, args: &[&str]| {
+        let o = run(db, args);
+        assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+        String::from_utf8(o.stdout).unwrap()
+    };
+    let id = ok("source.db", &["create", "before", "--silent"])
+        .trim()
+        .to_string();
+    ok("source.db", &["comments", "add", &id, "original"]);
+    ok(
+        "source.db",
+        &[
+            "cutover",
+            "capture",
+            "--id",
+            &id,
+            "--id",
+            "absent",
+            "--file",
+            "before.json",
+        ],
+    );
+    // No process has the source open; carry any retained WAL with its database.
+    for suffix in ["", "-wal"] {
+        let source = sb.work().join(format!("source.db{suffix}"));
+        if source.exists() {
+            std::fs::copy(source, sb.work().join(format!("copy.db{suffix}"))).unwrap();
+        }
+    }
+    ok("source.db", &["update", &id, "--title", "after"]);
+    ok("source.db", &["comments", "add", &id, "completed once"]);
+    ok(
+        "source.db",
+        &[
+            "cutover",
+            "capture",
+            "--id",
+            &id,
+            "--id",
+            "absent",
+            "--file",
+            "after.json",
+        ],
+    );
+    let before_db = std::fs::read(sb.work().join("copy.db")).unwrap();
+    ok(
+        "copy.db",
+        &[
+            "cutover",
+            "apply-effects",
+            "--base",
+            "before.json",
+            "--file",
+            "after.json",
+            "--dry-run",
+        ],
+    );
+    assert_eq!(std::fs::read(sb.work().join("copy.db")).unwrap(), before_db);
+    assert!(!sb.work().join("copy.db.lock").exists());
+    ok(
+        "copy.db",
+        &[
+            "cutover",
+            "apply-effects",
+            "--base",
+            "before.json",
+            "--file",
+            "after.json",
+        ],
+    );
+    ok(
+        "copy.db",
+        &[
+            "cutover",
+            "capture",
+            "--id",
+            &id,
+            "--id",
+            "absent",
+            "--file",
+            "returned.json",
+        ],
+    );
+    assert_eq!(
+        std::fs::read(sb.work().join("returned.json")).unwrap(),
+        std::fs::read(sb.work().join("after.json")).unwrap()
+    );
+    let again: Value = serde_json::from_str(&ok(
+        "copy.db",
+        &[
+            "cutover",
+            "apply-effects",
+            "--base",
+            "before.json",
+            "--file",
+            "after.json",
+        ],
+    ))
+    .unwrap();
+    assert_eq!(again["changed"], false);
+    ok("copy.db", &["update", &id, "--title", "newer native write"]);
+    assert_eq!(
+        code(&run(
+            "copy.db",
+            &[
+                "cutover",
+                "apply-effects",
+                "--base",
+                "before.json",
+                "--file",
+                "after.json"
+            ]
+        )),
+        4
+    );
+    let show: Value = serde_json::from_str(&ok("copy.db", &["show", &id, "--json"])).unwrap();
+    assert_eq!(show[0]["title"], "newer native write");
+    let mut malformed: Value =
+        serde_json::from_str(&std::fs::read_to_string(sb.work().join("after.json")).unwrap())
+            .unwrap();
+    malformed["subjects"]["https://example.org/ignored"] = serde_json::json!([]);
+    std::fs::write(sb.work().join("malformed.json"), malformed.to_string()).unwrap();
+    assert!(!run(
+        "copy.db",
+        &[
+            "cutover",
+            "apply-effects",
+            "--base",
+            "before.json",
+            "--file",
+            "malformed.json"
+        ]
+    )
+    .status
+    .success());
+}
+
+#[test]
+fn cutover_effect_transforms_merge_and_apply_selected_records_losslessly() {
+    let sb = Sandbox::new("effect-transforms");
+    let ok = |args: &[&str]| {
+        let mut all = vec![
+            "--store",
+            "copy.db",
+            "--graph",
+            "https://example.org/effects",
+        ];
+        all.extend_from_slice(args);
+        let result = sb.run(&all);
+        assert!(
+            result.status.success(),
+            "{}",
+            String::from_utf8_lossy(&result.stderr)
+        );
+        String::from_utf8(result.stdout).unwrap()
+    };
+    let id = ok(&["create", "base", "--silent"]).trim().to_string();
+    let other = ok(&["create", "unselected", "--silent"]).trim().to_string();
+    ok(&["comments", "add", &id, "identity"]);
+    ok(&["cutover", "export", "--file", "initialize-map.jsonl"]);
+    ok(&["cutover", "capture", "--id", &id, "--file", "before.json"]);
+    let effects: Value =
+        serde_json::from_slice(&std::fs::read(sb.work().join("before.json")).unwrap()).unwrap();
+    let map_path = std::fs::read_dir(sb.work())
+        .unwrap()
+        .map(|p| p.unwrap().path())
+        .find(|p| p.to_string_lossy().ends_with(".comments.json"))
+        .unwrap();
+    let map_bytes = std::fs::read(&map_path).unwrap();
+    let native_map: Value = serde_json::from_slice(&map_bytes).unwrap();
+    let refused_alias = sb.run(&[
+        "--store",
+        "copy.db",
+        "--graph",
+        "https://example.org/effects",
+        "cutover",
+        "capture",
+        "--id",
+        &id,
+        "--file",
+        map_path.to_str().unwrap(),
+    ]);
+    assert!(!refused_alias.status.success());
+    assert_eq!(std::fs::read(&map_path).unwrap(), map_bytes);
+    let encode = serde_json::json!({"effects":effects, "identities":native_map["ids"]});
+    std::fs::write(sb.work().join("encode.json"), encode.to_string()).unwrap();
+    let encoded: Value =
+        serde_json::from_str(&ok(&["cutover", "encode-effects", "--file", "encode.json"])).unwrap();
+    let base = &encoded["records"];
+    assert!(base[&id]["comments"][0]["id"].as_i64().unwrap() > 0);
+    let mut local = base.clone();
+    local[&id]["title"] = serde_json::json!("local edit");
+    let mut peer = base.clone();
+    peer[&id]["labels"] = serde_json::json!(["peer-label"]);
+    let merge = serde_json::json!({"base":base,"local":local,"peer":peer});
+    std::fs::write(sb.work().join("merge.json"), merge.to_string()).unwrap();
+    let merged: Value =
+        serde_json::from_str(&ok(&["cutover", "merge-records", "--file", "merge.json"])).unwrap();
+    assert_eq!(merged["records"][&id]["title"], "local edit");
+    assert_eq!(
+        merged["records"][&id]["labels"],
+        serde_json::json!(["peer-label"])
+    );
+    std::fs::write(
+        sb.work().join("desired.jsonl"),
+        format!("{}\n", merged["records"][&id]),
+    )
+    .unwrap();
+    ok(&[
+        "cutover",
+        "apply-records",
+        "--base",
+        "before.json",
+        "--file",
+        "desired.jsonl",
+        "--dry-run",
+    ]);
+    let applied: Value = serde_json::from_str(&ok(&[
+        "cutover",
+        "apply-records",
+        "--base",
+        "before.json",
+        "--file",
+        "desired.jsonl",
+    ]))
+    .unwrap();
+    ok(&["cutover", "export", "--file", "full.jsonl"]);
+    let full: Vec<Value> = std::fs::read_to_string(sb.work().join("full.jsonl"))
+        .unwrap()
+        .lines()
+        .map(|s| serde_json::from_str(s).unwrap())
+        .collect();
+    assert_eq!(full.len(), 2);
+    assert_eq!(
+        full.iter().find(|r| r["id"] == id).unwrap(),
+        &applied["records"][&id]
+    );
+    assert_eq!(
+        full.iter().find(|r| r["id"] == other).unwrap()["title"],
+        "unselected"
+    );
+    let mut bad = merge;
+    bad["peer"][&id]["title"] = serde_json::json!("conflicting edit");
+    std::fs::write(sb.work().join("bad.json"), bad.to_string()).unwrap();
+    assert_eq!(
+        code(&sb.run(&[
+            "--store",
+            "copy.db",
+            "--graph",
+            "https://example.org/effects",
+            "cutover",
+            "merge-records",
+            "--file",
+            "bad.json"
+        ])),
+        4
+    );
+}

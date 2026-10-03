@@ -342,11 +342,14 @@ pub struct InitArgs {
 #[derive(Debug, Args)]
 pub struct CutoverArgs {
     /// Operation; verify imports into an isolated in-memory store
-    #[arg(value_parser = ["import", "export", "verify", "sync"])]
+    #[arg(value_parser = ["import", "export", "verify", "sync", "capture", "apply-effects", "apply-records", "encode-effects", "merge-records"])]
     pub operation: String,
     /// JSONL input (import/verify/sync) or output (export)
     #[arg(long)]
     pub file: String,
+    /// Export or capture these exact IDs (repeatable); output is partial
+    #[arg(long = "id")]
+    pub ids: Vec<String>,
     /// Sync cursor file, bound to this store, graph and JSONL path
     #[arg(long)]
     pub base: Option<String>,

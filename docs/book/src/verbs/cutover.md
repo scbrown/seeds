@@ -23,6 +23,53 @@ field, including nested comment and dependency metadata. Nonzero differences
 exit 1. Object key order is immaterial; array order and absent versus null
 remain significant. Malformed records and duplicate IDs are refused.
 
+`export --id <exact-id>` selects one record; repeat `--id` for more. Missing,
+empty and duplicate IDs refuse publication, and other cutover operations reject
+the flag. The result is a **partial board**, unsuitable as a replacement board
+or an input to whole-board sync. Selection currently encodes the complete store
+before filtering: global comment identities must be reserved across unselected
+records too. It reduces output size, not snapshot or identity-reservation cost.
+Dry-run publishes neither the output nor the comment identity map.
+
+## Native effect receipts on private copies
+
+`capture --id <id> --file <receipt.json>` reads just the selected native items
+and their comments under the native writer lock. Its versioned journal envelope
+binds the graph and sorted exact ID selection, including absent items. It carries
+native facts, revisions, unknown predicates and local comment slots without
+allocating global br comment IDs. It is not a br JSONL board or a pendant.
+
+`apply-effects --base <before.json> --file <after.json>` applies a completed
+effect to a private copy only when its selected native facts match the entire
+before image (or already equal the after image). It validates the proposed batch,
+refuses removals and revision rollback, commits atomically, and reads the facts
+back. Newer edits refuse with conflict exit 4. Dry-run does not create a store
+or acquire a write handle. This operation does not replay a command or invent
+its timestamps, identities or actor. The supplied actor attributes the copying
+transaction; original item and comment provenance stays in the facts.
+
+These primitives do not establish a synchronized pair or a coherent two-store
+backup. A coordinator must retain contiguous completed receipts, check both
+stores, resolve bridge identity collisions, and perform the full merge proof
+before publishing a successor. An unknown command outcome is not a receipt.
+
+`encode-effects --file <input.json>` is a pure conversion of an `effects`
+envelope and an `identities` reservation map into selected canonical `records`
+and the updated `identities`. It does not open a store or persist reservations;
+the coordinator must retain the returned map before using newly assigned IDs.
+`merge-records --file <input.json>` applies the normal lossless three-way merge
+to the selected `base`, `local` and `peer` record maps. Both operations refuse
+malformed selections and preserve the ordinary conflict rules.
+
+`apply-records --base <native-before.json> --file <selected.jsonl>` checks the
+exact native preimage, validates the selected canonical records, reserves their
+comment identities in the initialized store-bound map, and commits using the
+native batch validator. Its response includes verified canonical `records`.
+The native revision may advance; other round-trip differences refuse before
+mutation. Store files, identity maps, locks and input/output files must be
+distinct and must not be symlinks. A failed candidate may retain reserved IDs;
+those IDs must never be reused.
+
 Each imported WorkItem carries its original JSON in a `seeds:beadsJson` fact.
 Normal seed fields are also projected to the existing WorkItem vocabulary.
 Export overlays edits to those modeled fields on the original JSON. Unknown
@@ -118,3 +165,17 @@ Sync reports aggregate field counts and the first 100 differences for each
 side, with an explicit truncation flag. Use `verify` for a complete round-trip
 difference report. Dry-run also validates the planned graph against the same
 shapes as a real commit.
+
+The copy-only coordinator prototypes also expose two pure checked transforms:
+`encode-effects --file INPUT` takes `{effects, identities}` (a captured native
+image and reserved `CommentIds`) and returns `{records, identities}`. It opens no
+store and allocates only in the returned map; the caller must persist those
+reservations before use. `merge-records --file INPUT` takes `{base, local, peer}`
+and returns the existing lossless three-way merge, refusing scalar conflicts.
+Neither command proves that its inputs describe a current store.
+
+`apply-records --base NATIVE-BEFORE --file SELECTED.jsonl` checks the exact native
+preimage before applying canonical records to just that declared selection.
+Records outside the selection and deletion of existing selected records refuse.
+The normal native validator, revision advancement and exact native read-back
+remain required. This is a private-candidate operation, not a publication gate.
