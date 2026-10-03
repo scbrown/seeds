@@ -39,6 +39,18 @@ it would be overwritten. A third-party importer must retain that extension to
 preserve those facts; this command does not change third-party import behavior.
 Historical br transactions absent from the source JSONL cannot be reconstructed.
 
+br comment IDs are global integers; a seeds comment index is local to its item.
+The native bridge reserves global IDs in
+`<store>.cutover-<graph-sha256>.comments.json`, bound to the store path and graph.
+It retains imported IDs and maps each new `(item ID, comment index)` to an
+unused positive integer. The high-water mark and deleted slots stay reserved.
+The map is locked and saved before publishing an export, so another process or
+a later export destination retains the same identities. Keep this sidecar with
+the store when backing it up; do not delete it to reset a conflict. A malformed
+map, identity collision or exhausted integer sequence refuses publication.
+Concurrent independently allocated IDs may still conflict and require explicit
+reconciliation; they are never silently reassigned.
+
 ## Ongoing exchange on a copied workstream
 
 ```sh
@@ -82,7 +94,7 @@ reconciliation. The cursor advances last. This makes interrupted publication
 recoverable; it does not make two independent stores one atomic transaction.
 Keep the cursor and pending journal private, like the board itself.
 
-`--dry-run` creates no store, lock, journal or cursor. Export dry-run reports
+`--dry-run` creates no store, lock, journal, identity map or cursor. Export dry-run reports
 its count and destination without writing a file.
 
 This is an explicit one-shot operation. It installs no scheduler or fleet
