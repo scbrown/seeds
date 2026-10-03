@@ -16,6 +16,314 @@ use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::{fs, path::Path};
 
+/// Native facts for a declared selection, including explicit absent IDs. This
+/// journal envelope does not allocate bridge IDs or replace a ledger/pendant.
+#[derive(Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Effects {
+    format: String,
+    graph: String,
+    ids: Vec<String>,
+    subjects: std::collections::BTreeMap<String, Vec<crate::model::Fact>>,
+}
+
+impl Effects {
+    fn capture(graph: &str, ids: &[String], snap: &Snapshot) -> Result<Self> {
+        let mut subjects = std::collections::BTreeMap::new();
+        for seed in snap.seeds.values() {
+            if seed.ephemeral || !ids.contains(&seed.id) {
+                return Err(SdError::refused(
+                    "effect capture requires selected ledger items",
+                ));
+            }
+            let mut facts = seed.facts();
+            facts.sort();
+            subjects.insert(crate::vocab::item_iri(&seed.id), facts);
+        }
+        for comment in &snap.comments {
+            if !snap.seeds.contains_key(&comment.seed) {
+                return Err(SdError::refused("effect comment has no selected owner"));
+            }
+            let mut facts = comment.facts();
+            facts.sort();
+            if subjects
+                .insert(
+                    crate::vocab::comment_iri(&comment.seed, comment.index),
+                    facts,
+                )
+                .is_some()
+            {
+                return Err(SdError::refused("duplicate native comment slot"));
+            }
+        }
+        let mut ids = ids.to_vec();
+        ids.sort();
+        Ok(Self {
+            format: "seeds-native-effects-v1".into(),
+            graph: graph.into(),
+            ids,
+            subjects,
+        })
+    }
+
+    fn read(path: &Path, graph: &str) -> Result<(Self, Snapshot)> {
+        let effect: Self = serde_json::from_str(&read(path)?)
+            .map_err(|e| SdError::usage(format!("invalid native effects: {e}")))?;
+        Self::validated(effect, graph)
+    }
+
+    fn validated(effect: Self, graph: &str) -> Result<(Self, Snapshot)> {
+        if effect.ids.is_empty()
+            || effect.ids.iter().any(String::is_empty)
+            || effect.ids.windows(2).any(|w| w[0] >= w[1])
+        {
+            return Err(SdError::usage(
+                "effect IDs must be nonempty, sorted and unique",
+            ));
+        }
+        let snap = Snapshot::from_subjects(&effect.subjects);
+        // Prove every supplied fact and subject survives decoding, including
+        // unmodeled facts; malformed or foreign subjects cannot disappear.
+        if Self::capture(graph, &effect.ids, &snap)? != effect {
+            return Err(SdError::refused(
+                "native effects are noncanonical or belong to another graph",
+            ));
+        }
+        Ok((effect, snap))
+    }
+}
+
+/// Pure, checked bridge transforms. The coordinator persists the returned
+/// identity reservations before using the encoded records. Neither operation
+/// opens a database, rewrites a map, or constitutes a publication proof.
+fn transform_effects(file: &Path, graph: &str, a: &CutoverArgs) -> Result<Outcome> {
+    if a.base.is_some() || a.allow_deletes || a.dry_run {
+        return Err(SdError::usage("pure effect transforms accept only --file"));
+    }
+    if a.operation == "encode-effects" {
+        #[derive(serde::Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct Input {
+            effects: Effects,
+            identities: beads::CommentIds,
+        }
+        let mut input: Input = serde_json::from_str(&read(file)?)
+            .map_err(|e| SdError::usage(format!("invalid encoding input: {e}")))?;
+        let (_, snap) = Effects::validated(input.effects, graph)?;
+        let records = beads::encode_mapped(&snap, &mut input.identities)?;
+        Ok(outcome(
+            json!({"records":records,"identities":input.identities}),
+            0,
+        ))
+    } else {
+        #[derive(serde::Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct Input {
+            base: Records,
+            local: Records,
+            peer: Records,
+        }
+        let input: Input = serde_json::from_str(&read(file)?)
+            .map_err(|e| SdError::usage(format!("invalid merge input: {e}")))?;
+        for records in [&input.base, &input.local, &input.peer] {
+            // Use the JSONL parser's identity/schema guard before merge indexes
+            // objects. A map key must never disguise a different record ID.
+            if beads::parse(&beads::render(records))? != *records {
+                return Err(SdError::refused("merge map and record identities differ"));
+            }
+        }
+        let records = beads::merge(&input.base, &input.local, &input.peer)?;
+        Ok(outcome(json!({"records":records}), 0))
+    }
+}
+
+fn native_effects(
+    path: &Path,
+    graph: &str,
+    file: &Path,
+    ctx: &Ctx,
+    a: &CutoverArgs,
+) -> Result<Outcome> {
+    if a.allow_deletes {
+        return Err(SdError::usage("native effects do not allow deletion"));
+    }
+    let graph_hash = format!("{:x}", Sha256::digest(graph.as_bytes()));
+    let ids_path = sibling(path, &format!(".cutover-{graph_hash}.comments.json"));
+    let ids_lock_path = sibling(&ids_path, ".lock");
+    let participants = [
+        path.to_path_buf(),
+        sibling(path, ".lock"),
+        sibling(path, "-wal"),
+        sibling(path, "-shm"),
+        ids_path.clone(),
+        ids_lock_path.clone(),
+    ];
+    if participants.iter().any(|p| p == file || p.is_symlink()) || file.is_symlink() {
+        return Err(SdError::refused(
+            "effect file aliases or links a store participant",
+        ));
+    }
+    if a.operation == "capture" {
+        if a.ids.is_empty() || a.base.is_some() {
+            return Err(SdError::usage(
+                "capture requires --id and does not accept --base",
+            ));
+        }
+        // Match native writers' lock while the indexed multi-query read runs.
+        // No database is created by a capture of an absent store.
+        let _guard = if a.dry_run {
+            None
+        } else {
+            Some(lock(&sibling(path, ".lock"))?)
+        };
+        let snap = match store::open_for_read(path, graph)? {
+            Some(b) => b.snapshot_items(&a.ids)?,
+            None => Snapshot::default(),
+        };
+        let effects = Effects::capture(graph, &a.ids, &snap)?;
+        if !a.dry_run {
+            atomic(file, &serde_json::to_string(&effects).unwrap())?;
+        }
+        return Ok(outcome(
+            json!({"selected":a.ids.len(),"present":snap.seeds.len(),"dry_run":a.dry_run}),
+            0,
+        ));
+    }
+    let base =
+        absolute(Path::new(a.base.as_deref().ok_or_else(|| {
+            SdError::usage("apply-effects requires --base")
+        })?))?;
+    if base == file || base.is_symlink() || participants.contains(&base) {
+        return Err(SdError::usage("effect inputs and store must be distinct"));
+    }
+    let (before, _) = Effects::read(&base, graph)?;
+    let native_after = if a.operation == "apply-records" {
+        None
+    } else {
+        Some(Effects::read(file, graph)?)
+    };
+    if native_after
+        .as_ref()
+        .is_some_and(|(after, _)| before.ids != after.ids)
+    {
+        return Err(SdError::refused("effect selections differ"));
+    }
+    let records = if a.operation == "apply-records" {
+        let records = beads::parse(&read(file)?)?;
+        if records.keys().any(|id| !before.ids.contains(id)) {
+            return Err(SdError::refused("record outside guarded selection"));
+        }
+        Some(records)
+    } else {
+        None
+    };
+    let ids_binding = json!({"store":path,"graph":graph});
+    let _ids_guard = if records.is_some() && !a.dry_run {
+        Some(lock(&ids_lock_path)?)
+    } else {
+        None
+    };
+    let mut identities = if records.is_some() {
+        if !ids_path.is_file() || ids_path.is_symlink() {
+            return Err(SdError::refused(
+                "record effects require an initialized comment identity map",
+            ));
+        }
+        Some(comment_ids(&ids_path, &ids_binding)?)
+    } else {
+        None
+    };
+    let mut handle = if a.dry_run {
+        None
+    } else {
+        Some(store::open_for_write(path, graph)?)
+    };
+    let reader = if a.dry_run {
+        store::open_for_read(path, graph)?
+    } else {
+        None
+    };
+    let backend = handle.as_ref().map(|h| &h.backend).or(reader.as_ref());
+    let current = match backend {
+        Some(b) => b.snapshot_items(&before.ids)?,
+        None => Snapshot::default(),
+    };
+    let actual = Effects::capture(graph, &before.ids, &current)?;
+    if native_after
+        .as_ref()
+        .is_some_and(|(after, _)| actual == *after)
+    {
+        return Ok(outcome(json!({"changed":false,"verified":true}), 0));
+    }
+    if actual != before {
+        return Err(SdError::conflict(
+            "native effect preimage differs; nothing applied",
+        ));
+    }
+    let (after, desired) = match native_after {
+        Some(pair) => pair,
+        None => {
+            let desired = prepared(&current, records.as_ref().unwrap())?;
+            (Effects::capture(graph, &before.ids, &desired)?, desired)
+        }
+    };
+    for (id, old) in &current.seeds {
+        let new = desired
+            .seeds
+            .get(id)
+            .ok_or_else(|| SdError::refused("native effects cannot delete records"))?;
+        if new != old && new.revision <= old.revision {
+            return Err(SdError::refused("native effect revision must advance"));
+        }
+    }
+    let (batch, _) = sync::plan(&current, &desired, "cutover-native-effects");
+    crate::validate::validate_batch(&batch, &mut |id| match backend {
+        Some(b) => Ok(b
+            .snapshot_items(&[id.to_string()])?
+            .seeds
+            .get(id)
+            .map(|s| s.facts())),
+        None => Ok(None),
+    })?;
+    let normalized = if let Some(records) = &records {
+        // Native revision advancement is the same normalization used by full
+        // cutover sync. Every other canonical byte-value must survive.
+        let encoded = beads::encode_mapped(&desired, identities.as_mut().unwrap())?;
+        let mut expected = records.clone();
+        for (id, row) in &mut expected {
+            if row["_seeds"]["format"] == "seeds-facts-v1" {
+                row["_seeds"]["revision"] = json!(desired.seeds[id].revision);
+            }
+        }
+        if encoded != expected {
+            return Err(SdError::refused(
+                "record effect roundtrip differs; nothing applied",
+            ));
+        }
+        Some(encoded)
+    } else {
+        None
+    };
+    if !a.dry_run && !batch.is_empty() {
+        if let Some(identities) = &identities {
+            // Reserved IDs survive a refused/failed commit and cannot be reused.
+            save_comment_ids(&ids_path, &ids_binding, identities)?;
+        }
+        let backend = &mut handle.as_mut().unwrap().backend;
+        backend.commit(&batch, ctx)?;
+        let returned = backend.snapshot_items(&after.ids)?;
+        if Effects::capture(graph, &after.ids, &returned)? != after {
+            return Err(SdError::failed(
+                "native effect read-back differs; preserve evidence",
+            ));
+        }
+    }
+    Ok(outcome(
+        json!({"changed":!batch.is_empty(),"dry_run":a.dry_run,"verified":!a.dry_run,"records":normalized}),
+        0,
+    ))
+}
+
 fn read(path: &Path) -> Result<String> {
     fs::read_to_string(path)
         .map_err(|e| SdError::failed(format!("cannot read {}: {e}", path.display())))
@@ -161,12 +469,38 @@ pub(super) fn run(cli: &Cli, cfg: &Resolved, ctx: &Ctx, a: &CutoverArgs) -> Resu
     if cli.at.is_some() {
         return Err(SdError::usage("cutover does not accept --at"));
     }
+    let selected: std::collections::BTreeSet<_> = a.ids.iter().collect();
+    if !selected.is_empty() && !matches!(a.operation.as_str(), "export" | "capture") {
+        return Err(SdError::usage(
+            "cutover --id is only valid for export or capture",
+        ));
+    }
+    if selected.len() != a.ids.len() || a.ids.iter().any(String::is_empty) {
+        return Err(SdError::usage("export IDs must be nonempty and unique"));
+    }
     let Location::Store(path) = &cfg.location else {
         unreachable!()
     };
     let file = absolute(Path::new(&a.file))?;
     let store_path = absolute(path)?;
     let graph = cfg.graph();
+    if matches!(a.operation.as_str(), "encode-effects" | "merge-records") {
+        return transform_effects(&file, graph, a);
+    }
+    if matches!(
+        a.operation.as_str(),
+        "capture" | "apply-effects" | "apply-records"
+    ) {
+        if file == store_path
+            || file == sibling(&store_path, ".lock")
+            || ["-wal", "-shm"]
+                .iter()
+                .any(|s| file == sibling(&store_path, s))
+        {
+            return Err(SdError::usage("effect file aliases a store participant"));
+        }
+        return native_effects(&store_path, graph, &file, ctx, a);
+    }
     let graph_hash = format!("{:x}", Sha256::digest(graph.as_bytes()));
     let ids_path = sibling(&store_path, &format!(".cutover-{graph_hash}.comments.json"));
     let ids_lock_path = sibling(&ids_path, ".lock");
@@ -233,7 +567,17 @@ pub(super) fn run(cli: &Cli, cfg: &Resolved, ctx: &Ctx, a: &CutoverArgs) -> Resu
     }
     let mut ids = comment_ids(&ids_path, &ids_binding)?;
     if a.operation == "export" {
-        let records = beads::encode_mapped(&snapshot(path, graph)?, &mut ids)?;
+        // Global imported comment identities must be reserved before any native
+        // allocation, including identities on records outside the selection.
+        let mut records = beads::encode_mapped(&snapshot(path, graph)?, &mut ids)?;
+        for id in &selected {
+            if !records.contains_key(*id) {
+                return Err(SdError::usage(format!("unknown export ID {id}")));
+            }
+        }
+        if !selected.is_empty() {
+            records.retain(|id, _| selected.contains(id));
+        }
         if !a.dry_run {
             // Reserve first: a failed output publication must not reuse an ID.
             save_comment_ids(&ids_path, &ids_binding, &ids)?;
