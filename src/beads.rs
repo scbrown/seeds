@@ -589,6 +589,13 @@ pub fn merge(base: &Records, local: &Records, peer: &Records) -> Result<Records>
                                     u.push(x.clone());
                                 }
                             }
+                            // A synthesized label union has no original array
+                            // order to preserve. Match br's sorted label export,
+                            // independent of which participant is called local.
+                            // Unchanged/imported arrays retain their exact order.
+                            if k == "labels" {
+                                u.sort_by(|a, b| a.as_str().cmp(&b.as_str()));
+                            }
                             Some(json!(u))
                         }
                         _ => {
