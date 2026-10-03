@@ -1941,8 +1941,10 @@ pub fn update(
             return Err(SdError::usage("a seed needs a non-empty title"));
         }
     }
-    let snap = if req.claim || req.parent.is_some() {
+    let snap = if req.parent.is_some() {
         b.snapshot(None)?
+    } else if req.claim {
+        blocking_snapshot(b, ids, false)?
     } else {
         b.snapshot_items(ids)?
     };
@@ -3093,8 +3095,10 @@ pub fn dep_add(
     if issue == depends_on {
         return Err(SdError::refused(format!("{issue} cannot depend on itself")));
     }
-    let snap = if matches!(dep_type.as_str(), "blocks" | "parent-child") {
+    let snap = if dep_type == "parent-child" {
         b.snapshot(None)?
+    } else if dep_type == "blocks" {
+        blocking_snapshot(b, &[issue.into(), depends_on.into()], true)?
     } else {
         b.snapshot_items(&[issue.into(), depends_on.into()])?
     };
@@ -3156,6 +3160,41 @@ pub fn dep_add(
         action: "added",
         tx,
     })
+}
+
+/// Load the blocking context needed by a claim (direct targets) or cycle check
+/// (the reachable closure). Missing targets are remembered so a dangling edge
+/// cannot loop the lookup. Never combine observations from different revisions.
+fn blocking_snapshot(b: &dyn Backend, ids: &[String], transitive: bool) -> Result<Snapshot> {
+    let mut snap = b.snapshot_items(ids)?;
+    let mut seen: BTreeSet<String> = ids.iter().cloned().collect();
+    loop {
+        let next: Vec<String> = snap
+            .seeds
+            .values()
+            .flat_map(|s| s.blocked_on.iter())
+            .filter(|id| !seen.contains(*id) && !snap.seeds.contains_key(*id))
+            .cloned()
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect();
+        if next.is_empty() {
+            break;
+        }
+        seen.extend(next.iter().cloned());
+        let extra = b.snapshot_items(&next)?;
+        if extra.tx != snap.tx {
+            return Err(SdError::conflict(
+                "blocking context changed while reading; nothing was written",
+            ));
+        }
+        snap.seeds.extend(extra.seeds);
+        snap.comments.extend(extra.comments);
+        if !transitive {
+            break;
+        }
+    }
+    Ok(snap)
 }
 
 /// A `blocks` path from `from` to `to`, if one exists.

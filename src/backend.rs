@@ -157,7 +157,8 @@ pub trait Backend {
 
     /// Current named items and their comments, for edits that need no graph-wide
     /// context. Backends without an indexed read retain the full-snapshot path.
-    /// Claim, reparent and dependency validation must still use `snapshot`.
+    /// Graph-aware edits must load their complete validation context separately;
+    /// this method alone cannot prove that a claim is unblocked or an edge acyclic.
     fn snapshot_items(&self, _ids: &[String]) -> Result<Snapshot> {
         self.snapshot(None)
     }
