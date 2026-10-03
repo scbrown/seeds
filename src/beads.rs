@@ -18,12 +18,42 @@ pub struct CommentIds {
     pub slots: BTreeMap<String, BTreeMap<u64, i64>>,
 }
 
-fn comment_index(position: usize, value: &Value) -> u64 {
-    value
-        .get("_seeds")
-        .filter(|e| e["format"] == "seeds-facts-v1")
-        .and_then(|e| e["index"].as_u64())
-        .unwrap_or(position as u64 + 1)
+fn comment_indexes(comments: &[Value]) -> Result<Vec<u64>> {
+    let explicit: Vec<_> = comments
+        .iter()
+        .map(|value| {
+            value
+                .get("_seeds")
+                .filter(|e| e["format"] == "seeds-facts-v1")
+                .and_then(|e| e["index"].as_u64())
+        })
+        .collect();
+    let mut used = BTreeSet::new();
+    for index in explicit.iter().flatten() {
+        if *index == 0 || *index > i64::MAX as u64 || !used.insert(*index) {
+            return Err(SdError::usage("invalid or duplicate comment indexes"));
+        }
+    }
+    let mut next = used.last().copied().unwrap_or(0).max(comments.len() as u64);
+    explicit
+        .into_iter()
+        .enumerate()
+        .map(|(position, index)| {
+            if let Some(index) = index {
+                return Ok(index);
+            }
+            let preferred = position as u64 + 1;
+            if used.insert(preferred) {
+                return Ok(preferred);
+            }
+            next = next
+                .checked_add(1)
+                .filter(|n| *n <= i64::MAX as u64)
+                .ok_or_else(|| SdError::refused("comment index exhausted"))?;
+            used.insert(next);
+            Ok(next)
+        })
+        .collect()
 }
 
 /// Encode for a br store, reserving global integer IDs without changing imported IDs.
@@ -51,8 +81,8 @@ pub fn encode_mapped(snap: &Snapshot, ids: &mut CommentIds) -> Result<Records> {
     let mut imported = BTreeSet::new();
     for (seed_id, s) in &snap.seeds {
         if let Some(original) = raw(s)? {
-            for (position, c) in array(&original, "comments")?.iter().enumerate() {
-                let index = comment_index(position, c);
+            let comments = array(&original, "comments")?;
+            for (c, index) in comments.iter().zip(comment_indexes(comments)?) {
                 imported.insert((seed_id.clone(), index));
                 let Some(id) = c["id"].as_i64().filter(|id| *id > 0) else {
                     continue; // Legacy non-integer IDs are carried, never rewritten.
@@ -255,14 +285,11 @@ pub fn decode(records: &Records) -> Result<Snapshot> {
         }
         s.extra.insert((shadow(), Obj::Str(v.to_string())));
         let comment_start = snap.comments.len();
-        for (i, c) in array(v, "comments")?.iter().enumerate() {
+        let comments = array(v, "comments")?;
+        for (c, index) in comments.iter().zip(comment_indexes(comments)?) {
             snap.comments.push(Comment {
                 seed: id.clone(),
-                index: c
-                    .get("_seeds")
-                    .filter(|e| e["format"] == "seeds-facts-v1")
-                    .and_then(|e| e["index"].as_u64())
-                    .unwrap_or(i as u64 + 1),
+                index,
                 author: required(c, "author")?.into(),
                 text: required(c, "text")?.into(),
                 created_at: required(c, "created_at")?.into(),
@@ -421,18 +448,14 @@ pub fn encode(snap: &Snapshot) -> Result<Records> {
             .transpose()?
             .unwrap_or(&[]);
         let mut cs = Vec::new();
+        let mut indexes = Vec::new();
+        let old_indexes = comment_indexes(old_comments)?;
         for c in comments.get(id.as_str()).into_iter().flatten() {
             let existing = old_comments
                 .iter()
-                .enumerate()
-                .find(|(i, v)| {
-                    v.get("_seeds")
-                        .filter(|e| e["format"] == "seeds-facts-v1")
-                        .and_then(|e| e["index"].as_u64())
-                        .unwrap_or(*i as u64 + 1)
-                        == c.index
-                })
-                .map(|(_, v)| v.clone());
+                .zip(&old_indexes)
+                .find(|(_, index)| **index == c.index)
+                .map(|(v, _)| v.clone());
             let is_new = existing.is_none();
             let mut val = existing.unwrap_or_else(|| json!({"id":c.index,"issue_id":id}));
             if !c.extra.is_empty()
@@ -455,8 +478,36 @@ pub fn encode(snap: &Snapshot) -> Result<Records> {
             val["text"] = json!(c.text);
             val["created_at"] = json!(c.created_at);
             cs.push(val);
+            indexes.push(c.index);
         }
         if cs != old_comments || original.is_none() {
+            // Match the native br exporter when comments changed. Preserve an
+            // untouched imported array verbatim, including its original order.
+            let mut ordered: Vec<_> = cs.into_iter().zip(indexes).collect();
+            ordered.sort_by(|(a, _), (b, _)| {
+                ["issue_id", "created_at", "author", "text"]
+                    .into_iter()
+                    .map(|key| a[key].as_str().cmp(&b[key].as_str()))
+                    .find(|order| !order.is_eq())
+                    .unwrap_or_else(|| a["id"].as_u64().cmp(&b["id"].as_u64()))
+            });
+            let unchanged = original.is_some()
+                && ordered
+                    .iter()
+                    .map(|(value, _)| value)
+                    .eq(old_comments.iter());
+            let cs: Vec<Value> = ordered
+                .into_iter()
+                .map(|(mut value, index)| {
+                    // Raw imported comments used their array position as the native
+                    // index. Once ordering moves one, preserve that identity explicitly.
+                    if !unchanged && value.get("_seeds").is_none() {
+                        value["_seeds"] =
+                            json!({"format":"seeds-facts-v1","facts":[],"index":index});
+                    }
+                    value
+                })
+                .collect();
             v["comments"] = json!(cs);
         }
         if original.is_none() {
