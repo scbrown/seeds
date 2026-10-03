@@ -10,6 +10,7 @@ use crate::vocab::{self, term};
 /// Status values a seed can hold.
 pub const STATUSES: &[&str] = &[
     "open",
+    "hooked",
     "in_progress",
     "blocked",
     "deferred",
@@ -195,7 +196,7 @@ pub struct Comment {
 }
 
 /// The object of a fact, before it is interned into a particular store.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, serde::Serialize, serde::Deserialize)]
 pub enum Obj {
     /// An IRI.
     Iri(String),

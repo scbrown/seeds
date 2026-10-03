@@ -206,6 +206,9 @@ pub enum Command {
     Init(InitArgs),
     /// Write the ledger as a pendant (quipu's share files) to a directory
     Export(ExportArgs),
+
+    /// Lossless beads JSONL import, export, verification and three-way cutover sync
+    Cutover(CutoverArgs),
     /// Read a pendant into the configured store; conflicts are reported, never
     /// resolved silently
     Import(ImportArgs),
@@ -333,6 +336,26 @@ pub struct InitArgs {
     /// Restore missing files in an existing project. Never changes its id or prefix.
     #[arg(long)]
     pub force: bool,
+}
+
+/// A cutover operation on an explicit local store and a copied JSONL board.
+#[derive(Debug, Args)]
+pub struct CutoverArgs {
+    /// Operation; verify imports into an isolated in-memory store
+    #[arg(value_parser = ["import", "export", "verify", "sync"])]
+    pub operation: String,
+    /// JSONL input (import/verify/sync) or output (export)
+    #[arg(long)]
+    pub file: String,
+    /// Sync cursor file, bound to this store, graph and JSONL path
+    #[arg(long)]
+    pub base: Option<String>,
+    /// Permit record removals proven against the common cursor
+    #[arg(long)]
+    pub allow_deletes: bool,
+    /// Report would-change IDs and fields without changing any file or store
+    #[arg(long)]
+    pub dry_run: bool,
 }
 
 /// `sd export`.
@@ -1223,6 +1246,7 @@ impl Command {
     /// Whether the verb writes (and so takes the store's write lock).
     pub fn writes(&self) -> bool {
         match self {
+            Command::Cutover(a) => !a.dry_run && matches!(a.operation.as_str(), "import" | "sync"),
             Command::Q(_) => true,
             Command::Create(_)
             | Command::Update(_)
@@ -1280,6 +1304,7 @@ impl Command {
     /// The verb as a user typed it.
     pub fn name(&self) -> &'static str {
         match self {
+            Command::Cutover(_) => "cutover",
             Command::Create(_) => "create",
             Command::Show(_) => "show",
             Command::List(_) => "list",

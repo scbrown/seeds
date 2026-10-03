@@ -57,8 +57,8 @@ seeds:SeedsWorkItemShape a sh:NodeShape ;
         sh:path seeds:status ;
         sh:minCount 1 ;
         sh:maxCount 1 ;
-        sh:in ("open" "in_progress" "blocked" "deferred" "closed" "tombstone") ;
-        sh:message "seeds: status is exactly one of open|in_progress|blocked|deferred|closed|tombstone" ;
+        sh:in ("open" "hooked" "in_progress" "blocked" "deferred" "closed" "tombstone") ;
+        sh:message "seeds: status is exactly one of open|hooked|in_progress|blocked|deferred|closed|tombstone" ;
     ] ;
     sh:property [
         sh:path seeds:priority ;

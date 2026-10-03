@@ -12,3 +12,5 @@ Every document in this repository, and where it lives.
 
 There are no other documents under `docs/` yet. When one is added, it is
 either folded into a book page or listed here.
+
+For lossless beads JSONL rehearsal and cutover sync, see [Cutover](verbs/cutover.md).
