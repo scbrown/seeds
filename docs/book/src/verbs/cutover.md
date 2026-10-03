@@ -39,6 +39,17 @@ it would be overwritten. A third-party importer must retain that extension to
 preserve those facts; this command does not change third-party import behavior.
 Historical br transactions absent from the source JSONL cannot be reconstructed.
 
+New native dependencies retain their creation actor and time in carried
+`seeds:dependencyOrigin` facts. Later item edits do not change edge attribution;
+removing and re-adding an edge records its new creation. Imported dependency
+metadata remains verbatim, including deliberate peer corrections. A legacy native
+edge with neither carried JSON metadata nor creation provenance refuses export:
+the item creator and its last update are not evidence of who created that edge.
+Reconcile its provenance explicitly before using it in a cutover.
+
+Newly synthesized label/dependency unions use br's canonical ordering. Unchanged
+imported arrays retain their original order.
+
 br comment IDs are global integers; a seeds comment index is local to its item.
 The native bridge reserves global IDs in
 `<store>.cutover-<graph-sha256>.comments.json`, bound to the store path and graph.

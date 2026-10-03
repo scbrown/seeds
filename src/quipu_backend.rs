@@ -442,13 +442,15 @@ impl Backend for QuipuBackend {
                 modelled.insert(id);
             }
         }
-        // The JSONL bridge owns this carried predicate even though it lives in
-        // Seed::extra rather than a modeled work-item field. Replace its prior
-        // value on edits; unioning raw snapshots makes the next export ambiguous.
+        // These carried predicates are owned even though they live in Seed::extra
+        // rather than modeled work-item fields. Replace their prior values on
+        // edits; unioning snapshots/origins makes the next export ambiguous.
         // Keep it outside modelled_predicates(): the reader must still carry it
         // in extra, and unrelated future predicates must remain untouched.
-        if let Some(id) = self.store.lookup(&vocab::seeds("beadsJson"))? {
-            modelled.insert(id);
+        for p in crate::model::Seed::owned_extra_predicates() {
+            if let Some(id) = self.store.lookup(&p)? {
+                modelled.insert(id);
+            }
         }
         for (eg, iri, new_facts) in &entities {
             let datums = by_graph.entry(*eg).or_default();

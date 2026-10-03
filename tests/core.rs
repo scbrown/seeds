@@ -26,6 +26,70 @@ fn ctx(n: u32) -> Ctx {
     }
 }
 
+#[test]
+fn exported_dependency_keeps_its_own_actor_and_creation_time() {
+    let mut b = backend();
+    let source = mk(&mut b, "source", 1);
+    let target = mk(&mut b, "target", 2);
+    let edge_ctx = Ctx {
+        actor: "edge-author".into(),
+        ..ctx(10)
+    };
+    engine::dep_add(&mut b, &edge_ctx, &source, &target, "related").unwrap();
+    engine::update(
+        &mut b,
+        &ctx(20),
+        std::slice::from_ref(&source),
+        &UpdateReq {
+            title: Some("later unrelated edit".into()),
+            ..UpdateReq::default()
+        },
+    )
+    .unwrap();
+    let records = seeds::beads::encode(&b.snapshot(None).unwrap()).unwrap();
+    let edge = &records[&source]["dependencies"][0];
+    assert_eq!(edge["created_by"], "edge-author");
+    assert_eq!(edge["created_at"], edge_ctx.now);
+    let imported = seeds::beads::decode(&records).unwrap();
+    assert_eq!(seeds::beads::encode(&imported).unwrap(), records);
+    // A peer correction to imported metadata is carried, never overwritten by
+    // the native provenance facts carried alongside it.
+    let mut corrected = records.clone();
+    corrected.get_mut(&source).unwrap()["dependencies"][0]["created_by"] =
+        serde_json::json!("peer-correction");
+    assert_eq!(
+        seeds::beads::encode(&seeds::beads::decode(&corrected).unwrap()).unwrap(),
+        corrected
+    );
+    // Persist/import first, then remove and re-add: the old raw JSON and the
+    // earlier origin must not override the new edge's actor/time.
+    let mut restored = backend();
+    seeds::sync::import(&mut restored, &ctx(21), &imported, None, false).unwrap();
+    engine::dep_remove(&mut restored, &ctx(22), &source, &target, "related").unwrap();
+    let new_ctx = Ctx {
+        actor: "new-edge-author".into(),
+        ..ctx(23)
+    };
+    engine::dep_add(&mut restored, &new_ctx, &source, &target, "related").unwrap();
+    let again = seeds::beads::encode(&restored.snapshot(None).unwrap()).unwrap();
+    assert_eq!(
+        again[&source]["dependencies"][0]["created_by"],
+        "new-edge-author"
+    );
+    assert_eq!(again[&source]["dependencies"][0]["created_at"], new_ctx.now);
+    let mut unproven = b.snapshot(None).unwrap();
+    unproven
+        .seeds
+        .get_mut(&source)
+        .unwrap()
+        .extra
+        .retain(|(p, _)| *p != seeds::vocab::seeds("dependencyOrigin"));
+    assert!(seeds::beads::encode(&unproven)
+        .unwrap_err()
+        .to_string()
+        .contains("lacks creation provenance"));
+}
+
 fn mk(b: &mut QuipuBackend, title: &str, n: u32) -> String {
     engine::create(
         b,

@@ -593,8 +593,10 @@ impl Backend for RemoteBackend {
         // Replacing a seed deletes only the predicates this build models: any
         // other fact on it came from a newer sd and is carried forward
         // (aegis-w3k75d.13). Removing an entity outright deletes everything.
+        let owned = crate::model::Seed::owned_extra_predicates();
         let modelled = crate::model::Seed::modelled_predicates()
             .iter()
+            .chain(owned.iter())
             .map(|p| format!("<{p}>"))
             .collect::<Vec<_>>()
             .join(", ");
