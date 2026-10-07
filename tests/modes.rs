@@ -134,7 +134,18 @@ impl Env {
                 if !matches!(child.try_wait(), Ok(None)) {
                     break; // ours exited: the port was taken
                 }
-                if health_ok(port) && matches!(child.try_wait(), Ok(None)) {
+                // Healthy AND ours: another process may already hold the
+                // port, in which case /health answers for IT while our child
+                // is still starting (and about to exit on the bind error).
+                if health_ok(port)
+                    && matches!(child.try_wait(), Ok(None))
+                    && match listener_owned_by(child.id(), port) {
+                        Some(ours) => ours,
+                        // Linux always has /proc: an unreadable one is a
+                        // failed check, not a pass.
+                        None => !cfg!(target_os = "linux"),
+                    }
+                {
                     up = true;
                     break;
                 }
@@ -156,6 +167,43 @@ fn http_get(port: u16, path: &str) -> String {
     use std::io::{Read, Write};
     let mut c = std::net::TcpStream::connect(("127.0.0.1", port)).unwrap();
     write!(c, "GET {path} HTTP/1.0\r\nHost: localhost\r\n\r\n").unwrap();
+    let mut out = String::new();
+    c.read_to_string(&mut out).unwrap();
+    out.split_once("\r\n\r\n")
+        .map(|(_, b)| b.to_string())
+        .unwrap_or_default()
+}
+
+/// Whether the TCP listener on loopback `port` belongs to process `pid`, from
+/// `/proc` (Linux). `None` where `/proc` cannot say, so other platforms keep
+/// the health-and-alive check alone.
+fn listener_owned_by(pid: u32, port: u16) -> Option<bool> {
+    let tcp = std::fs::read_to_string("/proc/net/tcp").ok()?;
+    let want = format!(":{port:04X}");
+    let inode = tcp.lines().skip(1).find_map(|l| {
+        let f: Vec<&str> = l.split_whitespace().collect();
+        (f.len() > 9 && f[1].ends_with(&want) && f[3] == "0A").then(|| f[9].to_string())
+    })?;
+    let socket = format!("socket:[{inode}]");
+    let fds = std::fs::read_dir(format!("/proc/{pid}/fd")).ok()?;
+    Some(
+        fds.flatten()
+            .any(|fd| std::fs::read_link(fd.path()).is_ok_and(|t| t.to_string_lossy() == socket)),
+    )
+}
+
+/// `POST <path>` on the port with `body`; the response body (test helper, no
+/// TLS, no auth).
+fn http_post(port: u16, path: &str, content_type: &str, body: &str) -> String {
+    use std::io::{Read, Write};
+    let mut c = std::net::TcpStream::connect(("127.0.0.1", port)).unwrap();
+    write!(
+        c,
+        "POST {path} HTTP/1.0\r\nHost: localhost\r\nContent-Type: {content_type}\r\n\
+         Content-Length: {}\r\n\r\n{body}",
+        body.len()
+    )
+    .unwrap();
     let mut out = String::new();
     c.read_to_string(&mut out).unwrap();
     out.split_once("\r\n\r\n")
@@ -1552,4 +1600,220 @@ fn a_413_is_a_definite_refusal_not_an_unknown_outcome() {
     assert_eq!(o.status.code(), Some(5), "{err}");
     assert!(err.contains("413") && !err.contains("UNKNOWN"), "{err}");
     assert_eq!(count_remote(&env, &work, &url), 0);
+}
+
+// ---------------------------------------------------------------- canonical times (wu, aegis-bqgdr3)
+
+/// Percent-encode a form value.
+fn form(v: &str) -> String {
+    let mut out = String::new();
+    for b in v.bytes() {
+        if b.is_ascii_alphanumeric() || matches!(b, b'-' | b'.' | b'_' | b'~') {
+            out.push(b as char);
+        } else {
+            out.push_str(&format!("%{b:02X}"));
+        }
+    }
+    out
+}
+
+/// seeds writes the XSD canonical form of every time and duration, and a
+/// quipu server's /update stores typed literals in canonical form too. This
+/// pins the two together: raw lexicals go to the server, and what it stores
+/// must equal what seeds would have written. The corpus is the edge cases
+/// below plus, when `SEEDS_TEST_TIME_CORPUS` names a file of
+/// `dateTime|date|duration<TAB>lexical` lines, every one of those.
+#[test]
+fn seeds_canonical_times_equal_a_quipu_servers() {
+    let mut env = Env::new("canonical-times");
+    let Some(url) = env.start_server() else {
+        eprintln!("SKIPPED: set SEEDS_TEST_QUIPU_SERVER to a quipu-server binary to run this");
+        return;
+    };
+    let port: u16 = url.rsplit(':').next().unwrap().parse().unwrap();
+    let mut corpus: Vec<(String, String)> = [
+        ("dateTime", "2026-08-30T13:35:59.014436677Z"),
+        ("dateTime", "2026-08-30T13:35:59.014436670Z"),
+        ("dateTime", "2026-08-30T13:35:59.100000000Z"),
+        ("dateTime", "2026-10-03T14:00:00.500Z"),
+        ("dateTime", "2026-10-03T14:00:00.000Z"),
+        ("dateTime", "2026-10-03T14:00:00.0Z"),
+        ("dateTime", "2026-10-03T14:00:00Z"),
+        ("dateTime", "2026-10-03T14:00:00+00:00"),
+        ("dateTime", "2026-10-03T14:00:00-00:00"),
+        ("dateTime", "2026-10-03T14:00:00+02:00"),
+        ("dateTime", "2026-10-03T14:00:00-05:30"),
+        ("dateTime", "2026-10-03T14:00:00+14:00"),
+        ("dateTime", "2026-10-03T14:00:00"),
+        ("dateTime", "2026-10-03T14:00:00.250"),
+        ("dateTime", "2026-10-03T24:00:00Z"),
+        ("dateTime", "2026-12-31T24:00:00Z"),
+        ("dateTime", "2024-02-29T23:59:59.999999999Z"),
+        ("date", "2026-10-03"),
+        ("date", "2024-02-29"),
+        ("duration", "PT0M"),
+        ("duration", "PT1M"),
+        ("duration", "PT30M"),
+        ("duration", "PT59M"),
+        ("duration", "PT60M"),
+        ("duration", "PT90M"),
+        ("duration", "PT1440M"),
+        ("duration", "PT1441M"),
+        ("duration", "PT100000M"),
+    ]
+    .iter()
+    .map(|(t, v)| (t.to_string(), v.to_string()))
+    .collect();
+    let extra = std::env::var("SEEDS_TEST_TIME_CORPUS").ok();
+    if let Some(path) = &extra {
+        for l in std::fs::read_to_string(path).unwrap().lines() {
+            if let Some((t, v)) = l.split_once('\t') {
+                corpus.push((t.to_string(), v.to_string()));
+            }
+        }
+    }
+    let ours = |t: &str, v: &str| -> String {
+        match t {
+            "dateTime" => seeds::model::canonical_time(v, false),
+            "date" => seeds::model::canonical_time(v, true),
+            _ => seeds::model::canonical_duration(v),
+        }
+        .unwrap_or_else(|| panic!("seeds refuses {t} {v:?}"))
+    };
+    let mut checked = 0;
+    let mut differ = Vec::new();
+    for (n, chunk) in corpus.chunks(2000).enumerate() {
+        let g = format!("urn:seeds-test:canonical:{n}");
+        http_post(
+            port,
+            "/graph/create",
+            "application/json",
+            &format!("{{\"graph\":\"{g}\"}}"),
+        );
+        let triples: String = chunk
+            .iter()
+            .enumerate()
+            .map(|(i, (t, v))| {
+                format!("<urn:s:{i}> <urn:p> \"{v}\"^^<http://www.w3.org/2001/XMLSchema#{t}> . ")
+            })
+            .collect();
+        let report = http_post(
+            port,
+            "/update",
+            "application/x-www-form-urlencoded",
+            &format!(
+                "update={}",
+                form(&format!("INSERT DATA {{ GRAPH <{g}> {{ {triples}}} }}"))
+            ),
+        );
+        assert!(
+            report.contains("\"asserted\""),
+            "the update landed: {report}"
+        );
+        let q =
+            format!("{{\"query\":\"SELECT ?s ?o WHERE {{ GRAPH <{g}> {{ ?s <urn:p> ?o }} }}\"}}");
+        let body: Value = serde_json::from_str(&http_post(port, "/query", "application/json", &q))
+            .expect("query JSON");
+        let rows = body["rows"]
+            .as_array()
+            .or_else(|| body["results"]["bindings"].as_array())
+            .expect("rows");
+        let text = |v: &Value| -> String {
+            v.get("value")
+                .and_then(Value::as_str)
+                .or_else(|| v.as_str())
+                .unwrap()
+                .to_string()
+        };
+        let stored: std::collections::BTreeMap<String, String> = rows
+            .iter()
+            .map(|r| (text(&r["s"]), text(&r["o"])))
+            .collect();
+        for (i, (t, v)) in chunk.iter().enumerate() {
+            let server = stored.get(&format!("urn:s:{i}")).expect("stored");
+            checked += 1;
+            if *server != ours(t, v) {
+                differ.push(format!(
+                    "{t} {v:?}: server {server:?}, seeds {:?}",
+                    ours(t, v)
+                ));
+            }
+        }
+    }
+    eprintln!("canonical forms checked against the server: {checked}");
+    assert!(
+        differ.is_empty(),
+        "{} differ:\n{}",
+        differ.len(),
+        differ.join("\n")
+    );
+    // Positive control: the corpus does exercise canonicalisation.
+    assert_eq!(ours("duration", "PT90M"), "PT1H30M");
+    assert_eq!(
+        ours("dateTime", "2026-10-03T14:00:00.500Z"),
+        "2026-10-03T14:00:00.5Z"
+    );
+}
+
+/// A time with trailing fractional zeros, written locally and synced through
+/// a real server: local and remote hold the same value in every field, and a
+/// second sync writes nothing on either side.
+#[test]
+fn a_canonical_time_round_trips_through_a_server_with_no_drift() {
+    let mut env = Env::new("canonical-sync");
+    let Some(url) = env.start_server() else {
+        eprintln!("SKIPPED: set SEEDS_TEST_QUIPU_SERVER to a quipu-server binary to run this");
+        return;
+    };
+    let repo = env.pendant_project("repo");
+    let id = env
+        .ok(
+            &repo,
+            &["create", "zeros", "--silent", "--estimate", "90"],
+            &[],
+        )
+        .trim()
+        .to_string();
+    env.ok(
+        &repo,
+        &[
+            "update",
+            &id,
+            "--due",
+            "2026-09-06T18:47:22.616951890Z",
+            "--defer",
+            "2026-10-03T14:00:00.500+00:00",
+        ],
+        &[],
+    );
+    let local: Value = serde_json::from_str(&env.ok(&repo, &["show", &id, "--json"], &[])).unwrap();
+    assert_eq!(
+        local[0]["due_at"], "2026-09-06T18:47:22.61695189Z",
+        "{local}"
+    );
+    assert_eq!(local[0]["defer_until"], "2026-10-03T14:00:00.5Z", "{local}");
+    assert_eq!(local[0]["estimated_minutes"], 90);
+
+    let first: Value =
+        serde_json::from_str(&env.ok(&repo, &["sync", "--remote", &url, "--json"], &[])).unwrap();
+    assert_eq!(first["remote"]["wrote"], true, "{first}");
+    let pid = std::fs::read_to_string(repo.join(".seeds/project-id")).unwrap();
+    let graph = format!("https://seeds.local/project/sd-{}", pid.trim());
+    let remote_env = [
+        ("SEEDS_QUIPU_URL", url.as_str()),
+        ("SEEDS_GRAPH", graph.as_str()),
+    ];
+    let work = env.dir("work");
+    let remote: Value =
+        serde_json::from_str(&env.ok(&work, &["show", &id, "--json"], &remote_env)).unwrap();
+    let local: Value = serde_json::from_str(&env.ok(&repo, &["show", &id, "--json"], &[])).unwrap();
+    for (k, v) in local[0].as_object().unwrap() {
+        assert_eq!(&remote[0][k], v, "{k} differs between local and remote");
+    }
+    let second: Value =
+        serde_json::from_str(&env.ok(&repo, &["sync", "--remote", &url, "--json"], &[])).unwrap();
+    assert_eq!(second["remote"]["wrote"], false, "{second}");
+    assert_eq!(second["local"]["wrote"], false, "{second}");
+    let after: Value = serde_json::from_str(&env.ok(&repo, &["show", &id, "--json"], &[])).unwrap();
+    assert_eq!(after, local, "the local seed did not change");
 }

@@ -68,7 +68,7 @@ These are vocabulary names, not hosts anyone contacts.
 | created, updated, closed | `schema:dateCreated`, `schema:dateModified`, `schema:endTime` | `xsd:dateTime` |
 | due | `ical:due` | `xsd:date` when a bare `YYYY-MM-DD`, else `xsd:dateTime` |
 | defer | `schema:scheduledTime` | `xsd:date` or `xsd:dateTime`, as for due |
-| estimate | `schema:timeRequired` | `"PT<n>M"^^xsd:duration` |
+| estimate | `schema:timeRequired` | `xsd:duration` of the minutes, canonical (`PT30M`, `PT1H30M`, `P1D`) |
 | close reason | `schema:result` | string |
 | outcome | `quechua:outcome` | `"done"` (the default), `abandoned`, `superseded` or `failed`, only when closed |
 | `blocks` dependency | `quechua:blockedOn` | the blocker's item IRI |
@@ -76,19 +76,21 @@ These are vocabulary names, not hosts anyone contacts.
 | notes, design, acceptance criteria, agent context, external ref | `seeds:notes`, `seeds:design`, `seeds:acceptanceCriteria`, `seeds:agentContext`, `seeds:externalRef` | string (an external ref need not be a URL) |
 | driving workflow run | `seeds:workflowRun` | a shuttle run IRI, `urn:shuttle:run:<id>` ([Formulas](formulas.md)) |
 
-**Times are typed and never coerced.** Every time is written with its lexical
-form unchanged. A value that is not already a valid `xsd:dateTime` (or, for
-due and defer, a bare `YYYY-MM-DD` `xsd:date`) is refused with a usage error
-(exit 2) naming the seed, the field and the value, and nothing is written. A
-space instead of `T`, for example, is refused rather than rewritten, so what
-the local store holds reads back byte for byte.
+**Times are typed, validated and written in canonical form.** A value that
+is not a valid `xsd:dateTime` (or, for due and defer, a bare `YYYY-MM-DD`
+`xsd:date`) is refused with a usage error (exit 2) naming the seed, the field
+and the value, and nothing is written. A space instead of `T`, for example,
+is refused, not repaired.
 
-A quipu server is different: its `/update` stores a typed literal in its XSD
-canonical form. Measured: `PT90M` reads back as `PT1H30M`, trailing zeros in
-fractional seconds are dropped (`…59.014436670Z` as `…59.01443667Z`), `+00:00`
-becomes `Z` and `24:00:00` becomes the next day's `00:00:00`. The value is the
-same; the lexical form is not. seeds reads every canonical duration back as
-the same minutes; a time read back from a server keeps the server's form.
+A valid value is written in its XSD canonical spelling, which keeps the value
+and changes only the bytes: trailing zeros in fractional seconds go
+(`…59.014436670Z` is `…59.01443667Z`, `.000Z` is `Z`), `+00:00` is `Z`,
+`24:00:00` is the next day's `00:00:00`, and an estimate of 90 minutes is
+`PT1H30M`. This is the form a quipu server's `/update` stores typed literals
+in, and seeds computes it with the same code (oxigraph's `oxsdatatypes`), so
+a local store, a server and a sync between them hold identical bytes. `sd
+cutover` reports how many times it respelled (`canonicalized_times`), and its
+export gives br back the original spelling.
 
 A comment is its own entity, `https://seeds.local/item/<id>/comment/<n>`, typed
 `schema:Comment`, with `schema:parentItem` (the seed), `schema:position`

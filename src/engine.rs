@@ -2026,7 +2026,10 @@ pub fn update(
             s.assignee = non_empty(Some(a.trim()));
         }
         if let Some(d) = &req.defer {
-            s.defer_until = non_empty(Some(d.trim()));
+            // Stored as given, in canonical spelling when it is a valid time;
+            // an invalid one is refused by name when the write is validated.
+            s.defer_until =
+                non_empty(Some(d.trim())).map(|d| crate::model::canonical_or_same(&d, true));
         }
         if let Some(r) = &req.workflow_run {
             s.workflow_run = non_empty(Some(r.trim())).map(|r| vocab::run_iri(&r));
@@ -2437,10 +2440,10 @@ pub fn parse_when(value: &str, now: &str, flag: &str) -> Result<String> {
         return Ok(format_instant(t)[..10].to_string());
     }
     if v.len() == 10 && parse_date(v).is_some() {
-        return Ok(v.to_string());
+        return Ok(crate::model::canonical_or_same(v, true));
     }
     if v.len() >= 20 && parse_instant(v).is_some() {
-        return Ok(v.to_string());
+        return Ok(crate::model::canonical_or_same(v, true));
     }
     Err(bad())
 }

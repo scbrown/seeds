@@ -454,10 +454,12 @@ impl Seed {
         };
         // A time's lexical form, whatever datatype it arrived with (an older
         // store wrote plain strings).
+        // Canonical when valid, so a seed read from any store compares equal
+        // to the same seed read from any other.
         let t = |p: String| -> Option<String> {
             by.get(p.as_str()).and_then(|v| {
                 v.iter().find_map(|o| match o {
-                    Obj::Str(s) | Obj::Typed { lexical: s, .. } => Some(s.clone()),
+                    Obj::Str(s) | Obj::Typed { lexical: s, .. } => Some(canonical_or_same(s, true)),
                     _ => None,
                 })
             })
@@ -549,14 +551,15 @@ impl Seed {
     }
 
     /// Why this seed's times cannot be written, one line per bad field, empty
-    /// when they all can. Nothing is coerced: a value that is not already a
-    /// valid `xsd:dateTime` (or, for due and defer, `xsd:date`) lexical form
-    /// is refused, so what is stored round-trips byte for byte.
+    /// when they all can. Nothing invalid is repaired: a value that is not a
+    /// valid `xsd:dateTime` (or, for due and defer, `xsd:date`) is refused. A
+    /// valid one is written in canonical form, the same instant
+    /// ([`canonical_time`]).
     pub fn time_problems(&self) -> Vec<String> {
         let mut out = Vec::new();
         let mut check = |field: &str, v: Option<&str>, date_ok: bool| {
             if let Some(v) = v {
-                if !(is_xsd_date_time(v) || (date_ok && is_xsd_date(v))) {
+                if canonical_time(v, date_ok).is_none() {
                     out.push(format!(
                         "{}: {field} {v:?} is not {}",
                         self.id,
@@ -758,7 +761,7 @@ impl Comment {
                 (p, Obj::Str(s)) if p == term::author() => author = Some(s.clone()),
                 (p, Obj::Str(s)) if p == term::text() => text = Some(s.clone()),
                 (p, Obj::Str(s) | Obj::Typed { lexical: s, .. }) if p == term::created_at() => {
-                    created_at = Some(s.clone())
+                    created_at = Some(canonical_or_same(s, false))
                 }
                 _ => {}
             }
@@ -779,7 +782,7 @@ impl Comment {
     /// Why this comment's time cannot be written (see
     /// [`Seed::time_problems`]).
     pub fn time_problems(&self) -> Vec<String> {
-        if is_xsd_date_time(&self.created_at) {
+        if canonical_time(&self.created_at, false).is_some() {
             return Vec::new();
         }
         vec![format!(
@@ -817,21 +820,22 @@ pub fn action_status(status: &str, outcome: Option<&str>) -> Option<&'static str
     }
 }
 
-/// An instant as an `xsd:dateTime` literal, lexical form unchanged.
+/// An instant as an `xsd:dateTime` literal, in its canonical lexical form
+/// (an invalid one is kept as given, and [`Seed::time_problems`] refuses it).
 fn date_time(v: &str) -> Obj {
     Obj::Typed {
-        lexical: v.to_string(),
+        lexical: canonical_time(v, false).unwrap_or_else(|| v.to_string()),
         datatype: vocab::XSD_DATE_TIME.into(),
     }
 }
 
 /// A due or defer value: `xsd:date` when it is a bare `YYYY-MM-DD`, else
-/// `xsd:dateTime`, lexical form unchanged ([`Seed::time_problems`] refuses
-/// one that is neither).
+/// `xsd:dateTime`, in canonical form ([`Seed::time_problems`] refuses one
+/// that is neither).
 fn date_or_date_time(v: &str) -> Obj {
     if is_xsd_date(v) {
         Obj::Typed {
-            lexical: v.to_string(),
+            lexical: canonical_time(v, true).unwrap_or_else(|| v.to_string()),
             datatype: vocab::XSD_DATE.into(),
         }
     } else {
@@ -839,18 +843,53 @@ fn date_or_date_time(v: &str) -> Obj {
     }
 }
 
-/// A minute estimate as `"PT<n>M"^^xsd:duration`.
+/// A minute estimate as an `xsd:duration` of that many minutes, in canonical
+/// form: `PT30M`, `PT1H30M`, `P1D`, `PT0S`.
 fn minutes_duration(m: u32) -> Obj {
+    let lexical = format!("PT{m}M");
     Obj::Typed {
-        lexical: format!("PT{m}M"),
+        lexical: canonical_duration(&lexical).unwrap_or(lexical),
         datatype: vocab::XSD_DURATION.into(),
     }
 }
 
-/// The whole minutes in a day/hour/minute duration. seeds writes `PT<n>M`,
-/// but a quipu server's `/update` stores the XSD canonical form, so `PT90M`
-/// reads back as `PT1H30M`, `PT1440M` as `P1D` and `PT0M` as `PT0S`; all of
-/// those are the same minutes. Anything else (years, months, a sign, a
+/// The XSD canonical lexical form of a valid time: an `xsd:dateTime`, or,
+/// when `date_ok`, a bare `YYYY-MM-DD` `xsd:date`. `None` for anything else.
+///
+/// Canonicalisation keeps the VALUE and changes only the spelling: trailing
+/// zeros in fractional seconds go (`.500Z` is `.5Z`, `.000Z` is `Z`),
+/// `+00:00` is `Z`, and `24:00:00` is the next day's `00:00:00`. It runs
+/// through `oxsdatatypes`, the code a quipu server's `/update` stores typed
+/// literals with, so a seed's bytes are the same in a local store, on a
+/// server and after a sync between them.
+pub fn canonical_time(v: &str, date_ok: bool) -> Option<String> {
+    if date_ok && is_xsd_date(v) {
+        return v.parse::<oxsdatatypes::Date>().ok().map(|d| d.to_string());
+    }
+    if !is_xsd_date_time(v) {
+        return None;
+    }
+    v.parse::<oxsdatatypes::DateTime>()
+        .ok()
+        .map(|d| d.to_string())
+}
+
+/// The XSD canonical lexical form of a valid `xsd:duration`.
+pub fn canonical_duration(v: &str) -> Option<String> {
+    v.parse::<oxsdatatypes::Duration>()
+        .ok()
+        .map(|d| d.to_string())
+}
+
+/// `v` canonicalised as [`canonical_time`] does, or unchanged when it is not
+/// a valid time (so the refusal names what the caller gave).
+pub fn canonical_or_same(v: &str, date_ok: bool) -> String {
+    canonical_time(v, date_ok).unwrap_or_else(|| v.to_string())
+}
+
+/// The whole minutes in a day/hour/minute duration. seeds writes the XSD
+/// canonical form (`PT1H30M`, `P1D`, `PT0S`) and reads any day/hour/minute
+/// spelling (`PT90M` too) as the same minutes. Anything else (years, months, a sign, a
 /// fraction, seconds that are not zero) is not read as minutes: the fact is
 /// carried as an extra instead, so it is neither rewritten nor dropped.
 fn parse_minutes_duration(v: &str) -> Option<u32> {
@@ -1278,6 +1317,20 @@ mod tests {
             ("PTM", None),
         ] {
             assert_eq!(parse_minutes_duration(lexical), want, "{lexical}");
+        }
+        // Written canonical, read back as the same minutes.
+        let mut s = sample();
+        for (m, lexical) in [(90, "PT1H30M"), (0, "PT0S"), (1440, "P1D"), (30, "PT30M")] {
+            s.estimated_minutes = Some(m);
+            let f = s.facts();
+            assert!(f.contains(&(
+                term::estimated_minutes(),
+                Obj::Typed {
+                    lexical: lexical.into(),
+                    datatype: vocab::XSD_DURATION.into()
+                }
+            )));
+            assert_eq!(Seed::from_facts(&f).unwrap(), s);
         }
     }
 

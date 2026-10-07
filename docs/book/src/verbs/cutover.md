@@ -27,6 +27,9 @@ Each imported seed carries its original JSON in a `seeds:beadsJson` fact.
 Normal seed fields are also projected to the seeds vocabulary
 ([The storage model](../storage.md)); a time that is not a valid
 `xsd:date`/`xsd:dateTime` refuses the import, naming each record and field.
+A valid time is stored in its canonical spelling (the same instant); the
+output's `canonicalized_times` counts them, and export restores br's original
+spelling.
 Export overlays edits to those modeled fields on the original JSON. Unknown
 fields, dependency types, timestamps, author names and nested metadata survive.
 The legacy `relates-to` dependency projects as `related`, retaining its original

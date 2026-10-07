@@ -2512,6 +2512,7 @@ dependencies = [
  "ed25519-dalek",
  "getrandom 0.2.17",
  "jiff",
+ "oxsdatatypes",
  "quipu-ai",
  "serde",
  "serde_json",

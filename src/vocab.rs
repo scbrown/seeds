@@ -35,7 +35,7 @@ pub const RDFS_LABEL: &str = "http://www.w3.org/2000/01/rdf-schema#label";
 pub const XSD_DATE: &str = "http://www.w3.org/2001/XMLSchema#date";
 /// `xsd:dateTime`: every instant a seed or comment carries.
 pub const XSD_DATE_TIME: &str = "http://www.w3.org/2001/XMLSchema#dateTime";
-/// `xsd:duration`: the time estimate, `PT<n>M`.
+/// `xsd:duration`: the time estimate, in canonical form (`PT1H30M`).
 pub const XSD_DURATION: &str = "http://www.w3.org/2001/XMLSchema#duration";
 
 /// The shapes every native write is validated against.
@@ -157,8 +157,8 @@ pub mod term {
     pub fn due_at() -> String {
         format!("{ICAL}due")
     }
-    /// `schema:timeRequired`: a time estimate (br's `estimated_minutes`),
-    /// written `"PT<n>M"^^xsd:duration`.
+    /// `schema:timeRequired`: a time estimate (br's `estimated_minutes`), an
+    /// `xsd:duration` of that many minutes in canonical form (`PT1H30M`).
     pub fn estimated_minutes() -> String {
         schema("timeRequired")
     }
