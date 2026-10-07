@@ -31,7 +31,7 @@
 //!   quipu server is fine; pointing seeds at a large shared knowledge graph
 //!   makes every write as expensive as that graph is big.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::time::Duration;
 
 use serde_json::{json, Value as Json};
@@ -43,6 +43,42 @@ use crate::validate::{self, escape_literal};
 use crate::vocab::{self, term};
 
 const PAGE: usize = 2000;
+
+/// Subjects per targeted read. A seed carries a few dozen facts, so a chunk
+/// stays well under quipu's result cap; a truncated answer is split anyway.
+const SUBJECTS_PER_READ: usize = 100;
+
+/// Facts grouped by subject IRI.
+type Facts = BTreeMap<String, Vec<Fact>>;
+
+/// Every subject a write's checks read: the seeds it writes or removes, the
+/// seeds their new edges point at (the dangling-edge check), the seeds its
+/// comments and comment removals hang off (which graph each lives in), and
+/// the comments themselves (for the read-back).
+fn batch_subjects(batch: &WriteBatch) -> BTreeSet<String> {
+    let mut ids: BTreeSet<&str> = BTreeSet::new();
+    for w in &batch.seeds {
+        ids.insert(&w.seed.id);
+        ids.extend(w.seed.blocked_on.iter().map(String::as_str));
+    }
+    ids.extend(batch.delete_seeds.iter().map(|(id, _)| id.as_str()));
+    ids.extend(batch.comments.iter().map(|c| c.seed.as_str()));
+    ids.extend(batch.delete_comments.iter().map(|(s, _)| s.as_str()));
+    let mut out: BTreeSet<String> = ids.into_iter().map(vocab::item_iri).collect();
+    out.extend(
+        batch
+            .comments
+            .iter()
+            .map(|c| vocab::comment_iri(&c.seed, c.index)),
+    );
+    out.extend(
+        batch
+            .delete_comments
+            .iter()
+            .map(|(s, i)| vocab::comment_iri(s, *i)),
+    );
+    out
+}
 
 /// A project stored as a named graph on a quipu server.
 pub struct RemoteBackend {
@@ -69,6 +105,15 @@ fn transport(url: &str, e: &ureq::Transport) -> SdError {
              because that would fork the ledger."
         ),
     )
+}
+
+/// Prefix of the error for a read quipu gave up on (HTTP 408 to `/query`).
+/// A read changes nothing, so the failure is definite and the caller may ask
+/// again for less.
+const QUERY_TIMEOUT: &str = "quipu query timed out";
+
+fn is_query_timeout(e: &SdError) -> bool {
+    e.message.starts_with(QUERY_TIMEOUT)
 }
 
 fn status_error(what: &str, code: u16, body: &str) -> SdError {
@@ -243,6 +288,13 @@ impl RemoteBackend {
                     body.len()
                 )),
             )),
+            Err(ureq::Error::Status(408, r)) if path == "/query" => Err((
+                false,
+                SdError::failed(format!(
+                    "{QUERY_TIMEOUT}: quipu {path} answered HTTP 408: {}",
+                    r.into_string().unwrap_or_default()
+                )),
+            )),
             Err(ureq::Error::Status(code, r)) => Err((
                 code >= 500,
                 status_error(path, code, &r.into_string().unwrap_or_default()),
@@ -252,6 +304,16 @@ impl RemoteBackend {
 
     /// Run a SELECT and return its bindings.
     fn select(&self, sparql: &str, at: Option<u64>) -> Result<Vec<BTreeMap<String, Obj>>> {
+        self.select_marked(sparql, at).map(|(rows, _)| rows)
+    }
+
+    /// [`Self::select`], also returning whether quipu cut the result short
+    /// (its `truncated` flag): a short answer must never read as a complete one.
+    fn select_marked(
+        &self,
+        sparql: &str,
+        at: Option<u64>,
+    ) -> Result<(Vec<BTreeMap<String, Obj>>, bool)> {
         let mut body = json!({ "query": sparql });
         if let Some(t) = at {
             body["tx"] = json!(t);
@@ -280,7 +342,7 @@ impl RemoteBackend {
             }
             out.push(m);
         }
-        Ok(out)
+        Ok((out, v["truncated"].as_bool().unwrap_or(false)))
     }
 
     fn count(&self, graph: &str, at: Option<u64>) -> Result<usize> {
@@ -305,6 +367,66 @@ impl RemoteBackend {
     /// The project's ephemeral graph's facts, grouped by subject.
     fn ephemeral_facts(&self, at: Option<u64>) -> Result<BTreeMap<String, Vec<Fact>>> {
         self.graph_facts(&crate::vocab::ephemeral_graph(&self.graph), at)
+    }
+
+    /// The current facts of just these subjects, in the project graph and in
+    /// its ephemeral graph. A write needs only the items it touches (their
+    /// revisions, the targets of their edges, which graph each lives in), and
+    /// reading the whole graph instead made every batch of a large push cost
+    /// more than the last (aegis-w3k75d.15).
+    fn subjects_facts(&self, subjects: &BTreeSet<String>) -> Result<(Facts, Facts)> {
+        let all: Vec<&String> = subjects.iter().collect();
+        let mut main = Facts::new();
+        let mut eph = Facts::new();
+        let eph_graph = crate::vocab::ephemeral_graph(&self.graph);
+        for (graph, out) in [
+            (self.graph.as_str(), &mut main),
+            (eph_graph.as_str(), &mut eph),
+        ] {
+            for chunk in all.chunks(SUBJECTS_PER_READ) {
+                self.read_subjects(graph, chunk, out)?;
+            }
+        }
+        Ok((main, eph))
+    }
+
+    /// One `VALUES` read of `subjects` in `graph`, halved and retried when
+    /// quipu reports the answer truncated.
+    fn read_subjects(&self, graph: &str, subjects: &[&String], out: &mut Facts) -> Result<()> {
+        if subjects.is_empty() {
+            return Ok(());
+        }
+        let values: String = subjects.iter().map(|s| format!("<{s}> ")).collect();
+        let answer = self.select_marked(
+            &format!("SELECT ?s ?p ?o WHERE {{ VALUES ?s {{ {values}}} GRAPH <{graph}> {{ ?s ?p ?o }} }}"),
+            None,
+        );
+        // A read quipu gave up on is asked again in halves, like a truncated
+        // one: a busy server times out a long VALUES read that halves answer.
+        let (rows, truncated) = match answer {
+            Err(e) if is_query_timeout(&e) && subjects.len() > 1 => (Vec::new(), true),
+            other => other?,
+        };
+        if truncated {
+            if subjects.len() == 1 {
+                return Err(SdError::failed(format!(
+                    "quipu truncated the facts of {} even read alone; refusing to write \
+                     against a partial view",
+                    subjects[0]
+                )));
+            }
+            let (a, b) = subjects.split_at(subjects.len() / 2);
+            self.read_subjects(graph, a, out)?;
+            return self.read_subjects(graph, b, out);
+        }
+        for mut r in rows {
+            if let (Some(Obj::Iri(s)), Some(Obj::Iri(p)), Some(o)) =
+                (r.remove("s"), r.remove("p"), r.remove("o"))
+            {
+                out.entry(s).or_default().push((p, o));
+            }
+        }
+        Ok(())
     }
 
     /// One graph's facts, grouped by subject, read consistently in pages.
@@ -625,8 +747,7 @@ impl Backend for RemoteBackend {
             return Ok(0);
         }
         // Validate first, against the server's current state.
-        let current = self.facts(None)?;
-        let current_eph = self.ephemeral_facts(None)?;
+        let (current, current_eph) = self.subjects_facts(&batch_subjects(batch))?;
         let in_eph = |id: &str| current_eph.contains_key(&vocab::item_iri(id));
         validate::validate_batch(batch, &mut |id| {
             let iri = vocab::item_iri(id);
@@ -932,8 +1053,8 @@ impl RemoteBackend {
     /// the seed first. Names who holds each written seed NOW, so a lost claim
     /// says "claimed by X" instead of only "re-read and retry".
     fn lost_race(&self, batch: &WriteBatch) -> String {
-        let holders: Vec<String> = match (self.facts(None), self.ephemeral_facts(None)) {
-            (Ok(f), Ok(e)) => {
+        let holders: Vec<String> = match self.subjects_facts(&batch_subjects(batch)) {
+            Ok((f, e)) => {
                 let now = Snapshot::from_graphs(&f, &e);
                 batch
                     .seeds
@@ -970,7 +1091,8 @@ impl RemoteBackend {
     /// /update reports no affected count, so this read-back is the only proof
     /// that the precondition held.
     fn unconfirmed(&self, batch: &WriteBatch) -> Result<Vec<String>> {
-        let after = Snapshot::from_graphs(&self.facts(None)?, &self.ephemeral_facts(None)?);
+        let (f, e) = self.subjects_facts(&batch_subjects(batch))?;
+        let after = Snapshot::from_graphs(&f, &e);
         let mut missing = Vec::new();
         for w in &batch.seeds {
             if after.seeds.get(&w.seed.id) != Some(&w.seed) {
@@ -1015,6 +1137,99 @@ mod tests {
                 e.message
             );
         }
+    }
+
+    /// A one-thread HTTP server: `/health` is 200, a `/query` binding more
+    /// than one subject is HTTP 408 (quipu's query timeout), and a
+    /// one-subject `/query` returns one fact for it. Returns the base URL and
+    /// the number of `/query` requests seen.
+    fn timing_out_server() -> (String, std::sync::Arc<std::sync::atomic::AtomicUsize>) {
+        use std::io::{BufRead, BufReader, Read, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        let queries = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let seen = std::sync::Arc::clone(&queries);
+        std::thread::spawn(move || {
+            for stream in listener.incoming().flatten() {
+                let mut reader = BufReader::new(stream);
+                let mut first = String::new();
+                if reader.read_line(&mut first).is_err() {
+                    continue;
+                }
+                let mut length = 0usize;
+                loop {
+                    let mut line = String::new();
+                    if reader.read_line(&mut line).unwrap_or(0) == 0 || line == "\r\n" {
+                        break;
+                    }
+                    if let Some(v) = line.to_ascii_lowercase().strip_prefix("content-length:") {
+                        length = v.trim().parse().unwrap_or(0);
+                    }
+                }
+                let mut body = vec![0u8; length];
+                let _ = reader.read_exact(&mut body);
+                let body = String::from_utf8_lossy(&body).to_string();
+                let (status, reply) = if first.contains("/query") {
+                    seen.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    let subjects: Vec<&str> = body
+                        .split("VALUES ?s {")
+                        .nth(1)
+                        .and_then(|rest| rest.split('}').next())
+                        .unwrap_or("")
+                        .split_whitespace()
+                        .collect();
+                    if subjects.len() > 1 {
+                        (
+                            "408 Request Timeout",
+                            r#"{"error":"query timeout"}"#.to_string(),
+                        )
+                    } else {
+                        let s = subjects
+                            .first()
+                            .map_or("", |s| s.trim_matches(&['<', '>'][..]));
+                        (
+                            "200 OK",
+                            format!(
+                                r#"{{"results":{{"bindings":[{{"s":{{"type":"uri","value":"{s}"}},"p":{{"type":"uri","value":"urn:p"}},"o":{{"type":"literal","value":"v"}}}}]}}}}"#
+                            ),
+                        )
+                    }
+                } else {
+                    ("200 OK", r#"{"status":"ok"}"#.to_string())
+                };
+                let mut stream = reader.into_inner();
+                let _ = write!(
+                    stream,
+                    "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{reply}",
+                    reply.len()
+                );
+            }
+        });
+        (base, queries)
+    }
+
+    #[test]
+    fn a_read_quipu_times_out_is_asked_again_in_halves() {
+        let (base, queries) = timing_out_server();
+        let remote = RemoteBackend::connect(&base, "urn:g", None, None, &[]).unwrap();
+        let ids: Vec<String> = (0..4).map(|i| format!("urn:s{i}")).collect();
+        let refs: Vec<&String> = ids.iter().collect();
+        let mut out = Facts::new();
+        remote.read_subjects("urn:g", &refs, &mut out).unwrap();
+        assert_eq!(
+            out.len(),
+            4,
+            "every subject read once the halves fit: {out:?}"
+        );
+        // 4 -> 2+2 -> 1+1+1+1: three timed-out reads, then four that answer.
+        assert_eq!(queries.load(std::sync::atomic::Ordering::SeqCst), 7);
+
+        // One subject that still times out is a definite error, never a gap.
+        let lone = String::from("urn:s0 urn:s1");
+        let e = remote
+            .read_subjects("urn:g", &[&lone], &mut Facts::new())
+            .unwrap_err();
+        assert!(is_query_timeout(&e), "{}", e.message);
     }
 
     #[test]
