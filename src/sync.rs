@@ -823,6 +823,22 @@ pub fn sync(
     ctx: &Ctx,
     allow_deletes: bool,
 ) -> Result<(Snapshot, Report, Report)> {
+    sync_with_progress(base, local, remote, ctx, allow_deletes, &mut |_| {})
+}
+
+/// [`sync`], reporting each batch of a remote write split to fit the
+/// server's request limit ([`crate::sync_batch::commit_capped`]). A write
+/// that fits is one transaction, exactly as before. A split one is several,
+/// in dependency order; if it stops part way, the local store is untouched
+/// and re-running the sync continues from what landed.
+pub fn sync_with_progress(
+    base: &Snapshot,
+    local: &mut dyn Backend,
+    remote: &mut dyn Backend,
+    ctx: &Ctx,
+    allow_deletes: bool,
+    on_batch: &mut dyn FnMut(crate::sync_batch::BatchDone),
+) -> Result<(Snapshot, Report, Report)> {
     let p = plan_sync(base, &*local, &*remote)?;
     if let Some(refused) = p.refusal(allow_deletes) {
         return Err(refused);
@@ -834,7 +850,7 @@ pub fn sync(
         ..
     } = p;
     if !rb.is_empty() {
-        rr.tx = remote.commit(&rb, ctx)?;
+        rr.tx = crate::sync_batch::commit_capped(remote, &rb, ctx, on_batch)?;
         rr.wrote = true;
     }
     if !lb.is_empty() {

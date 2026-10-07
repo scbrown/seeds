@@ -55,6 +55,10 @@ pub struct RemoteBackend {
     agent: ureq::Agent,
     graph_registered: bool,
     ephemeral_registered: bool,
+    /// Refuse, unsent, a write request larger than this many bytes.
+    max_write_bytes: usize,
+    /// Refuse, unsent, a write nesting more guard clauses than this.
+    max_write_clauses: usize,
 }
 
 fn transport(url: &str, e: &ureq::Transport) -> SdError {
@@ -147,6 +151,8 @@ impl RemoteBackend {
             agent,
             graph_registered: false,
             ephemeral_registered: false,
+            max_write_bytes: super::config::DEFAULT_MAX_WRITE_BYTES,
+            max_write_clauses: super::config::DEFAULT_MAX_WRITE_CLAUSES,
         };
         match b.agent.get(&format!("{}/health", b.base)).call() {
             Ok(_) => Ok(b),
@@ -162,6 +168,21 @@ impl RemoteBackend {
     /// The server URL.
     pub fn url(&self) -> &str {
         &self.base
+    }
+
+    /// Cap write requests at `bytes` (see [`Backend::max_write_bytes`]).
+    #[must_use]
+    pub fn with_max_write_bytes(mut self, bytes: usize) -> Self {
+        self.max_write_bytes = bytes;
+        self
+    }
+
+    /// Cap the guard clauses one write may nest (see
+    /// [`Backend::max_write_clauses`]).
+    #[must_use]
+    pub fn with_max_write_clauses(mut self, clauses: usize) -> Self {
+        self.max_write_clauses = clauses;
+        self
     }
 
     fn post(&self, path: &str, content_type: &str, body: &str, auth: bool) -> Result<String> {
@@ -211,6 +232,17 @@ impl RemoteBackend {
                 )
             }),
             Err(ureq::Error::Transport(t)) => Err((true, transport(&self.base, &t))),
+            // The server refused the body for its size before evaluating
+            // it: definite, and the caller may split the write.
+            Err(ureq::Error::Status(413, _)) => Err((
+                false,
+                SdError::refused(format!(
+                    "{}: quipu {path} answered HTTP 413 to a {}-byte request; nothing was \
+                     written. Lower SEEDS_MAX_WRITE_BYTES below the server's limit.",
+                    crate::backend::TOO_LARGE,
+                    body.len()
+                )),
+            )),
             Err(ureq::Error::Status(code, r)) => Err((
                 code >= 500,
                 status_error(path, code, &r.into_string().unwrap_or_default()),
@@ -537,6 +569,14 @@ impl Backend for RemoteBackend {
         Ok(crate::backend::claims_rows(id, rows))
     }
 
+    fn max_write_bytes(&self) -> Option<usize> {
+        Some(self.max_write_bytes)
+    }
+
+    fn max_write_clauses(&self) -> Option<usize> {
+        Some(self.max_write_clauses)
+    }
+
     fn commit(&mut self, batch: &WriteBatch, ctx: &Ctx) -> Result<u64> {
         if batch.is_empty() {
             return Ok(0);
@@ -755,6 +795,31 @@ impl Backend for RemoteBackend {
             form_encode(&update),
             form_encode(&ctx.actor)
         );
+        // Every branch but the closing `{ }` is a guard, and so is every
+        // absence filter. quipu-server aborts on deep nesting (aegis-rq1afp).
+        let clauses = absent.matches("FILTER NOT EXISTS").count() + unions.len() - 1;
+        if clauses > self.max_write_clauses {
+            return Err(SdError::refused(format!(
+                "{}: this write nests {clauses} guard clauses and the limit is {} \
+                 (SEEDS_MAX_WRITE_CLAUSES); nothing was sent. sd sync splits a larger push into \
+                 batches.",
+                crate::backend::TOO_LARGE,
+                self.max_write_clauses
+            )));
+        }
+        if form.len() > self.max_write_bytes {
+            // Refused here, unsent: a server that refuses an oversized body can
+            // close the connection mid-request, and that reads as a lost
+            // response (exit 8) for a write that was never evaluated.
+            return Err(SdError::refused(format!(
+                "{}: this write is {} bytes and the limit is {} (SEEDS_MAX_WRITE_BYTES); nothing \
+                 was sent. sd sync splits a larger push into batches; a single verb this large \
+                 means one seed or comment is over the limit.",
+                crate::backend::TOO_LARGE,
+                form.len(),
+                self.max_write_bytes
+            )));
+        }
         let sent = self.send("/update", "application/x-www-form-urlencoded", &form, true);
         if let Ok(body) = &sent {
             // quipu >= #411 reports what it committed. Every seeds write also

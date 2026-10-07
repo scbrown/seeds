@@ -69,6 +69,32 @@ would refuse on conflicts.
 Neither preview writes anything beyond what every sd command does in
 [mode 1](../storage-modes.md): reconcile the store with its pendant first.
 
+**A push larger than the server accepts is split.** A quipu server caps a
+request body (64 MiB for `/update`), and the first sync of a whole board is far
+over that. A batch is also limited by how many guard clauses it nests:
+two per new seed, one per comment, one per updated or removed item. quipu-server
+aborts on an `/update` nesting about two thousand of them, whatever the body
+size. When the remote write would exceed `SEEDS_MAX_WRITE_BYTES` (default
+48 MiB) or `SEEDS_MAX_WRITE_CLAUSES` (default 500), sync pushes it as several batches, each its own transaction, and
+prints `sd: remote batch N/M landed` to stderr as each one commits. The order
+keeps every batch valid by itself: a seed lands after the seeds it is blocked
+on, seeds in a dependency cycle land together, a comment lands with its seed,
+and removals land last. A write that fits is still one transaction.
+
+If a split push stops part way, the error says how many batches landed and
+keeps the failure's own exit code (an unknown outcome is still exit 8, read
+it back first). The local store and the sync base are untouched, so running
+the same `sd sync` again continues: what already landed is identical on both
+sides and is not written again.
+
+Any write whose request would exceed the limit is refused before it is sent,
+with exit 5 and a message starting `write too large for the server`; so is a
+write nesting more guard clauses than the limit, and so is a server's own HTTP
+413. Nothing was written in either case. (Sending it anyway
+lets the server close the connection mid-request, which reads as a lost
+response, exit 8, for a write that was never evaluated.) A single seed or
+dependency cycle over the limit cannot be split and is refused the same way.
+
 br's other `sync` flags (`--apply`, `--force`, `--orphans` and the JSONL
 export/import modes) act on br's SQLite/JSONL machinery and have no seeds
 counterpart. In particular `--force` does not lift the removal guard; only

@@ -121,7 +121,8 @@ pub struct SeedWrite {
 }
 
 /// Everything one verb writes. A batch is one transaction: all of it lands, or
-/// none of it does.
+/// none of it does. (A sync too large for the server is pushed as several
+/// batches, each its own transaction; see [`crate::sync_batch::split_for_cap`].)
 #[derive(Debug, Clone, Default)]
 pub struct WriteBatch {
     /// Seeds to create or replace.
@@ -175,6 +176,31 @@ pub trait Backend {
     /// The attribution claims recorded on writes that produced a version of
     /// seed `id`, as `(revision, claims)` ([`crate::vocab::claims_query`]).
     fn claims_of(&self, id: &str) -> Result<Vec<(u64, Claims)>>;
+
+    /// The largest write this backend accepts, in request bytes, or `None`
+    /// when it has no limit (a local store). A write over the limit is
+    /// refused before anything is sent, with a message starting
+    /// [`TOO_LARGE`], so the caller knows nothing landed and can split it.
+    fn max_write_bytes(&self) -> Option<usize> {
+        None
+    }
+
+    /// The most guard clauses (`FILTER NOT EXISTS` and `UNION` branches, see
+    /// [`crate::sync_batch::clause_count`]) one write may nest, or `None`
+    /// when unlimited. Over it, the write is refused unsent like
+    /// [`Backend::max_write_bytes`].
+    fn max_write_clauses(&self) -> Option<usize> {
+        None
+    }
+}
+
+/// How a refusal for exceeding [`Backend::max_write_bytes`] begins. The kind
+/// is [`crate::error::ErrorKind::Refused`]: the write was never sent.
+pub const TOO_LARGE: &str = "write too large for the server";
+
+/// Whether `e` is a [`TOO_LARGE`] refusal: definite, nothing was written.
+pub fn is_too_large(e: &crate::error::SdError) -> bool {
+    e.kind == crate::error::ErrorKind::Refused && e.message.starts_with(TOO_LARGE)
 }
 
 /// Rows of [`crate::vocab::claims_query`] for seed `id` as `(revision,

@@ -52,7 +52,7 @@ nothing about that setting.
 | # | layer | location keys | other keys |
 |---|---|---|---|
 | 1 | flags | `--store <path>`, `--quipu <url>` | `--graph` |
-| 2 | environment | `SEEDS_QUIPU_STORE`, `SEEDS_QUIPU_URL` | `SEEDS_GRAPH`, `SEEDS_PREFIX`, `SEEDS_ACTOR`, `SEEDS_PENDANT_DIR`, `SEEDS_SYNC_REMOTE`, `SEEDS_QUIPU_TOKEN` |
+| 2 | environment | `SEEDS_QUIPU_STORE`, `SEEDS_QUIPU_URL` | `SEEDS_GRAPH`, `SEEDS_PREFIX`, `SEEDS_ACTOR`, `SEEDS_PENDANT_DIR`, `SEEDS_SYNC_REMOTE`, `SEEDS_QUIPU_TOKEN`, `SEEDS_MAX_WRITE_BYTES`, `SEEDS_MAX_WRITE_CLAUSES` |
 | 3 | project file | the nearest `.seeds/config.toml`, walking up from the current directory like git | `[project]`, `[pendant]`, `[sync]`, `token_file` |
 | 4 | user file | `$XDG_CONFIG_HOME/seeds/config.toml`, else `~/.config/seeds/config.toml` | the same |
 | 5 | default | a local store at `<project>/.seeds/seeds.db` | prefix `sd` |

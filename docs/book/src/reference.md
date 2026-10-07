@@ -51,7 +51,7 @@ Exit codes are a contract. A code is never reused or renumbered.
 | 2 | usage: an unknown verb, a bad flag or value, `--at` on a write |
 | 3 | not found: an unknown id, dependency or comment |
 | 4 | conflict: a lost `--claim`, the seed changed since it was read, or two ledgers disagree (import, sync, merge-driver, a pendant that changed alongside the store); nothing was written |
-| 5 | refused: the shapes rejected the write, a dependency cycle, closing a seed with open blockers without `--force` |
+| 5 | refused: the shapes rejected the write, a dependency cycle, closing a seed with open blockers without `--force`, a write over the request limit (`SEEDS_MAX_WRITE_BYTES`, `SEEDS_MAX_WRITE_CLAUSES` or the server's HTTP 413; nothing was sent) |
 | 6 | configuration: contradictory or unreadable config (for example `store` and `url` both set) |
 | 7 | unreachable: the configured quipu server cannot be reached (seeds never falls back to a local store) |
 | 8 | indeterminate: a remote write's response was lost and a read-back does not show it; it may still land. Check the named ids before doing anything; do not simply retry |

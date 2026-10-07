@@ -744,6 +744,9 @@ enum Fault {
     LoseResponse,
     /// Answer /update with 502 without forwarding it.
     BadGateway,
+    /// Answer /update with 413 without forwarding it, as a server whose
+    /// body limit is below seeds' own cap would.
+    TooLarge,
 }
 
 fn faulty_proxy(upstream: &str, fault: Fault) -> String {
@@ -786,6 +789,12 @@ fn faulty_proxy(upstream: &str, fault: Fault) -> String {
                 if is_update && fault == Fault::BadGateway {
                     let _ = client.write_all(
                         b"HTTP/1.1 502 Bad Gateway\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+                    );
+                    return;
+                }
+                if is_update && fault == Fault::TooLarge {
+                    let _ = client.write_all(
+                        b"HTTP/1.1 413 Payload Too Large\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
                     );
                     return;
                 }
@@ -1392,4 +1401,133 @@ fn remote_mode_keeps_ephemeral_seeds_in_their_own_graph() {
         "control: shared seed exported"
     );
     assert!(!nt.contains(&format!("/item/{e}")), "ephemeral seed leaked");
+}
+
+// ---------------------------------------------- a push over the request limit (aegis-w3k75d.15)
+
+#[test]
+fn a_sync_over_the_request_limit_lands_in_batches_on_a_real_server() {
+    let mut env = Env::new("batched-sync");
+    let Some(url) = env.start_server() else {
+        eprintln!("SKIPPED: set SEEDS_TEST_QUIPU_SERVER to a quipu-server binary to run this");
+        return;
+    };
+    let repo = env.pendant_project("repo");
+    let (a, g) = board(&env, &repo);
+    let mut prev = g.clone();
+    for i in 0..10 {
+        let id = env
+            .ok(&repo, &["q", &format!("step {i}")], &[])
+            .trim()
+            .to_string();
+        env.ok(&repo, &["dep", "add", &id, &prev], &[]);
+        env.ok(&repo, &["comments", "add", &id, &format!("note {i}")], &[]);
+        prev = id;
+    }
+    let sync_env = [
+        ("SEEDS_SYNC_REMOTE", url.as_str()),
+        ("SEEDS_MAX_WRITE_BYTES", "60000"),
+        ("SEEDS_MAX_WRITE_CLAUSES", "8"),
+    ];
+    let o = env.sd(&repo, &["sync"], &sync_env);
+    let err = String::from_utf8_lossy(&o.stderr);
+    assert_eq!(o.status.code(), Some(0), "{err}");
+    let batches = err.matches("remote batch").count();
+    assert!(batches >= 3, "pushed in batches: {err}");
+    let id = std::fs::read_to_string(repo.join(".seeds/project-id")).unwrap();
+    let graph = format!("https://seeds.local/project/sd-{}", id.trim());
+    let remote = [
+        ("SEEDS_QUIPU_URL", url.as_str()),
+        ("SEEDS_GRAPH", graph.as_str()),
+    ];
+    let work = env.dir("work");
+    // Every seed, every edge: the ready set is the head of the chain.
+    assert_eq!(env.ready(&work, &remote), env.ready(&repo, &[]));
+    assert_eq!(env.ready(&work, &remote), vec![g.clone()]);
+    // Comments crossed with their seeds: the last step's note, on both sides.
+    for (cwd, e) in [(&repo, &[][..]), (&work, &remote[..])] {
+        let v: Value = serde_json::from_str(&env.ok(cwd, &["show", &prev, "--json"], e)).unwrap();
+        let texts: Vec<&str> = v[0]["comments"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|c| c["text"].as_str().unwrap())
+            .collect();
+        assert_eq!(texts, vec!["note 9"]);
+    }
+    assert!(env.ready(&work, &remote).iter().all(|id| *id != a));
+    // A second sync has nothing to push.
+    let o = env.sd(&repo, &["sync", "--json"], &sync_env);
+    let v: Value = serde_json::from_slice(&o.stdout).unwrap();
+    assert_eq!(v["remote"]["wrote"], false, "{v}");
+}
+
+#[test]
+fn a_write_over_the_request_limit_is_refused_unsent() {
+    let mut env = Env::new("too-large");
+    let Some(url) = env.start_server() else {
+        eprintln!("SKIPPED: set SEEDS_TEST_QUIPU_SERVER to a quipu-server binary to run this");
+        return;
+    };
+    let work = env.dir("work");
+    let o = env.sd(
+        &work,
+        &["create", "far too big for this limit", "--silent"],
+        &[
+            ("SEEDS_QUIPU_URL", url.as_str()),
+            ("SEEDS_MAX_WRITE_BYTES", "200"),
+        ],
+    );
+    let err = String::from_utf8_lossy(&o.stderr);
+    assert_eq!(o.status.code(), Some(5), "{err}");
+    assert!(
+        err.contains("write too large") && err.contains("nothing was sent"),
+        "{err}"
+    );
+    assert_eq!(count_remote(&env, &work, &url), 0);
+    let o = env.sd(
+        &work,
+        &["create", "x"],
+        &[
+            ("SEEDS_QUIPU_URL", url.as_str()),
+            ("SEEDS_MAX_WRITE_BYTES", "lots"),
+        ],
+    );
+    assert_eq!(o.status.code(), Some(6), "a bad limit is a config error");
+    // A create nests two guard clauses (absent from both graphs).
+    let o = env.sd(
+        &work,
+        &["create", "two guards", "--silent"],
+        &[
+            ("SEEDS_QUIPU_URL", url.as_str()),
+            ("SEEDS_MAX_WRITE_CLAUSES", "1"),
+        ],
+    );
+    let err = String::from_utf8_lossy(&o.stderr);
+    assert_eq!(o.status.code(), Some(5), "{err}");
+    assert!(
+        err.contains("guard clauses") && err.contains("nothing was sent"),
+        "{err}"
+    );
+    assert_eq!(count_remote(&env, &work, &url), 0);
+}
+
+#[test]
+fn a_413_is_a_definite_refusal_not_an_unknown_outcome() {
+    let mut env = Env::new("http-413");
+    let Some(url) = env.start_server() else {
+        eprintln!("SKIPPED: set SEEDS_TEST_QUIPU_SERVER to a quipu-server binary to run this");
+        return;
+    };
+    let work = env.dir("work");
+    let refusing = faulty_proxy(&url, Fault::TooLarge);
+    let o = env.sd(
+        &work,
+        &["create", "refused for size", "--silent"],
+        &[("SEEDS_QUIPU_URL", refusing.as_str())],
+    );
+    let err = String::from_utf8_lossy(&o.stderr);
+    assert_eq!(o.status.code(), Some(5), "{err}");
+    assert!(err.contains("413") && !err.contains("UNKNOWN"), "{err}");
+    assert_eq!(count_remote(&env, &work, &url), 0);
 }
