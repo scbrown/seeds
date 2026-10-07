@@ -1017,6 +1017,25 @@ impl Backend for RemoteBackend {
         self.snapshot_of(&subjects)
     }
 
+    fn subjects_of_id(&self, id: &str) -> Result<Vec<String>> {
+        let mut out = Vec::new();
+        for graph in self.both_graphs() {
+            let rows = self.select(
+                &format!(
+                    "SELECT ?s WHERE {{ GRAPH <{graph}> {{ ?s <{}> \"{}\" }} }}",
+                    term::identifier(),
+                    escape_literal(id)
+                ),
+                None,
+            )?;
+            out.extend(rows.into_iter().filter_map(|mut r| match r.remove("s") {
+                Some(Obj::Iri(s)) => Some(s),
+                _ => None,
+            }));
+        }
+        Ok(out)
+    }
+
     fn ready_ids(&self, at: Option<u64>) -> Result<Vec<String>> {
         let rows = self.select(&vocab::ready_query(&self.graph), at)?;
         let mut ids: Vec<String> = rows

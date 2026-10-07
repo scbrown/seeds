@@ -1803,6 +1803,12 @@ pub fn ready(b: &dyn Backend, ctx: &Ctx, req: &ReadyReq, at: Option<u64>) -> Res
     let ready_ids = b.ready_ids(at)?;
     let mut snap = if scoped {
         let mut snap = b.snapshot_seeds(&ready_ids)?;
+        // A scoped read finds a seed at its canonical IRI. One the ready query
+        // returned but that read did not find would be silently left out of
+        // the answer; refuse instead (a whole snapshot reads it by id).
+        if let Some(id) = ready_ids.iter().find(|id| !snap.seeds.contains_key(*id)) {
+            return Err(missed_at_canonical_iri(b, id)?);
+        }
         if req.include_deferred {
             // Every deferred seed, and what it is blocked on, so the
             // unblocked ones are found below exactly as in a snapshot.
@@ -1866,6 +1872,29 @@ pub fn ready(b: &dyn Backend, ctx: &Ctx, req: &ReadyReq, at: Option<u64>) -> Res
         with_dependents(b, &mut snap, &page_ids(&seeds, 0, limit))?;
     }
     Ok(page(seeds, limit, &snap))
+}
+
+/// The refusal for a seed a scoped read did not find at its canonical IRI,
+/// naming where it is stored instead.
+fn missed_at_canonical_iri(b: &dyn Backend, id: &str) -> Result<SdError> {
+    let canonical = vocab::item_iri(id);
+    let stored = b.subjects_of_id(id)?;
+    let where_ = if stored.is_empty() {
+        "no subject now carries that id (it changed while being read)".to_string()
+    } else {
+        format!(
+            "it is stored as {}",
+            stored
+                .iter()
+                .map(|s| format!("<{s}>"))
+                .collect::<Vec<_>>()
+                .join(", ")
+        )
+    };
+    Ok(SdError::failed(format!(
+        "the ready query returned {id}, but no seed is at its canonical IRI <{canonical}>: \
+         {where_}. Refusing to answer without it; nothing was written."
+    )))
 }
 
 /// Every seed below `root` in the parent chain, not `root` itself. A visited

@@ -604,3 +604,60 @@ fn scoped_reads_print_exactly_what_a_whole_snapshot_prints() {
         );
     }
 }
+
+// sattler's review of #100: a seed stored under an IRI other than its
+// canonical one is found by the ready query (by id) but not by the scoped read
+// (by IRI). ready must refuse, naming the id and both IRIs, never leave it out.
+#[test]
+fn ready_refuses_a_seed_stored_under_a_non_canonical_iri() {
+    let Some(server) = quipu_server() else {
+        eprintln!("SKIPPED: set SEEDS_TEST_QUIPU_SERVER to a quipu-server binary to run this");
+        return;
+    };
+    let graph = "https://seeds.local/project/odd-iri";
+    let mut r = RemoteBackend::connect(&server.base, graph, None, None, &[]).unwrap();
+    let c = ctx();
+    let (fine, _) = engine::create(
+        &mut r,
+        &c,
+        &CreateReq {
+            title: "stored where it should be".into(),
+            ..CreateReq::default()
+        },
+    )
+    .unwrap();
+    let odd = "https://seeds.local/elsewhere/odd-1";
+    let q = format!(
+        "INSERT DATA {{ GRAPH <{graph}> {{ <{odd}> a <{}> ; <{}> \"odd-1\" ; <{}> \"odd\" ; \
+         <{}> \"open\" . }} }}",
+        term::work_item(),
+        term::identifier(),
+        term::name(),
+        term::status()
+    );
+    r.post(
+        "/update",
+        "application/x-www-form-urlencoded",
+        &format!("update={}", super::form_encode(&q)),
+        true,
+    )
+    .unwrap();
+    // The whole snapshot reads it by id: it is ready.
+    let whole = engine::ready(&Whole(&mut r), &c, &ReadyReq::default(), None).unwrap();
+    let ids: Vec<&str> = whole.issues.iter().map(|s| s.id.as_str()).collect();
+    assert!(
+        ids.contains(&"odd-1") && ids.contains(&fine.id.as_str()),
+        "{ids:?}"
+    );
+    // The scoped read cannot find it at its canonical IRI: a refusal, never
+    // an answer without it.
+    let e = engine::ready(&r, &c, &ReadyReq::default(), None).unwrap_err();
+    assert_eq!(e.kind, crate::error::ErrorKind::Failed, "{}", e.message);
+    for want in ["odd-1", odd, &vocab::item_iri("odd-1")] {
+        assert!(
+            e.message.contains(want),
+            "{want} missing from: {}",
+            e.message
+        );
+    }
+}

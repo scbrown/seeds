@@ -276,6 +276,15 @@ pub trait Backend {
         self.snapshot(None)
     }
 
+    /// The subjects, in the project graph or its ephemeral graph, whose
+    /// `schema:identifier` is `id`: how a scoped read that missed a seed at
+    /// its canonical IRI ([`crate::vocab::item_iri`]) says where it is
+    /// instead. The default answers nothing (a backend without scoped reads
+    /// never needs it).
+    fn subjects_of_id(&self, _id: &str) -> Result<Vec<String>> {
+        Ok(Vec::new())
+    }
+
     /// The ids the ready definition ([`crate::vocab::ready_query`]) selects, as
     /// of `at`. Filters and the defer date are applied by the caller.
     fn ready_ids(&self, at: Option<u64>) -> Result<Vec<String>>;
