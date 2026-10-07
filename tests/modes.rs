@@ -211,6 +211,12 @@ fn http_post(port: u16, path: &str, content_type: &str, body: &str) -> String {
         .unwrap_or_default()
 }
 
+/// POST a SPARQL SELECT to `/query` and return the response body.
+fn http_query(port: u16, sparql: &str) -> String {
+    let body = serde_json::json!({ "query": sparql }).to_string();
+    http_post(port, "/query", "application/json", &body)
+}
+
 /// Whether `GET /health` on the port returns an HTTP 200 status line.
 fn health_ok(port: u16) -> bool {
     use std::io::{Read, Write};
@@ -1468,6 +1474,33 @@ fn remote_mode_keeps_ephemeral_seeds_in_their_own_graph() {
     env.ok(&work, &["comments", "add", &e, "over http"], &remote);
     assert_eq!(show(&e)[0]["title"], "eph 2");
     assert_eq!(show(&e)[0]["ephemeral"], true);
+    // A comment write carries no seed, so which graph it lands in comes from
+    // the server's view of its seed. show and export cannot tell: ask quipu
+    // which graph holds the comment.
+    let port: u16 = url.rsplit(':').next().unwrap().parse().unwrap();
+    let v: Value = serde_json::from_str(&http_query(
+        port,
+        "SELECT DISTINCT ?g WHERE { GRAPH ?g { ?s ?p \"over http\" } }",
+    ))
+    .unwrap();
+    // quipu's own result shape: {"rows": [{"g": "<iri>"}, ...]}.
+    let graphs: Vec<&str> = v["rows"]
+        .as_array()
+        .unwrap_or_else(|| panic!("no rows: {v}"))
+        .iter()
+        .map(|r| r["g"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        graphs.len(),
+        1,
+        "the comment is in exactly one graph: {graphs:?}"
+    );
+    // The vocabulary's own name for it, minus the separator before it.
+    let eph = seeds::vocab::ephemeral_graph("");
+    assert!(
+        graphs[0].ends_with(&eph[1..]),
+        "comment leaked into the shared graph: {graphs:?}"
+    );
 
     // Shared -> ephemeral is refused; ephemeral -> shared is fine.
     let o = env.sd(&work, &["dep", "add", &s, &e], &remote);

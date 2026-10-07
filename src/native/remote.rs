@@ -31,7 +31,7 @@
 //!   quipu server is fine; pointing seeds at a large shared knowledge graph
 //!   makes every write as expensive as that graph is big.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::time::Duration;
 
 use serde_json::{json, Value as Json};
@@ -43,6 +43,42 @@ use crate::validate::{self, escape_literal};
 use crate::vocab::{self, term};
 
 const PAGE: usize = 2000;
+
+/// Subjects per targeted read. A seed carries a few dozen facts, so a chunk
+/// stays well under quipu's result cap; a truncated answer is split anyway.
+const SUBJECTS_PER_READ: usize = 100;
+
+/// Facts grouped by subject IRI.
+type Facts = BTreeMap<String, Vec<Fact>>;
+
+/// Every subject a write's checks read: the seeds it writes or removes, the
+/// seeds their new edges point at (the dangling-edge check), the seeds its
+/// comments and comment removals hang off (which graph each lives in), and
+/// the comments themselves (for the read-back).
+fn batch_subjects(batch: &WriteBatch) -> BTreeSet<String> {
+    let mut ids: BTreeSet<&str> = BTreeSet::new();
+    for w in &batch.seeds {
+        ids.insert(&w.seed.id);
+        ids.extend(w.seed.blocked_on.iter().map(String::as_str));
+    }
+    ids.extend(batch.delete_seeds.iter().map(|(id, _)| id.as_str()));
+    ids.extend(batch.comments.iter().map(|c| c.seed.as_str()));
+    ids.extend(batch.delete_comments.iter().map(|(s, _)| s.as_str()));
+    let mut out: BTreeSet<String> = ids.into_iter().map(vocab::item_iri).collect();
+    out.extend(
+        batch
+            .comments
+            .iter()
+            .map(|c| vocab::comment_iri(&c.seed, c.index)),
+    );
+    out.extend(
+        batch
+            .delete_comments
+            .iter()
+            .map(|(s, i)| vocab::comment_iri(s, *i)),
+    );
+    out
+}
 
 /// A project stored as a named graph on a quipu server.
 pub struct RemoteBackend {
@@ -252,6 +288,16 @@ impl RemoteBackend {
 
     /// Run a SELECT and return its bindings.
     fn select(&self, sparql: &str, at: Option<u64>) -> Result<Vec<BTreeMap<String, Obj>>> {
+        self.select_marked(sparql, at).map(|(rows, _)| rows)
+    }
+
+    /// [`Self::select`], also returning whether quipu cut the result short
+    /// (its `truncated` flag): a short answer must never read as a complete one.
+    fn select_marked(
+        &self,
+        sparql: &str,
+        at: Option<u64>,
+    ) -> Result<(Vec<BTreeMap<String, Obj>>, bool)> {
         let mut body = json!({ "query": sparql });
         if let Some(t) = at {
             body["tx"] = json!(t);
@@ -280,7 +326,7 @@ impl RemoteBackend {
             }
             out.push(m);
         }
-        Ok(out)
+        Ok((out, v["truncated"].as_bool().unwrap_or(false)))
     }
 
     fn count(&self, graph: &str, at: Option<u64>) -> Result<usize> {
@@ -305,6 +351,60 @@ impl RemoteBackend {
     /// The project's ephemeral graph's facts, grouped by subject.
     fn ephemeral_facts(&self, at: Option<u64>) -> Result<BTreeMap<String, Vec<Fact>>> {
         self.graph_facts(&crate::vocab::ephemeral_graph(&self.graph), at)
+    }
+
+    /// The current facts of just these subjects, in the project graph and in
+    /// its ephemeral graph. A write needs only the items it touches (their
+    /// revisions, the targets of their edges, which graph each lives in), and
+    /// reading the whole graph instead made every batch of a large push cost
+    /// more than the last (aegis-w3k75d.15).
+    fn subjects_facts(&self, subjects: &BTreeSet<String>) -> Result<(Facts, Facts)> {
+        let all: Vec<&String> = subjects.iter().collect();
+        let mut main = Facts::new();
+        let mut eph = Facts::new();
+        let eph_graph = crate::vocab::ephemeral_graph(&self.graph);
+        for (graph, out) in [
+            (self.graph.as_str(), &mut main),
+            (eph_graph.as_str(), &mut eph),
+        ] {
+            for chunk in all.chunks(SUBJECTS_PER_READ) {
+                self.read_subjects(graph, chunk, out)?;
+            }
+        }
+        Ok((main, eph))
+    }
+
+    /// One `VALUES` read of `subjects` in `graph`, halved and retried when
+    /// quipu reports the answer truncated.
+    fn read_subjects(&self, graph: &str, subjects: &[&String], out: &mut Facts) -> Result<()> {
+        if subjects.is_empty() {
+            return Ok(());
+        }
+        let values: String = subjects.iter().map(|s| format!("<{s}> ")).collect();
+        let (rows, truncated) = self.select_marked(
+            &format!("SELECT ?s ?p ?o WHERE {{ VALUES ?s {{ {values}}} GRAPH <{graph}> {{ ?s ?p ?o }} }}"),
+            None,
+        )?;
+        if truncated {
+            if subjects.len() == 1 {
+                return Err(SdError::failed(format!(
+                    "quipu truncated the facts of {} even read alone; refusing to write \
+                     against a partial view",
+                    subjects[0]
+                )));
+            }
+            let (a, b) = subjects.split_at(subjects.len() / 2);
+            self.read_subjects(graph, a, out)?;
+            return self.read_subjects(graph, b, out);
+        }
+        for mut r in rows {
+            if let (Some(Obj::Iri(s)), Some(Obj::Iri(p)), Some(o)) =
+                (r.remove("s"), r.remove("p"), r.remove("o"))
+            {
+                out.entry(s).or_default().push((p, o));
+            }
+        }
+        Ok(())
     }
 
     /// One graph's facts, grouped by subject, read consistently in pages.
@@ -625,8 +725,7 @@ impl Backend for RemoteBackend {
             return Ok(0);
         }
         // Validate first, against the server's current state.
-        let current = self.facts(None)?;
-        let current_eph = self.ephemeral_facts(None)?;
+        let (current, current_eph) = self.subjects_facts(&batch_subjects(batch))?;
         let in_eph = |id: &str| current_eph.contains_key(&vocab::item_iri(id));
         validate::validate_batch(batch, &mut |id| {
             let iri = vocab::item_iri(id);
@@ -932,8 +1031,8 @@ impl RemoteBackend {
     /// the seed first. Names who holds each written seed NOW, so a lost claim
     /// says "claimed by X" instead of only "re-read and retry".
     fn lost_race(&self, batch: &WriteBatch) -> String {
-        let holders: Vec<String> = match (self.facts(None), self.ephemeral_facts(None)) {
-            (Ok(f), Ok(e)) => {
+        let holders: Vec<String> = match self.subjects_facts(&batch_subjects(batch)) {
+            Ok((f, e)) => {
                 let now = Snapshot::from_graphs(&f, &e);
                 batch
                     .seeds
@@ -970,7 +1069,8 @@ impl RemoteBackend {
     /// /update reports no affected count, so this read-back is the only proof
     /// that the precondition held.
     fn unconfirmed(&self, batch: &WriteBatch) -> Result<Vec<String>> {
-        let after = Snapshot::from_graphs(&self.facts(None)?, &self.ephemeral_facts(None)?);
+        let (f, e) = self.subjects_facts(&batch_subjects(batch))?;
+        let after = Snapshot::from_graphs(&f, &e);
         let mut missing = Vec::new();
         for w in &batch.seeds {
             if after.seeds.get(&w.seed.id) != Some(&w.seed) {
