@@ -94,12 +94,20 @@ export gives br back the original spelling.
 
 **A ledger in the old vocabulary is refused, not read as empty.** sd 0.1
 does not read what sd 0.0.x wrote (`aegis:WorkItem`, `seeds:revision`). Every
-command first counts such items in the project graph (one bounded query), and
-when there are any it refuses (exit 5) naming the store or server, the graph
-and the count, with the migration: `sd cutover export` with the old sd, then
-`sd cutover import` with this one into a new store. `sd doctor` reports it as
-a failed `store.vocabulary` check, and a pendant in the old vocabulary fails
-validation the same way.
+command first asks whether the project graph holds any `seeds:revision` fact
+(one bounded `ASK` on a bound predicate; every sd before 0.1.0 wrote it on
+every seed), and when it does it refuses (exit 5) naming the store or server
+and the graph, with the migration: `sd cutover export` with the old sd, then
+`sd cutover import` with this one into a new store. That recipe drops any
+new-vocabulary seed from a mixed store, and only a pre-0.1.0 sd writing beside
+0.1.0 could have made one. `sd doctor` reports it as a failed
+`store.vocabulary` check with the exact count (a slower `COUNT` that only
+doctor runs), and a pendant in the old vocabulary fails validation
+the same way. A count that cannot be read (a query error, no answer, a
+malformed or missing number) refuses too: the check fails closed, never as a
+clean ledger. A timeout (the first query on a large graph right after a quipu
+restart can outrun the server's query budget) is retried once after 2 s, then
+refused with a message saying the store may be warming up.
 
 A comment is its own entity, `https://seeds.local/item/<id>/comment/<n>`, typed
 `schema:Comment`, with `schema:parentItem` (the seed), `schema:position`

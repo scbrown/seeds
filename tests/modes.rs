@@ -817,6 +817,9 @@ enum Fault {
     /// Answer /update with 413 without forwarding it, as a server whose
     /// body limit is below seeds' own cap would.
     TooLarge,
+    /// Answer the old-vocabulary COUNT query (and only it) with this status
+    /// line and body, forwarding everything else.
+    LegacyCount(&'static str, &'static str),
 }
 
 fn faulty_proxy(upstream: &str, fault: Fault) -> String {
@@ -856,6 +859,20 @@ fn faulty_proxy(upstream: &str, fault: Fault) -> String {
                 }
                 let head = String::from_utf8_lossy(&buf[..head_end]).to_string();
                 let is_update = head.starts_with("POST /update");
+                if let Fault::LegacyCount(status, body) = fault {
+                    let req = String::from_utf8_lossy(&buf[head_end..]);
+                    if head.starts_with("POST /query") && req.contains("ontology/revision") {
+                        let _ = client.write_all(
+                            format!(
+                                "HTTP/1.1 {status}\r\nContent-Type: application/json\r\n\
+                                 Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                                body.len()
+                            )
+                            .as_bytes(),
+                        );
+                        return;
+                    }
+                }
                 if is_update && fault == Fault::BadGateway {
                     let _ = client.write_all(
                         b"HTTP/1.1 502 Bad Gateway\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
@@ -1959,14 +1976,15 @@ fn plant_old_seed(db: &Path, graph: &str, id: &str) {
     .unwrap();
 }
 
-/// The refusal an old-vocabulary ledger gets: nonzero, the count, the recipe.
-fn assert_old_vocabulary_refused(o: &Output, n: u64, what: &str) {
+/// The refusal an old-vocabulary ledger gets: nonzero, what was found, the
+/// recipe. Every command runs the cheap existence check, so it says the data
+/// is there and leaves the count to `sd doctor`.
+fn assert_old_vocabulary_refused(o: &Output, what: &str) {
     let err = String::from_utf8_lossy(&o.stderr);
     assert_eq!(o.status.code(), Some(5), "{what}: {err}");
     assert!(
-        err.contains(&format!(
-            "holds {n} item(s) written in seeds' OLD vocabulary"
-        )) && err.contains("sd cutover export")
+        err.contains("holds old-vocabulary data in seeds' OLD vocabulary")
+            && err.contains("sd cutover export")
             && err.contains("sd cutover import"),
         "{what}: {err}"
     );
@@ -2010,7 +2028,7 @@ fn an_old_vocabulary_store_is_refused_not_read_as_empty() {
             &["create", "would split the board"],
         ] {
             let o = env.sd(dir, args, &local);
-            assert_old_vocabulary_refused(&o, 1, &format!("{what}: sd {args:?}"));
+            assert_old_vocabulary_refused(&o, &format!("{what}: sd {args:?}"));
         }
         let o = env.sd(dir, &["doctor", "--json"], &local);
         assert_eq!(o.status.code(), Some(1), "{what}: doctor fails");
@@ -2023,10 +2041,14 @@ fn an_old_vocabulary_store_is_refused_not_read_as_empty() {
             .cloned()
             .unwrap();
         assert_eq!(vocab["status"], "error", "{what}: {d}");
-        assert!(vocab["message"]
-            .as_str()
-            .unwrap()
-            .contains("OLD vocabulary"));
+        // Doctor alone runs the exact count.
+        assert!(
+            vocab["message"]
+                .as_str()
+                .unwrap()
+                .contains("holds 1 item(s) in seeds' OLD vocabulary"),
+            "{what}: {d}"
+        );
     }
 }
 
@@ -2072,8 +2094,111 @@ fn an_old_vocabulary_remote_graph_is_refused() {
     );
     for args in [&["list"][..], &["ready"], &["show", &id]] {
         let o = env.sd(&work, args, &remote);
-        assert_old_vocabulary_refused(&o, 2, &format!("remote: sd {args:?}"));
+        assert_old_vocabulary_refused(&o, &format!("remote: sd {args:?}"));
     }
     let o = env.sd(&work, &["doctor"], &remote);
     assert_eq!(o.status.code(), Some(1), "doctor fails on the remote graph");
+}
+
+/// The old-vocabulary check fails CLOSED (seeds#96 follow-up): when the
+/// server's answer to the count is broken in any way, every command refuses,
+/// naming the graph, instead of reading the ledger as clean. A server that
+/// answers the count correctly (zero) is the control.
+#[test]
+fn the_old_vocabulary_check_refuses_when_its_count_cannot_be_read() {
+    let mut env = Env::new("legacy-count-fault");
+    let Some(url) = env.start_server() else {
+        eprintln!("SKIPPED: set SEEDS_TEST_QUIPU_SERVER to a quipu-server binary to run this");
+        return;
+    };
+    let graph = "https://seeds.local/project/legacy-count-fault";
+    let work = env.dir("work");
+    let id = env
+        .ok(
+            &work,
+            &["create", "new terms", "--silent"],
+            &[("SEEDS_QUIPU_URL", url.as_str()), ("SEEDS_GRAPH", graph)],
+        )
+        .trim()
+        .to_string();
+    let w3c = |bindings: &str| -> String {
+        format!("{{\"head\":{{\"vars\":[\"n\"]}},\"results\":{{\"bindings\":{bindings}}}}}")
+    };
+    // Leaked on purpose: a Fault carries 'static bodies.
+    let leak = |s: String| -> &'static str { Box::leak(s.into_boxed_str()) };
+    let cases: Vec<(&str, Fault)> = vec![
+        ("no row", Fault::LegacyCount("200 OK", leak(w3c("[]")))),
+        (
+            "a row without the count",
+            Fault::LegacyCount("200 OK", leak(w3c("[{}]"))),
+        ),
+        (
+            "a non-numeric count",
+            Fault::LegacyCount(
+                "200 OK",
+                leak(w3c("[{\"n\":{\"type\":\"literal\",\"value\":\"lots\"}}]")),
+            ),
+        ),
+        (
+            "an IRI for a count",
+            Fault::LegacyCount(
+                "200 OK",
+                leak(w3c("[{\"n\":{\"type\":\"uri\",\"value\":\"urn:x\"}}]")),
+            ),
+        ),
+        (
+            "not results JSON",
+            Fault::LegacyCount("200 OK", "{\"oops\":true}"),
+        ),
+        (
+            "an ASK answer that is not a boolean",
+            Fault::LegacyCount("200 OK", "{\"head\":{},\"boolean\":\"false\"}"),
+        ),
+        ("an empty body", Fault::LegacyCount("200 OK", "")),
+        // Every attempt times out: one retry, then the warming-up refusal.
+        (
+            "a 408 on every attempt",
+            Fault::LegacyCount("408 Request Timeout", "query timeout: exceeded 10000ms"),
+        ),
+        (
+            "a server error",
+            Fault::LegacyCount("500 Internal Server Error", "{}"),
+        ),
+    ];
+    // Control through the same proxy with nothing broken: the ledger reads.
+    let ok_proxy = faulty_proxy(&url, Fault::BadGateway);
+    let ok_env = [
+        ("SEEDS_QUIPU_URL", ok_proxy.as_str()),
+        ("SEEDS_GRAPH", graph),
+    ];
+    assert!(
+        env.ok(&work, &["list"], &ok_env).contains(&id),
+        "control reads"
+    );
+    for (what, fault) in cases {
+        let proxy = faulty_proxy(&url, fault);
+        let e = [("SEEDS_QUIPU_URL", proxy.as_str()), ("SEEDS_GRAPH", graph)];
+        for args in [&["list"][..], &["show", &id], &["ready"]] {
+            let o = env.sd(&work, args, &e);
+            let err = String::from_utf8_lossy(&o.stderr);
+            assert_ne!(
+                o.status.code(),
+                Some(0),
+                "{what}: sd {args:?} read it as clean: {err}"
+            );
+            assert!(
+                [
+                    "returned an unreadable answer",
+                    "could not be completed",
+                    "timed out twice"
+                ]
+                .iter()
+                .any(|m| err.contains(m))
+                    && err.contains(graph),
+                "{what}: sd {args:?}: {err}"
+            );
+        }
+        let o = env.sd(&work, &["doctor"], &e);
+        assert_eq!(o.status.code(), Some(1), "{what}: doctor fails");
+    }
 }

@@ -498,8 +498,10 @@ fn doctor(json: bool, cfg: &Resolved, b: &mut dyn Backend, a: &cli::DoctorArgs) 
             None
         }
     };
-    // One bounded COUNT, so --quick runs it too: an old-vocabulary ledger
-    // reads as empty, which every other check would report as healthy.
+    // The exact COUNT (slower than the existence check every other command
+    // runs), so the report says how much there is. --quick runs it too: an
+    // old-vocabulary ledger reads as empty, which every other check would
+    // report as healthy.
     match b.legacy_items() {
         Ok(0) => add(
             "store.vocabulary",
@@ -509,7 +511,7 @@ fn doctor(json: bool, cfg: &Resolved, b: &mut dyn Backend, a: &cli::DoctorArgs) 
         Ok(n) => add(
             "store.vocabulary",
             "error",
-            old_vocabulary(&ledger_label(cfg), n).message,
+            old_vocabulary(&ledger_label(cfg), &format!("{n} item(s)")).message,
         ),
         Err(e) => add("store.vocabulary", "error", e.message.clone()),
     }
@@ -2019,23 +2021,84 @@ fn ledger_label(cfg: &Resolved) -> String {
 
 /// The refusal for a ledger holding seeds' old vocabulary (`aegis:WorkItem`,
 /// `seeds:revision`), which this build does not read: without it the ledger
-/// would read as empty, or a write would split it in two.
-fn old_vocabulary(label: &str, n: u64) -> SdError {
+/// would read as empty, or a write would split it in two. `found` says what
+/// was found: an exact count (doctor) or only that it is there.
+fn old_vocabulary(label: &str, found: &str) -> SdError {
     SdError::refused(format!(
-        "{label} holds {n} item(s) written in seeds' OLD vocabulary (aegis:WorkItem / \
-         seeds:revision), which sd {} does not read; nothing was read or written. Migrate \
+        "{label} holds {found} in seeds' OLD vocabulary (aegis:WorkItem / seeds:revision), \
+         which sd {} does not read; nothing was read or written. `sd doctor` counts it. Migrate \
          it: with the old sd (0.0.x), `sd cutover export --file board.jsonl --store <old \
          store> --graph <graph>`; then with this sd, `sd cutover import --file board.jsonl \
-         --store <a NEW store> --graph <graph>`",
+         --store <a NEW store> --graph <graph>`. That export drops any seed already in the \
+         new vocabulary in a mixed store; only a pre-0.1.0 sd writing beside 0.1.0 could \
+         have made one",
         env!("CARGO_PKG_VERSION")
     ))
 }
 
-/// Refuse a ledger that holds old-vocabulary items (one bounded COUNT).
+/// Refuse a ledger that holds old-vocabulary data (one bounded ASK per
+/// graph). A check that cannot complete refuses too, keeping the error's
+/// kind: it is never read as a clean ledger.
 fn refuse_old_vocabulary(label: &str, b: &dyn Backend) -> Result<()> {
-    match b.legacy_items()? {
-        0 => Ok(()),
-        n => Err(old_vocabulary(label, n)),
+    vocabulary_check(label, &mut || b.legacy_present(), &mut std::thread::sleep)
+}
+
+/// How long the vocabulary check waits before its one retry after a timeout.
+const VOCABULARY_RETRY_BACKOFF: std::time::Duration = std::time::Duration::from_secs(2);
+
+/// Whether a failed vocabulary check timed out (quipu's HTTP 408, its own
+/// query timeout, or the client's), rather than answering badly.
+fn check_timed_out(e: &SdError) -> bool {
+    let m = e.message.to_ascii_lowercase();
+    m.contains("http 408") || m.contains("query timeout") || m.contains("timed out")
+}
+
+/// The old-vocabulary gate around `check` (true: old data present). A
+/// timeout is retried ONCE after [`VOCABULARY_RETRY_BACKOFF`]: the first
+/// query on a large graph right after a quipu restart can run past the
+/// server's query budget while its caches warm. Everything else, and a second
+/// timeout, refuses, and each refusal says which of the three it is: old
+/// data present, the check timed out, or the check could not be completed
+/// (an unreadable answer, or the server could not be asked).
+fn vocabulary_check(
+    label: &str,
+    check: &mut dyn FnMut() -> Result<bool>,
+    sleep: &mut dyn FnMut(std::time::Duration),
+) -> Result<()> {
+    let mut result = check();
+    if matches!(&result, Err(e) if check_timed_out(e)) {
+        sleep(VOCABULARY_RETRY_BACKOFF);
+        result = check();
+    }
+    match result {
+        Ok(false) => Ok(()),
+        Ok(true) => Err(old_vocabulary(label, "old-vocabulary data")),
+        Err(e) if check_timed_out(&e) => Err(SdError::new(
+            e.kind,
+            format!(
+                "{label}: the old-vocabulary check timed out twice, {}s apart: the store may \
+                 be warming up after a restart. Nothing was read or written; retry the \
+                 command. ({})",
+                VOCABULARY_RETRY_BACKOFF.as_secs(),
+                e.message
+            ),
+        )),
+        Err(e) if e.message.contains("could not be completed") => Err(SdError::new(
+            e.kind,
+            format!(
+                "{label}: the old-vocabulary check returned an unreadable answer, so the \
+                 ledger cannot be shown to be readable; nothing was read or written: {}",
+                e.message
+            ),
+        )),
+        Err(e) => Err(SdError::new(
+            e.kind,
+            format!(
+                "{label}: the old-vocabulary check could not be completed, so the ledger \
+                 cannot be shown to be readable; nothing was read or written: {}",
+                e.message
+            ),
+        )),
     }
 }
 
@@ -3370,5 +3433,85 @@ mod doctor_tests {
         for bad in ["", "latest", "1.2", "1.2.3.4", "1.2.3-rc1", "seeds-ai-vX"] {
             assert_eq!(release_version(bad), None, "{bad}");
         }
+    }
+}
+
+#[cfg(test)]
+mod vocabulary_check_tests {
+    use super::*;
+
+    const LABEL: &str = "the quipu server http://127.0.0.1:1 (graph urn:g)";
+
+    fn timeout() -> SdError {
+        SdError::failed("quipu /query failed (HTTP 408): query timeout: exceeded 10000ms")
+    }
+
+    /// Run the check over scripted answers; returns the result, the calls
+    /// made and the sleeps taken.
+    fn run(mut answers: Vec<Result<bool>>) -> (Result<()>, usize, Vec<std::time::Duration>) {
+        answers.reverse();
+        let mut calls = 0;
+        let mut slept = Vec::new();
+        let r = vocabulary_check(
+            LABEL,
+            &mut || {
+                calls += 1;
+                answers.pop().expect("no more scripted answers")
+            },
+            &mut |d| slept.push(d),
+        );
+        (r, calls, slept)
+    }
+
+    #[test]
+    fn a_timeout_then_an_answer_proceeds_after_one_backoff() {
+        let (r, calls, slept) = run(vec![Err(timeout()), Ok(false)]);
+        assert!(r.is_ok(), "{r:?}");
+        assert_eq!((calls, slept), (2, vec![VOCABULARY_RETRY_BACKOFF]));
+        // And the retry's answer is still honoured when it finds old data.
+        let (r, ..) = run(vec![Err(timeout()), Ok(true)]);
+        assert!(r.unwrap_err().message.contains("holds old-vocabulary data"));
+    }
+
+    #[test]
+    fn two_timeouts_refuse_with_the_warming_up_message() {
+        let (r, calls, slept) = run(vec![Err(timeout()), Err(timeout())]);
+        let e = r.unwrap_err();
+        assert_eq!((calls, slept.len()), (2, 1), "one retry, not more");
+        assert!(
+            e.message.contains("timed out twice") && e.message.contains("warming up"),
+            "{}",
+            e.message
+        );
+        assert!(
+            e.message.starts_with(LABEL),
+            "names the store: {}",
+            e.message
+        );
+    }
+
+    #[test]
+    fn the_three_refusals_are_told_apart_and_only_a_timeout_is_retried() {
+        let (r, calls, slept) = run(vec![Ok(true)]);
+        assert!(r.unwrap_err().message.contains("holds old-vocabulary data"));
+        assert_eq!((calls, slept.len()), (1, 0));
+        let unreadable = SdError::failed(
+            "the old-vocabulary check on graph urn:g could not be completed: no boolean",
+        );
+        let (r, calls, slept) = run(vec![Err(unreadable)]);
+        let m = r.unwrap_err().message;
+        assert!(m.contains("returned an unreadable answer"), "{m}");
+        assert!(!m.contains("warming up"), "{m}");
+        assert_eq!((calls, slept.len()), (1, 0), "not retried");
+        let (r, calls, _) = run(vec![Err(SdError::failed("connection refused"))]);
+        let m = r.unwrap_err().message;
+        assert!(
+            m.contains("could not be completed") && !m.contains("unreadable"),
+            "{m}"
+        );
+        assert_eq!(calls, 1);
+        let (r, calls, _) = run(vec![Ok(false)]);
+        assert!(r.is_ok());
+        assert_eq!(calls, 1);
     }
 }

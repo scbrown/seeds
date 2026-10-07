@@ -518,6 +518,22 @@ pub fn secure_enough(url: &str) -> bool {
 /// The named graph a project's write provenance goes to (never exported).
 pub use crate::vocab::provenance_graph;
 
+/// The answer to the old-vocabulary ASK on `graph`, from the server's
+/// response body. Fails closed: anything but a JSON boolean is an error,
+/// never a "no".
+fn ask_answer(graph: &str, body: &str) -> Result<bool> {
+    serde_json::from_str::<Json>(body)
+        .ok()
+        .and_then(|v| v.get("boolean").and_then(Json::as_bool))
+        .ok_or_else(|| {
+            SdError::failed(format!(
+                "the old-vocabulary check on graph {graph} could not be completed: the ASK \
+                 answer has no boolean: {}",
+                body.chars().take(200).collect::<String>()
+            ))
+        })
+}
+
 fn term(t: &Json) -> Option<Obj> {
     let value = t["value"].as_str()?.to_string();
     match t["type"].as_str()? {
@@ -573,6 +589,20 @@ impl Backend for RemoteBackend {
         Some(self.max_write_bytes)
     }
 
+    fn legacy_present(&self) -> Result<bool> {
+        for graph in [
+            self.graph.clone(),
+            crate::vocab::ephemeral_graph(&self.graph),
+        ] {
+            let body = json!({ "query": vocab::legacy_presence_query(&graph) });
+            let text = self.post("/query", "application/json", &body.to_string(), false)?;
+            if ask_answer(&graph, &text)? {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
     fn legacy_items(&self) -> Result<u64> {
         let mut n = 0;
         for graph in [
@@ -580,13 +610,8 @@ impl Backend for RemoteBackend {
             crate::vocab::ephemeral_graph(&self.graph),
         ] {
             let rows = self.select(&vocab::legacy_count_query(&graph), None)?;
-            n += match rows.first().and_then(|r| r.get("n")) {
-                Some(Obj::Int(n)) => u64::try_from(*n).unwrap_or(0),
-                Some(Obj::Str(s) | Obj::Typed { lexical: s, .. }) => s.parse().map_err(|_| {
-                    SdError::failed("quipu returned a non-numeric old-vocabulary count")
-                })?,
-                _ => 0,
-            };
+            let counts: Vec<Option<&Obj>> = rows.iter().map(|r| r.get("n")).collect();
+            n += crate::backend::legacy_count(&graph, &counts)?;
         }
         Ok(n)
     }
@@ -969,6 +994,28 @@ impl RemoteBackend {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // seeds#96 follow-up: the old-vocabulary ASK fails closed.
+    #[test]
+    fn the_old_vocabulary_ask_fails_closed() {
+        assert!(ask_answer("urn:g", r#"{"head":{},"boolean":true}"#).unwrap());
+        assert!(!ask_answer("urn:g", r#"{"head":{},"boolean":false}"#).unwrap());
+        for bad in [
+            "",
+            "not json",
+            "{}",
+            r#"{"head":{},"boolean":"false"}"#,
+            r#"{"head":{},"boolean":null}"#,
+            r#"{"head":{"vars":["n"]},"results":{"bindings":[]}}"#,
+        ] {
+            let e = ask_answer("urn:g", bad).expect_err(bad);
+            assert!(
+                e.message.contains("could not be completed"),
+                "{bad}: {}",
+                e.message
+            );
+        }
+    }
 
     #[test]
     fn a_token_is_never_sent_over_plain_http_to_another_host() {
