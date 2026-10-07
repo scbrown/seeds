@@ -13,7 +13,8 @@
 //! * a seed comes after the seeds it is blocked on, and seeds that block each
 //!   other (a cycle) travel together, because the shapes refuse an edge to a
 //!   seed that is not there yet;
-//! * a comment travels with its seed;
+//! * a comment travels with its seed, except the comments past the clause
+//!   limit, which follow it in later batches;
 //! * removals, and comments renumbered by sync, go last, in one batch.
 //!
 //! A batch is also bounded by its guard clauses: each new seed adds two
@@ -164,7 +165,8 @@ fn components(batch: &WriteBatch) -> Vec<Vec<usize>> {
     out
 }
 
-fn units(batch: &WriteBatch) -> Vec<Unit> {
+/// `clauses` bounds a unit only where it can be cut: the comments of a seed.
+fn units(batch: &WriteBatch, clauses: usize) -> Vec<Unit> {
     let renumbered: BTreeSet<(&str, u64)> = batch
         .delete_comments
         .iter()
@@ -194,24 +196,31 @@ fn units(batch: &WriteBatch) -> Vec<Unit> {
             });
         }
     }
-    let mut out: Vec<Unit> = components(batch)
-        .into_iter()
-        .map(|comp| {
-            let mut u = Unit::default();
-            for i in comp {
-                let w = &batch.seeds[i];
-                u.bytes += seed_bytes(w);
-                u.clauses += seed_clauses(w);
-                u.batch.seeds.push(w.clone());
-                for c in comments_of.get(w.seed.id.as_str()).into_iter().flatten() {
-                    u.bytes += comment_bytes(c);
-                    u.clauses += 1;
-                    u.batch.comments.push((*c).clone());
+    let mut out: Vec<Unit> = Vec::new();
+    for comp in components(batch) {
+        let mut u = Unit::default();
+        // Comments past the clause limit continue in units of their own,
+        // right behind the seed: a seed can carry more comments than one
+        // write may guard (aegis-h7xuql has 558).
+        let mut overflow: Vec<Unit> = Vec::new();
+        for i in comp {
+            let w = &batch.seeds[i];
+            u.bytes += seed_bytes(w);
+            u.clauses += seed_clauses(w);
+            u.batch.seeds.push(w.clone());
+            for c in comments_of.get(w.seed.id.as_str()).into_iter().flatten() {
+                if overflow.last().map_or(u.clauses, |t| t.clauses) >= clauses {
+                    overflow.push(Unit::default());
                 }
+                let tail = overflow.last_mut().unwrap_or(&mut u);
+                tail.bytes += comment_bytes(c);
+                tail.clauses += 1;
+                tail.batch.comments.push((*c).clone());
             }
-            u
-        })
-        .collect();
+        }
+        out.push(u);
+        out.extend(overflow);
+    }
     out.extend(loose);
     last.batch.delete_seeds = batch.delete_seeds.clone();
     last.batch.delete_comments = batch.delete_comments.clone();
@@ -238,7 +247,7 @@ pub fn split_for_cap(batch: &WriteBatch, cap: usize, clauses: usize) -> Vec<Writ
     let mut out: Vec<WriteBatch> = Vec::new();
     let mut cur = WriteBatch::default();
     let (mut used, mut nested) = (0usize, 0usize);
-    for u in units(batch) {
+    for u in units(batch, clauses) {
         if !cur.is_empty() && (used + u.bytes > budget || nested + u.clauses > clauses) {
             out.push(std::mem::take(&mut cur));
             used = 0;
@@ -263,7 +272,7 @@ pub fn split_for_cap(batch: &WriteBatch, cap: usize, clauses: usize) -> Vec<Writ
 /// Halve `batch` along its unit boundaries, keeping their order. `None`
 /// when it is one unit and cannot be split.
 fn halve(batch: &WriteBatch) -> Option<(WriteBatch, WriteBatch)> {
-    let us = units(batch);
+    let us = units(batch, usize::MAX);
     if us.len() < 2 {
         return None;
     }
