@@ -217,6 +217,22 @@ fn seed(v: &Value) -> Result<Seed> {
     if s.status == "closed" && s.outcome.is_none() {
         s.outcome = Some("done".into());
     }
+    // Times are projected in their XSD canonical form, the form every store
+    // holds them in (see [`crate::model::canonical_time`]). The value never
+    // changes; the original spelling stays in the carried JSON, and export
+    // overlays a field only when its VALUE changed, so br's bytes come back.
+    for (t, date_ok) in [(&mut s.created_at, false), (&mut s.updated_at, false)] {
+        *t = crate::model::canonical_or_same(t, date_ok);
+    }
+    for (t, date_ok) in [
+        (&mut s.closed_at, false),
+        (&mut s.due_at, true),
+        (&mut s.defer_until, true),
+    ] {
+        if let Some(t) = t {
+            *t = crate::model::canonical_or_same(t, date_ok);
+        }
+    }
     s.estimated_minutes = match v.get("estimated_minutes") {
         None | Some(Value::Null) => None,
         Some(x) => Some(
@@ -275,7 +291,42 @@ fn extra_facts(v: &Value) -> Result<BTreeSet<(String, Obj)>> {
     Ok(facts)
 }
 
-/// Project every record to WorkItem facts, carrying the complete input too.
+/// How many time values in `records` are not already in their canonical
+/// form, and so are stored with a different spelling of the same instant
+/// (`(values, records)`). Cutover reports it, so the respelling is never
+/// silent.
+pub fn canonicalized_times(records: &Records) -> (usize, usize) {
+    let (mut values, mut recs) = (0, 0);
+    for v in records.values() {
+        let mut n = 0;
+        for (k, date_ok) in [
+            ("created_at", false),
+            ("updated_at", false),
+            ("closed_at", false),
+            ("due_at", true),
+            ("defer_until", true),
+        ] {
+            if let Some(t) = v.get(k).and_then(Value::as_str) {
+                n += usize::from(crate::model::canonical_or_same(t, date_ok) != t);
+            }
+        }
+        for c in v
+            .get("comments")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+        {
+            if let Some(t) = c.get("created_at").and_then(Value::as_str) {
+                n += usize::from(crate::model::canonical_or_same(t, false) != t);
+            }
+        }
+        values += n;
+        recs += usize::from(n > 0);
+    }
+    (values, recs)
+}
+
+/// Project every record to seed facts, carrying the complete input too.
 pub fn decode(records: &Records) -> Result<Snapshot> {
     let mut snap = Snapshot::default();
     for (id, v) in records {
@@ -292,7 +343,7 @@ pub fn decode(records: &Records) -> Result<Snapshot> {
                 index,
                 author: required(c, "author")?.into(),
                 text: required(c, "text")?.into(),
-                created_at: required(c, "created_at")?.into(),
+                created_at: crate::model::canonical_or_same(required(c, "created_at")?, false),
                 extra: match c.get("_seeds").filter(|e| e["format"] == "seeds-facts-v1") {
                     Some(e) => extra_facts(&e["facts"])?,
                     None => BTreeSet::new(),
@@ -476,7 +527,13 @@ pub fn encode(snap: &Snapshot) -> Result<Records> {
             }
             val["author"] = json!(c.author);
             val["text"] = json!(c.text);
-            val["created_at"] = json!(c.created_at);
+            // The original spelling of an unchanged instant is kept.
+            let same_instant = val["created_at"]
+                .as_str()
+                .is_some_and(|t| crate::model::canonical_or_same(t, false) == c.created_at);
+            if !same_instant {
+                val["created_at"] = json!(c.created_at);
+            }
             cs.push(val);
             indexes.push(c.index);
         }

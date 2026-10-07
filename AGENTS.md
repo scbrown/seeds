@@ -49,8 +49,9 @@ structure), scbrown/bobbin (retrieval).
 - **Formulas are shuttle's.** Do not build a workflow engine here; a seed links
   to its shuttle run (`seeds:workflowRun`). See `docs/book/src/formulas.md`.
 - **Definitions belong in camayoc.** "ready" is a SPARQL query
-  (`vocab::ready_query`) written to move into camayoc as a stored query; the
-  WorkItem vocabulary and shape are camayoc's.
+  (`vocab::ready_query`) written to move into camayoc as a stored query; a
+  seed is a `schema:Action` and its governance terms and constraints are
+  camayoc's (the mapping: aegis-bqgdr3, see `docs/book/src/storage.md`).
 - **Public-safe.** No internal hostnames, private IP addresses, home paths or
   personal names in code, docs, tests or commit messages. Endpoints are
   configuration (`--quipu`, `SEEDS_QUIPU_URL`), never literals.

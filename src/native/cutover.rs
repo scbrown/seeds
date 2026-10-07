@@ -55,7 +55,15 @@ fn outcome(v: Value, code: i32) -> Outcome {
 }
 fn snapshot(path: &Path, graph: &str) -> Result<Snapshot> {
     match store::open_for_read(path, graph)? {
-        Some(b) => b.snapshot(None),
+        Some(b) => {
+            // An old-vocabulary store reads as empty; importing into it would
+            // leave two boards in one graph.
+            super::refuse_old_vocabulary(
+                &format!("the store {} (graph {graph})", path.display()),
+                &b,
+            )?;
+            b.snapshot(None)
+        }
         None => Ok(Snapshot::default()),
     }
 }
@@ -227,7 +235,8 @@ pub(super) fn run(cli: &Cli, cfg: &Resolved, ctx: &Ctx, a: &CutoverArgs) -> Resu
         let output = beads::encode(&b.snapshot(None)?)?;
         let differences = beads::diff(&input, &output);
         return Ok(outcome(
-            json!({"records":input.len(),"returned":output.len(),"losses":differences.len(),"differences":differences}),
+            json!({"records":input.len(),"returned":output.len(),"losses":differences.len(),"differences":differences,
+                "canonicalized_times":{"values":beads::canonicalized_times(&input).0,"records":beads::canonicalized_times(&input).1}}),
             if differences.is_empty() { 0 } else { 1 },
         ));
     }
@@ -254,7 +263,13 @@ pub(super) fn run(cli: &Cli, cfg: &Resolved, ctx: &Ctx, a: &CutoverArgs) -> Resu
         Some(store::open_for_write(path, graph)?)
     };
     let current = match &handle {
-        Some(h) => h.backend.snapshot(None)?,
+        Some(h) => {
+            super::refuse_old_vocabulary(
+                &format!("the store {} (graph {graph})", path.display()),
+                &h.backend,
+            )?;
+            h.backend.snapshot(None)?
+        }
         None => snapshot(path, graph)?,
     };
     if current.seeds.values().any(|s| s.ephemeral) {
@@ -407,8 +422,12 @@ pub(super) fn run(cli: &Cli, cfg: &Resolved, ctx: &Ctx, a: &CutoverArgs) -> Resu
         }
         fields
     };
+    // Times stored in their canonical spelling (same instant, different
+    // bytes): reported, never silent. The JSONL keeps the original spelling.
+    let (respelled, respelled_records) = beads::canonicalized_times(&input);
     Ok(outcome(
         json!({"dry_run":a.dry_run,"created":report.created,"updated":report.updated,"removed":report.removed,
+            "canonicalized_times":{"values":respelled,"records":respelled_records},
             "store_difference_count":local_diff.len(),"file_difference_count":peer_diff.len(),
             "store_fields":counts(&local_diff),"file_fields":counts(&peer_diff),
             "store_differences":local_diff.iter().take(100).collect::<Vec<_>>(),"file_differences":peer_diff.iter().take(100).collect::<Vec<_>>(),

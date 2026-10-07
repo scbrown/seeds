@@ -480,6 +480,28 @@ fn errors_carry_their_exit_codes_and_a_json_body() {
     assert_eq!(code(&sb.run(&["frobnicate"])), 2);
 }
 
+// aegis-bqgdr3 / w3k75d.15 C1: `--defer` on update is stored as given, and a
+// value that is not an xsd:date or xsd:dateTime is refused, never coerced.
+#[test]
+fn a_defer_that_is_not_an_xsd_date_or_date_time_is_refused_by_name() {
+    let sb = Sandbox::new("defer-lexical");
+    let id = sb.ok(&["create", "x", "--silent"]).trim().to_string();
+    let o = sb.run(&["update", &id, "--defer", "2026-10-03 14:00:00Z"]);
+    assert_eq!(code(&o), 2, "{}", String::from_utf8_lossy(&o.stderr));
+    let err = String::from_utf8_lossy(&o.stderr);
+    assert!(
+        err.contains("defer_until \"2026-10-03 14:00:00Z\"") && err.contains("nothing was written"),
+        "{err}"
+    );
+    let v = sb.json(&["show", &id]);
+    assert!(v[0]["defer_until"].is_null(), "nothing landed: {v}");
+    // The two forms that are valid land exactly as written.
+    for d in ["2026-10-03", "2026-10-03T14:00:00.5+02:00"] {
+        sb.ok(&["update", &id, "--defer", d]);
+        assert_eq!(sb.json(&["show", &id])[0]["defer_until"], d);
+    }
+}
+
 #[test]
 fn close_without_a_reason_warns_but_closes() {
     let sb = Sandbox::new("close-warn");
@@ -953,7 +975,7 @@ fn info_schema_whats_new_and_thanks() {
             .as_array()
             .unwrap()
             .iter()
-            .any(|c| c.as_str().unwrap().ends_with("/WorkItem")),
+            .any(|c| c == "https://schema.org/Action"),
         "{i}"
     );
     assert_eq!(i["issue_count"], 1, "the plain info fields stay: {i}");

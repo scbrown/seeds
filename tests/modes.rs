@@ -134,7 +134,18 @@ impl Env {
                 if !matches!(child.try_wait(), Ok(None)) {
                     break; // ours exited: the port was taken
                 }
-                if health_ok(port) && matches!(child.try_wait(), Ok(None)) {
+                // Healthy AND ours: another process may already hold the
+                // port, in which case /health answers for IT while our child
+                // is still starting (and about to exit on the bind error).
+                if health_ok(port)
+                    && matches!(child.try_wait(), Ok(None))
+                    && match listener_owned_by(child.id(), port) {
+                        Some(ours) => ours,
+                        // Linux always has /proc: an unreadable one is a
+                        // failed check, not a pass.
+                        None => !cfg!(target_os = "linux"),
+                    }
+                {
                     up = true;
                     break;
                 }
@@ -156,6 +167,43 @@ fn http_get(port: u16, path: &str) -> String {
     use std::io::{Read, Write};
     let mut c = std::net::TcpStream::connect(("127.0.0.1", port)).unwrap();
     write!(c, "GET {path} HTTP/1.0\r\nHost: localhost\r\n\r\n").unwrap();
+    let mut out = String::new();
+    c.read_to_string(&mut out).unwrap();
+    out.split_once("\r\n\r\n")
+        .map(|(_, b)| b.to_string())
+        .unwrap_or_default()
+}
+
+/// Whether the TCP listener on loopback `port` belongs to process `pid`, from
+/// `/proc` (Linux). `None` where `/proc` cannot say, so other platforms keep
+/// the health-and-alive check alone.
+fn listener_owned_by(pid: u32, port: u16) -> Option<bool> {
+    let tcp = std::fs::read_to_string("/proc/net/tcp").ok()?;
+    let want = format!(":{port:04X}");
+    let inode = tcp.lines().skip(1).find_map(|l| {
+        let f: Vec<&str> = l.split_whitespace().collect();
+        (f.len() > 9 && f[1].ends_with(&want) && f[3] == "0A").then(|| f[9].to_string())
+    })?;
+    let socket = format!("socket:[{inode}]");
+    let fds = std::fs::read_dir(format!("/proc/{pid}/fd")).ok()?;
+    Some(
+        fds.flatten()
+            .any(|fd| std::fs::read_link(fd.path()).is_ok_and(|t| t.to_string_lossy() == socket)),
+    )
+}
+
+/// `POST <path>` on the port with `body`; the response body (test helper, no
+/// TLS, no auth).
+fn http_post(port: u16, path: &str, content_type: &str, body: &str) -> String {
+    use std::io::{Read, Write};
+    let mut c = std::net::TcpStream::connect(("127.0.0.1", port)).unwrap();
+    write!(
+        c,
+        "POST {path} HTTP/1.0\r\nHost: localhost\r\nContent-Type: {content_type}\r\n\
+         Content-Length: {}\r\n\r\n{body}",
+        body.len()
+    )
+    .unwrap();
     let mut out = String::new();
     c.read_to_string(&mut out).unwrap();
     out.split_once("\r\n\r\n")
@@ -269,8 +317,10 @@ fn a_repo_local_pendant_is_written_on_every_change_and_a_copy_is_the_board() {
     let new = std::fs::read_to_string(clone.join(".seeds/pendant/export.nt")).unwrap();
     let removed = old.lines().filter(|l| !new.contains(l)).count();
     let added = new.lines().filter(|l| !old.contains(l)).count();
+    // status, dateModified, version and the derived actionStatus change; a
+    // close adds endTime, result and outcome.
     assert!(
-        removed <= 4 && added <= 6,
+        removed <= 5 && added <= 7,
         "small diff: -{removed} +{added}"
     );
 
@@ -414,6 +464,26 @@ fn remote_mode_reads_and_writes_a_quipu_server() {
     env.ok(&work, &["dep", "add", &a, &g], &remote);
     assert_eq!(env.ready(&work, &remote), vec![g.clone()]);
     env.ok(&work, &["comments", "add", &a, "over http"], &remote);
+    // Typed values over /update: the server stores the canonical form of a
+    // duration (PT90M as PT1H30M), which must still read as the estimate,
+    // and a due instant keeps its exact lexical form.
+    env.ok(
+        &work,
+        &[
+            "update",
+            &a,
+            "--estimate",
+            "90",
+            "--due",
+            "2026-09-06T18:47:22.616951891Z",
+        ],
+        &remote,
+    );
+    let shown: Value =
+        serde_json::from_str(&env.ok(&work, &["show", &a, "--json"], &remote)).unwrap();
+    let shown = if shown.is_array() { &shown[0] } else { &shown };
+    assert_eq!(shown["estimated_minutes"], 90, "{shown}");
+    assert_eq!(shown["due_at"], "2026-09-06T18:47:22.616951891Z", "{shown}");
     env.ok(&work, &["close", &g, "--reason", "done"], &remote);
     assert_eq!(env.ready(&work, &remote), vec![a.clone()]);
     // Only the project id (which names the remote graph); no local store.
@@ -1530,4 +1600,480 @@ fn a_413_is_a_definite_refusal_not_an_unknown_outcome() {
     assert_eq!(o.status.code(), Some(5), "{err}");
     assert!(err.contains("413") && !err.contains("UNKNOWN"), "{err}");
     assert_eq!(count_remote(&env, &work, &url), 0);
+}
+
+// ---------------------------------------------------------------- canonical times (wu, aegis-bqgdr3)
+
+/// Percent-encode a form value.
+fn form(v: &str) -> String {
+    let mut out = String::new();
+    for b in v.bytes() {
+        if b.is_ascii_alphanumeric() || matches!(b, b'-' | b'.' | b'_' | b'~') {
+            out.push(b as char);
+        } else {
+            out.push_str(&format!("%{b:02X}"));
+        }
+    }
+    out
+}
+
+/// seeds writes the XSD canonical form of every time and duration, and a
+/// quipu server's /update stores typed literals in canonical form too. This
+/// pins the two together: raw lexicals go to the server, and what it stores
+/// must equal what seeds would have written. The corpus is the edge cases
+/// below plus, when `SEEDS_TEST_TIME_CORPUS` names a file of
+/// `dateTime|date|duration<TAB>lexical` lines, every one of those.
+#[test]
+fn seeds_canonical_times_equal_a_quipu_servers() {
+    let mut env = Env::new("canonical-times");
+    let Some(url) = env.start_server() else {
+        eprintln!("SKIPPED: set SEEDS_TEST_QUIPU_SERVER to a quipu-server binary to run this");
+        return;
+    };
+    let port: u16 = url.rsplit(':').next().unwrap().parse().unwrap();
+    let mut corpus: Vec<(String, String)> = [
+        ("dateTime", "2026-08-30T13:35:59.014436677Z"),
+        ("dateTime", "2026-08-30T13:35:59.014436670Z"),
+        ("dateTime", "2026-08-30T13:35:59.100000000Z"),
+        ("dateTime", "2026-10-03T14:00:00.500Z"),
+        ("dateTime", "2026-10-03T14:00:00.000Z"),
+        ("dateTime", "2026-10-03T14:00:00.0Z"),
+        ("dateTime", "2026-10-03T14:00:00Z"),
+        ("dateTime", "2026-10-03T14:00:00+00:00"),
+        ("dateTime", "2026-10-03T14:00:00-00:00"),
+        ("dateTime", "2026-10-03T14:00:00+02:00"),
+        ("dateTime", "2026-10-03T14:00:00-05:30"),
+        ("dateTime", "2026-10-03T14:00:00+14:00"),
+        ("dateTime", "2026-10-03T14:00:00"),
+        ("dateTime", "2026-10-03T14:00:00.250"),
+        ("dateTime", "2026-10-03T24:00:00Z"),
+        ("dateTime", "2026-12-31T24:00:00Z"),
+        ("dateTime", "2024-02-29T23:59:59.999999999Z"),
+        ("date", "2026-10-03"),
+        ("date", "2024-02-29"),
+        ("duration", "PT0M"),
+        ("duration", "PT1M"),
+        ("duration", "PT30M"),
+        ("duration", "PT59M"),
+        ("duration", "PT60M"),
+        ("duration", "PT90M"),
+        ("duration", "PT1440M"),
+        ("duration", "PT1441M"),
+        ("duration", "PT100000M"),
+    ]
+    .iter()
+    .map(|(t, v)| (t.to_string(), v.to_string()))
+    .collect();
+    let extra = std::env::var("SEEDS_TEST_TIME_CORPUS").ok();
+    if let Some(path) = &extra {
+        for l in std::fs::read_to_string(path).unwrap().lines() {
+            if let Some((t, v)) = l.split_once('\t') {
+                corpus.push((t.to_string(), v.to_string()));
+            }
+        }
+    }
+    let ours = |t: &str, v: &str| -> String {
+        match t {
+            "dateTime" => seeds::model::canonical_time(v, false),
+            "date" => seeds::model::canonical_time(v, true),
+            _ => seeds::model::canonical_duration(v),
+        }
+        .unwrap_or_else(|| panic!("seeds refuses {t} {v:?}"))
+    };
+    let mut checked = 0;
+    let mut differ = Vec::new();
+    for (n, chunk) in corpus.chunks(2000).enumerate() {
+        let g = format!("urn:seeds-test:canonical:{n}");
+        http_post(
+            port,
+            "/graph/create",
+            "application/json",
+            &format!("{{\"graph\":\"{g}\"}}"),
+        );
+        let triples: String = chunk
+            .iter()
+            .enumerate()
+            .map(|(i, (t, v))| {
+                format!("<urn:s:{i}> <urn:p> \"{v}\"^^<http://www.w3.org/2001/XMLSchema#{t}> . ")
+            })
+            .collect();
+        // What /update answers differs by server version (a 204 with no body
+        // before quipu#411, counts after), so the write is proven by reading
+        // the stored literals back, which is what this test is about.
+        http_post(
+            port,
+            "/update",
+            "application/x-www-form-urlencoded",
+            &format!(
+                "update={}",
+                form(&format!("INSERT DATA {{ GRAPH <{g}> {{ {triples}}} }}"))
+            ),
+        );
+        let q =
+            format!("{{\"query\":\"SELECT ?s ?o WHERE {{ GRAPH <{g}> {{ ?s <urn:p> ?o }} }}\"}}");
+        let body: Value = serde_json::from_str(&http_post(port, "/query", "application/json", &q))
+            .expect("query JSON");
+        let rows = body["rows"]
+            .as_array()
+            .or_else(|| body["results"]["bindings"].as_array())
+            .expect("rows");
+        let text = |v: &Value| -> String {
+            v.get("value")
+                .and_then(Value::as_str)
+                .or_else(|| v.as_str())
+                .unwrap()
+                .to_string()
+        };
+        let stored: std::collections::BTreeMap<String, String> = rows
+            .iter()
+            .map(|r| (text(&r["s"]), text(&r["o"])))
+            .collect();
+        assert_eq!(
+            stored.len(),
+            chunk.len(),
+            "read back every literal written to {g}: {body}"
+        );
+        for (i, (t, v)) in chunk.iter().enumerate() {
+            let server = stored.get(&format!("urn:s:{i}")).expect("stored");
+            checked += 1;
+            if *server != ours(t, v) {
+                differ.push(format!(
+                    "{t} {v:?}: server {server:?}, seeds {:?}",
+                    ours(t, v)
+                ));
+            }
+        }
+    }
+    eprintln!("canonical forms checked against the server: {checked}");
+    assert!(
+        differ.is_empty(),
+        "{} differ:\n{}",
+        differ.len(),
+        differ.join("\n")
+    );
+    // Positive control: the corpus does exercise canonicalisation.
+    assert_eq!(ours("duration", "PT90M"), "PT1H30M");
+    assert_eq!(
+        ours("dateTime", "2026-10-03T14:00:00.500Z"),
+        "2026-10-03T14:00:00.5Z"
+    );
+}
+
+/// A time with trailing fractional zeros, written locally and synced through
+/// a real server: local and remote hold the same value in every field, and a
+/// second sync writes nothing on either side.
+#[test]
+fn a_canonical_time_round_trips_through_a_server_with_no_drift() {
+    let mut env = Env::new("canonical-sync");
+    let Some(url) = env.start_server() else {
+        eprintln!("SKIPPED: set SEEDS_TEST_QUIPU_SERVER to a quipu-server binary to run this");
+        return;
+    };
+    let repo = env.pendant_project("repo");
+    let id = env
+        .ok(
+            &repo,
+            &["create", "zeros", "--silent", "--estimate", "90"],
+            &[],
+        )
+        .trim()
+        .to_string();
+    env.ok(
+        &repo,
+        &[
+            "update",
+            &id,
+            "--due",
+            "2026-09-06T18:47:22.616951890Z",
+            "--defer",
+            "2026-10-03T14:00:00.500+00:00",
+        ],
+        &[],
+    );
+    let local: Value = serde_json::from_str(&env.ok(&repo, &["show", &id, "--json"], &[])).unwrap();
+    assert_eq!(
+        local[0]["due_at"], "2026-09-06T18:47:22.61695189Z",
+        "{local}"
+    );
+    assert_eq!(local[0]["defer_until"], "2026-10-03T14:00:00.5Z", "{local}");
+    assert_eq!(local[0]["estimated_minutes"], 90);
+
+    let first: Value =
+        serde_json::from_str(&env.ok(&repo, &["sync", "--remote", &url, "--json"], &[])).unwrap();
+    assert_eq!(first["remote"]["wrote"], true, "{first}");
+    let pid = std::fs::read_to_string(repo.join(".seeds/project-id")).unwrap();
+    let graph = format!("https://seeds.local/project/sd-{}", pid.trim());
+    let remote_env = [
+        ("SEEDS_QUIPU_URL", url.as_str()),
+        ("SEEDS_GRAPH", graph.as_str()),
+    ];
+    let work = env.dir("work");
+    let remote: Value =
+        serde_json::from_str(&env.ok(&work, &["show", &id, "--json"], &remote_env)).unwrap();
+    let local: Value = serde_json::from_str(&env.ok(&repo, &["show", &id, "--json"], &[])).unwrap();
+    for (k, v) in local[0].as_object().unwrap() {
+        assert_eq!(&remote[0][k], v, "{k} differs between local and remote");
+    }
+    let second: Value =
+        serde_json::from_str(&env.ok(&repo, &["sync", "--remote", &url, "--json"], &[])).unwrap();
+    assert_eq!(second["remote"]["wrote"], false, "{second}");
+    assert_eq!(second["local"]["wrote"], false, "{second}");
+    let after: Value = serde_json::from_str(&env.ok(&repo, &["show", &id, "--json"], &[])).unwrap();
+    assert_eq!(after, local, "the local seed did not change");
+}
+
+/// Comments that cross in batches WITHOUT their seed are validated with the
+/// parent read from the TARGET store, so the comment shape's
+/// `schema:parentItem sh:class schema:Action` holds on the switched model
+/// under real SHACL. Both seed-less paths, at 4 guard clauses a request:
+///
+/// 1. a NEW seed with 12 comments: the comments past the limit follow the
+///    seed in later batches (seeds#95);
+/// 2. 12 comments added to a seed the remote already holds.
+#[test]
+fn comments_past_the_clause_limit_cross_in_batches_with_their_parent_from_the_remote() {
+    let mut env = Env::new("batched-comments");
+    let Some(url) = env.start_server() else {
+        eprintln!("SKIPPED: set SEEDS_TEST_QUIPU_SERVER to a quipu-server binary to run this");
+        return;
+    };
+    let repo = env.pendant_project("repo");
+    let sync_env = [
+        ("SEEDS_SYNC_REMOTE", url.as_str()),
+        ("SEEDS_MAX_WRITE_CLAUSES", "4"),
+    ];
+    let synced = |what: &str| {
+        let o = env.sd(&repo, &["sync"], &sync_env);
+        let err = String::from_utf8_lossy(&o.stderr).into_owned();
+        assert_eq!(o.status.code(), Some(0), "{what}: {err}");
+        assert!(
+            err.matches("remote batch").count() >= 3,
+            "{what}: 12 comments at 4 clauses a request cross in batches: {err}"
+        );
+    };
+    let fresh = env
+        .ok(&repo, &["create", "new with comments", "--silent"], &[])
+        .trim()
+        .to_string();
+    for i in 0..12 {
+        env.ok(
+            &repo,
+            &["comments", "add", &fresh, &format!("note {i}")],
+            &[],
+        );
+    }
+    let held = env
+        .ok(&repo, &["create", "comments later", "--silent"], &[])
+        .trim()
+        .to_string();
+    synced("a new seed past the limit");
+    for i in 0..12 {
+        env.ok(
+            &repo,
+            &["comments", "add", &held, &format!("note {i}")],
+            &[],
+        );
+    }
+    synced("comments on a seed the remote holds");
+
+    let pid = std::fs::read_to_string(repo.join(".seeds/project-id")).unwrap();
+    let graph = format!("https://seeds.local/project/sd-{}", pid.trim());
+    let remote = [
+        ("SEEDS_QUIPU_URL", url.as_str()),
+        ("SEEDS_GRAPH", graph.as_str()),
+    ];
+    let work = env.dir("work");
+    let texts = |seed: &str, cwd: &Path, e: &[(&str, &str)]| -> Vec<String> {
+        let v: Value = serde_json::from_str(&env.ok(cwd, &["show", seed, "--json"], e)).unwrap();
+        v[0]["comments"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|c| c["text"].as_str().unwrap().to_string())
+            .collect()
+    };
+    let want: Vec<String> = (0..12).map(|i| format!("note {i}")).collect();
+    let port: u16 = url.rsplit(':').next().unwrap().parse().unwrap();
+    for seed in [&fresh, &held] {
+        assert_eq!(texts(seed, &repo, &[]), want);
+        assert_eq!(
+            texts(seed, &work, &remote),
+            want,
+            "every comment on the remote"
+        );
+        // On the switched model: the remote holds them as schema:Comment.
+        let q = format!(
+            "{{\"query\":\"SELECT ?c WHERE {{ GRAPH <{graph}> {{ ?c a <https://schema.org/Comment> ; \
+             <https://schema.org/parentItem> <{}> }} }}\"}}",
+            seeds::vocab::item_iri(seed)
+        );
+        let body = http_post(port, "/query", "application/json", &q);
+        assert_eq!(body.matches("/comment/").count(), 12, "{seed}: {body}");
+    }
+    // Nothing left to push.
+    let o = env.sd(&repo, &["sync", "--json"], &sync_env);
+    let v: Value = serde_json::from_slice(&o.stdout).unwrap();
+    assert_eq!(v["remote"]["wrote"], false, "{v}");
+}
+
+// ---------------------------------------------------------------- old vocabulary (sattler, seeds#96)
+
+/// Plant one seed in seeds' OLD vocabulary (as sd 0.0.x wrote it) in a local
+/// store's graph.
+fn plant_old_seed(db: &Path, graph: &str, id: &str) {
+    use quipu::store::{Datum, Store};
+    use quipu::types::{Op, Value as Q};
+    let mut st = Store::open(db.to_str().unwrap()).unwrap();
+    let g = st.graph_create(graph).unwrap();
+    let e = st.intern(&seeds::vocab::item_iri(id)).unwrap();
+    let ty = st
+        .intern("http://www.w3.org/1999/02/22-rdf-syntax-ns#type")
+        .unwrap();
+    let work_item = st.intern(seeds::vocab::LEGACY_WORK_ITEM).unwrap();
+    let rev = st.intern(seeds::vocab::LEGACY_REVISION).unwrap();
+    let ident = st
+        .intern("http://aegis.gastown.local/ontology/identifier")
+        .unwrap();
+    let datums: Vec<Datum> = [
+        (ty, Q::Ref(work_item)),
+        (rev, Q::Int(1)),
+        (ident, Q::Str(id.into())),
+    ]
+    .into_iter()
+    .map(|(attribute, value)| Datum {
+        entity: e,
+        attribute,
+        value,
+        valid_from: "2026-10-01T00:00:00Z".into(),
+        valid_to: None,
+        op: Op::Assert,
+    })
+    .collect();
+    st.transact_to_graph(
+        &datums,
+        "2026-10-01T00:00:00Z",
+        Some("old-sd"),
+        Some("test"),
+        g,
+    )
+    .unwrap();
+}
+
+/// The refusal an old-vocabulary ledger gets: nonzero, the count, the recipe.
+fn assert_old_vocabulary_refused(o: &Output, n: u64, what: &str) {
+    let err = String::from_utf8_lossy(&o.stderr);
+    assert_eq!(o.status.code(), Some(5), "{what}: {err}");
+    assert!(
+        err.contains(&format!(
+            "holds {n} item(s) written in seeds' OLD vocabulary"
+        )) && err.contains("sd cutover export")
+            && err.contains("sd cutover import"),
+        "{what}: {err}"
+    );
+}
+
+/// A local store in the old vocabulary, and a mixed one, are refused by every
+/// read and reported by doctor as a failure; a new-vocabulary store passes.
+#[test]
+fn an_old_vocabulary_store_is_refused_not_read_as_empty() {
+    let env = Env::new("old-vocab");
+    let graph = "https://seeds.local/project/old-vocab";
+    let local = [("SEEDS_GRAPH", graph)];
+
+    // Control: a new-vocabulary store reads and doctors clean.
+    let fresh = env.dir("fresh");
+    let id = env
+        .ok(&fresh, &["create", "new terms", "--silent"], &local)
+        .trim()
+        .to_string();
+    assert!(env.ok(&fresh, &["list"], &local).contains(&id));
+    let d: Value = serde_json::from_str(&env.ok(&fresh, &["doctor", "--json"], &local)).unwrap();
+    let vocab = d["checks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|c| c["name"] == "store.vocabulary")
+        .cloned()
+        .unwrap_or_else(|| panic!("doctor has a vocabulary check: {d}"));
+    assert_eq!(vocab["status"], "ok", "{d}");
+
+    // Old only, then mixed (old planted beside a new seed).
+    let old = env.dir("old");
+    env.ok(&old, &["init"], &local);
+    plant_old_seed(&old.join(".seeds/seeds.db"), graph, "sd-old");
+    plant_old_seed(&fresh.join(".seeds/seeds.db"), graph, "sd-old2");
+    for (dir, what) in [(&old, "old store"), (&fresh, "mixed store")] {
+        for args in [
+            &["list"][..],
+            &["show", "sd-old"],
+            &["ready"],
+            &["create", "would split the board"],
+        ] {
+            let o = env.sd(dir, args, &local);
+            assert_old_vocabulary_refused(&o, 1, &format!("{what}: sd {args:?}"));
+        }
+        let o = env.sd(dir, &["doctor", "--json"], &local);
+        assert_eq!(o.status.code(), Some(1), "{what}: doctor fails");
+        let d: Value = serde_json::from_slice(&o.stdout).unwrap();
+        let vocab = d["checks"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|c| c["name"] == "store.vocabulary")
+            .cloned()
+            .unwrap();
+        assert_eq!(vocab["status"], "error", "{what}: {d}");
+        assert!(vocab["message"]
+            .as_str()
+            .unwrap()
+            .contains("OLD vocabulary"));
+    }
+}
+
+/// The same on a remote graph: a quipu server holding old-vocabulary seeds is
+/// refused, not read as an empty board.
+#[test]
+fn an_old_vocabulary_remote_graph_is_refused() {
+    let mut env = Env::new("old-vocab-remote");
+    let Some(url) = env.start_server() else {
+        eprintln!("SKIPPED: set SEEDS_TEST_QUIPU_SERVER to a quipu-server binary to run this");
+        return;
+    };
+    let port: u16 = url.rsplit(':').next().unwrap().parse().unwrap();
+    let graph = "https://seeds.local/project/old-vocab-remote";
+    let remote = [("SEEDS_QUIPU_URL", url.as_str()), ("SEEDS_GRAPH", graph)];
+    let work = env.dir("work");
+    // Control: the graph reads clean before the old seeds arrive.
+    let id = env
+        .ok(&work, &["create", "new terms", "--silent"], &remote)
+        .trim()
+        .to_string();
+    assert!(env.ok(&work, &["list"], &remote).contains(&id));
+    let old = |id: &str| {
+        format!(
+            "<{}> a <{}> ; <{}> 1 . ",
+            seeds::vocab::item_iri(id),
+            seeds::vocab::LEGACY_WORK_ITEM,
+            seeds::vocab::LEGACY_REVISION
+        )
+    };
+    http_post(
+        port,
+        "/update",
+        "application/x-www-form-urlencoded",
+        &format!(
+            "update={}",
+            form(&format!(
+                "INSERT DATA {{ GRAPH <{graph}> {{ {}{}}} }}",
+                old("sd-a"),
+                old("sd-b")
+            ))
+        ),
+    );
+    for args in [&["list"][..], &["ready"], &["show", &id]] {
+        let o = env.sd(&work, args, &remote);
+        assert_old_vocabulary_refused(&o, 2, &format!("remote: sd {args:?}"));
+    }
+    let o = env.sd(&work, &["doctor"], &remote);
+    assert_eq!(o.status.code(), Some(1), "doctor fails on the remote graph");
 }

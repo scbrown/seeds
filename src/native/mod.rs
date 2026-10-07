@@ -498,6 +498,25 @@ fn doctor(json: bool, cfg: &Resolved, b: &mut dyn Backend, a: &cli::DoctorArgs) 
             None
         }
     };
+    // One bounded COUNT, so --quick runs it too: an old-vocabulary ledger
+    // reads as empty, which every other check would report as healthy.
+    match b.legacy_items() {
+        Ok(0) => add(
+            "store.vocabulary",
+            "ok",
+            "no items in seeds' old vocabulary".into(),
+        ),
+        Ok(n) => add(
+            "store.vocabulary",
+            "error",
+            old_vocabulary(&ledger_label(cfg), n).message,
+        ),
+        Err(e) => add("store.vocabulary", "error", e.message.clone()),
+    }
+    hints.insert(
+        "store.vocabulary",
+        "sd cutover export (old sd), then sd cutover import (this sd) into a new store".into(),
+    );
     if let Some(snap) = &snap {
         // The same validation `sd import` applies to a pendant: shapes,
         // single-valued fields, dangling blocks edges. The one expensive
@@ -755,7 +774,16 @@ fn schema_info() -> serde_json::Value {
     serde_json::json!({
         "shapes_sha256": format!("{digest:x}"),
         "target_classes": targets,
-        "vocabularies": {"seeds": crate::vocab::SEEDS, "aegis": crate::vocab::AEGIS},
+        "vocabularies": {
+            "seeds": crate::vocab::SEEDS,
+            "schema": crate::vocab::SCHEMA,
+            "quechua": crate::vocab::QUECHUA,
+            "ical": crate::vocab::ICAL,
+            "dcterms": crate::vocab::DCTERMS,
+            "prov": crate::vocab::PROV,
+            // Still on the provenance side graph's attribution claims.
+            "aegis": crate::vocab::AEGIS,
+        },
         "json_schemas": "sd schema",
     })
 }
@@ -1333,6 +1361,9 @@ fn run_remote(cli: &Cli, cfg: &Resolved, ctx: &Ctx, url: &str) -> Result<Outcome
     )?
     .with_max_write_bytes(cfg.max_write_bytes)
     .with_max_write_clauses(cfg.max_write_clauses);
+    if matches!(&cli.command, Command::Export(_) | Command::Import(_)) {
+        refuse_old_vocabulary(&ledger_label(cfg), &remote)?;
+    }
     match &cli.command {
         Command::Export(a) => {
             let dir = export_dir(a.to.as_deref(), cfg)?;
@@ -1386,7 +1417,7 @@ fn export_outcome(
         .export_nt()
         .map(|t| {
             t.lines()
-                .filter(|l| l.contains("/ontology/identifier>"))
+                .filter(|l| l.contains(&format!("<{}>", crate::vocab::term::identifier())))
                 .count()
         })
         .unwrap_or(0);
@@ -1478,6 +1509,7 @@ fn run_local(cli: &Cli, cfg: &Resolved, ctx: &Ctx, path: &std::path::Path) -> Re
         Command::Export(a) => {
             let dir = export_dir(a.to.as_deref(), cfg)?;
             let h = store::open_for_write(path, cfg.graph())?;
+            refuse_old_vocabulary(&ledger_label(cfg), &h.backend)?;
             let is_configured = cfg.pendant.as_deref() == Some(dir.as_path());
             let p = pendant::export(&h.backend)?;
             let changed = if is_configured {
@@ -1489,6 +1521,7 @@ fn run_local(cli: &Cli, cfg: &Resolved, ctx: &Ctx, path: &std::path::Path) -> Re
         }
         Command::Import(a) => {
             let mut h = store::open_for_write(path, cfg.graph())?;
+            refuse_old_vocabulary(&ledger_label(cfg), &h.backend)?;
             let o = import_into(cli, ctx, &mut h.backend, a)?;
             if let Some(dir) = &cfg.pendant {
                 store::export_to_pendant(&h.backend, path, dir)?;
@@ -1501,6 +1534,9 @@ fn run_local(cli: &Cli, cfg: &Resolved, ctx: &Ctx, path: &std::path::Path) -> Re
     if let Some(dir) = &cfg.pendant {
         // Mode 1: reconcile with the pendant, run, export.
         let mut h = store::open_for_write(path, cfg.graph())?;
+        if !matches!(&cli.command, Command::Doctor(_)) {
+            refuse_old_vocabulary(&ledger_label(cfg), &h.backend)?;
+        }
         let notes = store::hydrate(&mut h.backend, path, dir, ctx)?;
         let o = dispatch(cli, cfg, ctx, &mut h.backend)?;
         if cli.command.writes() {
@@ -1547,6 +1583,7 @@ fn run_sync(
             )
         })?;
     let mut h = store::open_for_write(path, cfg.graph())?;
+    refuse_old_vocabulary(&ledger_label(cfg), &h.backend)?;
     let mut notes = Vec::new();
     if let Some(dir) = &cfg.pendant {
         notes.extend(store::hydrate(&mut h.backend, path, dir, ctx)?);
@@ -1561,6 +1598,10 @@ fn run_sync(
     )?
     .with_max_write_bytes(cfg.max_write_bytes)
     .with_max_write_clauses(cfg.max_write_clauses);
+    refuse_old_vocabulary(
+        &format!("the quipu server {url} (graph {})", cfg.graph()),
+        &remote,
+    )?;
     let base_path = store::sync_base_path(path, &url, cfg.graph());
     let base_existed = base_path.exists();
     let base = match std::fs::read_to_string(&base_path) {
@@ -1967,8 +2008,43 @@ fn ok(json: bool, value: Json, text: String, warnings: Vec<String>) -> Outcome {
     }
 }
 
+/// Where the ledger lives, for a message: the remote and graph, or the
+/// store file and graph.
+fn ledger_label(cfg: &Resolved) -> String {
+    match &cfg.location {
+        Location::Store(p) => format!("the store {} (graph {})", p.display(), cfg.graph()),
+        Location::Url(u) => format!("the quipu server {u} (graph {})", cfg.graph()),
+    }
+}
+
+/// The refusal for a ledger holding seeds' old vocabulary (`aegis:WorkItem`,
+/// `seeds:revision`), which this build does not read: without it the ledger
+/// would read as empty, or a write would split it in two.
+fn old_vocabulary(label: &str, n: u64) -> SdError {
+    SdError::refused(format!(
+        "{label} holds {n} item(s) written in seeds' OLD vocabulary (aegis:WorkItem / \
+         seeds:revision), which sd {} does not read; nothing was read or written. Migrate \
+         it: with the old sd (0.0.x), `sd cutover export --file board.jsonl --store <old \
+         store> --graph <graph>`; then with this sd, `sd cutover import --file board.jsonl \
+         --store <a NEW store> --graph <graph>`",
+        env!("CARGO_PKG_VERSION")
+    ))
+}
+
+/// Refuse a ledger that holds old-vocabulary items (one bounded COUNT).
+fn refuse_old_vocabulary(label: &str, b: &dyn Backend) -> Result<()> {
+    match b.legacy_items()? {
+        0 => Ok(()),
+        n => Err(old_vocabulary(label, n)),
+    }
+}
+
 fn dispatch(cli: &Cli, cfg: &Resolved, ctx: &Ctx, b: &mut dyn Backend) -> Result<Outcome> {
     let json = cli.json;
+    // Doctor reports an old-vocabulary ledger as a failed check instead.
+    if !matches!(&cli.command, Command::Doctor(_)) {
+        refuse_old_vocabulary(&ledger_label(cfg), b)?;
+    }
     let at = cli.at;
     match &cli.command {
         Command::Create(a) if a.file.is_some() => {

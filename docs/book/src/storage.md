@@ -31,38 +31,84 @@ anything.
 
 ## The vocabulary
 
-seeds reuses [camayoc](https://github.com/scbrown/camayoc)'s WorkItem
-vocabulary wherever camayoc names the thing, and mints a term in its own
-`seeds:` namespace only for what a tracker needs and camayoc does not model.
-camayoc publishes its vocabulary under the RDF namespace
-`http://aegis.gastown.local/ontology/` (written `aegis:` below); that string
-is a namespace name, not a host anyone contacts.
+A seed is a `schema:Action`. The terms follow one order of preference: W3C
+first, then [schema.org](https://schema.org/), then another public
+vocabulary, then [Quechua](https://scbrown.github.io/quechua/) for the
+governance terms camayoc's gate reads, and seeds' own `seeds:` namespace only
+for tracker mechanics no public vocabulary names. The mapping was ruled in
+aegis-bqgdr3 (table v1.1). Item, comment, principal and graph IRIs are seeds'
+own and did not change with it.
+
+| prefix | namespace |
+|---|---|
+| `schema:` | `https://schema.org/` |
+| `quechua:` | `https://scbrown.github.io/quechua/ns#` |
+| `ical:` | `http://www.w3.org/2002/12/cal/ical#` |
+| `dcterms:` | `http://purl.org/dc/terms/` |
+| `prov:` | `http://www.w3.org/ns/prov#` |
+| `seeds:` | `https://seeds.local/ontology/` |
+
+These are vocabulary names, not hosts anyone contacts.
 
 | field | predicate | object |
 |---|---|---|
-| type | `rdf:type` | `aegis:WorkItem` |
-| provenance | `aegis:sourceKind` | `"declared"` (an agent or person said so) |
-| id | `aegis:identifier` | `"sd-a3f"` |
-| title | `rdfs:label` | string |
-| created | `aegis:createdAt` | ISO-8601 UTC string |
-| closed | `aegis:closedAt` | ISO-8601 UTC string, only when closed |
-| outcome | `aegis:outcome` | `"done"`, only when closed (camayoc: absence means open) |
-| assignee | `aegis:assignedTo` | IRI `https://seeds.local/principal/<name>` |
-| `blocks` dependency | `aegis:blockedOn` | the blocker's item IRI |
-| status | `seeds:status` | `open`, `in_progress`, `blocked`, `deferred`, `closed` |
+| type | `rdf:type` | `schema:Action` |
+| provenance | `quechua:sourceKind` | `"declared"` (an agent or person said so) |
+| id | `schema:identifier` | `"sd-a3f"` |
+| title | `schema:name` **and** `rdfs:label` | the same string in both (quipu's label floor and `/search` read `rdfs:label`; the shapes hold them equal) |
+| description | `schema:description` | string |
+| status | `seeds:status` | `open`, `hooked`, `in_progress`, `blocked`, `deferred`, `closed`, `tombstone`: the field the claim compare-and-set reads |
+| public status | `schema:actionStatus` | DERIVED in the same write: `open`/`hooked`/`blocked`/`deferred` are `schema:PotentialActionStatus`, `in_progress` is `ActiveActionStatus`, `closed` with outcome `done` is `CompletedActionStatus`, `closed` with `abandoned`/`superseded`/`failed` is `FailedActionStatus`, a tombstone has none |
+| compare-and-set token | `schema:version` | integer, 1 at create, +1 per write |
 | priority | `seeds:priority` | integer 0-4 |
 | type | `seeds:issueType` | `task`, `bug`, `feature`, `epic`, `chore`, `docs`, `question` |
-| description, notes | `seeds:description`, `seeds:notes` | string |
-| labels | `seeds:label` | one fact per label |
-| updated, creator | `seeds:updatedAt`, `seeds:createdBy` | string |
-| close reason, defer | `seeds:closeReason`, `seeds:deferUntil` | string |
-| `related`, `parent-child`, `discovered-from` | `seeds:relatedTo`, `seeds:childOf`, `seeds:discoveredFrom` | item IRI |
-| compare-and-set token | `seeds:revision` | integer, 1 at create, +1 per write |
+| assignee | `schema:agent` | principal IRI `https://seeds.local/principal/<name>` |
+| creator, owner | `schema:creator`, `schema:accountablePerson` | principal IRI |
+| labels | `schema:keywords` | one fact per label |
+| created, updated, closed | `schema:dateCreated`, `schema:dateModified`, `schema:endTime` | `xsd:dateTime` |
+| due | `ical:due` | `xsd:date` when a bare `YYYY-MM-DD`, else `xsd:dateTime` |
+| defer | `schema:scheduledTime` | `xsd:date` or `xsd:dateTime`, as for due |
+| estimate | `schema:timeRequired` | `xsd:duration` of the minutes, canonical (`PT30M`, `PT1H30M`, `P1D`) |
+| close reason | `schema:result` | string |
+| outcome | `quechua:outcome` | `"done"` (the default), `abandoned`, `superseded` or `failed`, only when closed |
+| `blocks` dependency | `quechua:blockedOn` | the blocker's item IRI |
+| `parent-child`, `related`, `discovered-from` | `schema:isPartOf`, `dcterms:relation`, `prov:wasDerivedFrom` | item IRI |
+| notes, design, acceptance criteria, agent context, external ref | `seeds:notes`, `seeds:design`, `seeds:acceptanceCriteria`, `seeds:agentContext`, `seeds:externalRef` | string (an external ref need not be a URL) |
 | driving workflow run | `seeds:workflowRun` | a shuttle run IRI, `urn:shuttle:run:<id>` ([Formulas](formulas.md)) |
 
+**Times are typed, validated and written in canonical form.** A value that
+is not a valid `xsd:dateTime` (or, for due and defer, a bare `YYYY-MM-DD`
+`xsd:date`) is refused with a usage error (exit 2) naming the seed, the field
+and the value, and nothing is written. A space instead of `T`, for example,
+is refused, not repaired.
+
+A valid value is written in its XSD canonical spelling, which keeps the value
+and changes only the bytes: trailing zeros in fractional seconds go
+(`…59.014436670Z` is `…59.01443667Z`, `.000Z` is `Z`), `+00:00` is `Z`,
+`24:00:00` is the next day's `00:00:00`, and an estimate of 90 minutes is
+`PT1H30M`. This is the form a quipu server's `/update` stores typed literals
+in, and seeds computes it with the same code (oxigraph's `oxsdatatypes`), so
+a local store, a server and a sync between them hold identical bytes. `sd
+cutover` reports how many times it respelled (`canonicalized_times`), and its
+export gives br back the original spelling.
+
+**A ledger in the old vocabulary is refused, not read as empty.** sd 0.1
+does not read what sd 0.0.x wrote (`aegis:WorkItem`, `seeds:revision`). Every
+command first counts such items in the project graph (one bounded query), and
+when there are any it refuses (exit 5) naming the store or server, the graph
+and the count, with the migration: `sd cutover export` with the old sd, then
+`sd cutover import` with this one into a new store. `sd doctor` reports it as
+a failed `store.vocabulary` check, and a pendant in the old vocabulary fails
+validation the same way.
+
 A comment is its own entity, `https://seeds.local/item/<id>/comment/<n>`, typed
-`seeds:Comment`, with `seeds:commentOn`, `seeds:commentIndex`, `seeds:author`,
-`seeds:text` and `aegis:createdAt`. Comments are append-only.
+`schema:Comment`, with `schema:parentItem` (the seed), `schema:position`
+(1-based), `schema:author` (a principal IRI), `schema:text` and
+`schema:dateCreated` (`xsd:dateTime`). Comments are append-only.
+
+Who wrote what is kept in a side graph that exports and snapshots never read:
+`seeds:Write` records (`seeds:actor`, `seeds:wrote`, `seeds:version`) and
+their `seeds:AttributionClaim`s. That vocabulary did not change.
 
 **One deliberate difference from camayoc's tracker projection.** camayoc's
 ingress keeps mutable tracker state (status) on a versioned `Observation`
@@ -76,19 +122,27 @@ complete: every old value stays readable with `--at`.
 
 Every write in the native CLI is validated against
 [`shapes/seeds.shapes.ttl`](https://github.com/scbrown/seeds/blob/main/shapes/seeds.shapes.ttl)
-before it is committed:
+before it is committed. It is the whole profile from the aegis-bqgdr3 ruling,
+not a subset: quipu's `/update` does not apply shapes, so on a shared board
+this client-side check is the only gate.
 
-- **camayoc's `CamayocWorkItemShape`**, reproduced from camayoc with the same constraints: exactly
-  one `sourceKind`, exactly one `rdfs:label`, an `outcome` from camayoc's
-  closed list, and `blockedOn` pointing at a WorkItem the graph actually holds;
-- **`SeedsWorkItemShape`**: exactly one identifier, status, priority (0-4),
-  type and revision.
+- **`quechua:ActionGovernanceShape`**: exactly one `sourceKind`, an `outcome`
+  from the closed list, and `blockedOn` pointing at an Action the graph
+  actually holds (camayoc's constraints, carried onto `schema:Action`);
+- **`seeds:SeedShape`**: exactly one identifier, `schema:name` (equal to the
+  one `rdfs:label`), status, priority (0-4), type and version; typed dates;
+  principal IRIs; and an `sh:xone` that holds status, outcome and
+  `schema:actionStatus` in agreement;
+- **`seeds:CommentShape`**: one parent seed, one position from 1, one author
+  IRI, one text;
+- **`seeds:CalendarAkaShape`**: a calendar to-do (`ical:Vtodo`) is a separate
+  node linked to its seed by `skos:exactMatch`. sd writes none today.
 
 A write that does not conform is refused whole (exit 5) and nothing is
 written. The wasm build has no SHACL engine (quipu leaves it out of its own
 wasm gate), so there `QuipuBackend::validates()` is false and only the
-structural rule that matters most, `blockedOn` pointing at a real seed, is
-checked by hand.
+structural rules are checked by hand: `blockedOn` and comments pointing at a
+real seed, single-valued fields holding one value, and the time forms.
 
 ## How a write lands
 

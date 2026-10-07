@@ -376,3 +376,102 @@ fn new_comment_on_an_imported_seed_gets_a_slot_marker_and_checks_exhaustion() {
         .contains("exhausted"));
     assert_eq!(full, before);
 }
+
+/// The instant a time names, read independently of seeds' canonicaliser
+/// (jiff): `24:00:00` is the next day's midnight, and a time with no zone is
+/// compared as a civil time.
+#[cfg(feature = "native")]
+fn instant(t: &str) -> String {
+    if let Some(day) = t.strip_suffix("T24:00:00Z") {
+        let d: jiff::civil::Date = day.parse().unwrap();
+        return instant(&format!("{}T00:00:00Z", d.tomorrow().unwrap()));
+    }
+    match t.parse::<jiff::Timestamp>() {
+        Ok(ts) => format!("{}", ts.as_nanosecond()),
+        Err(_) => format!("civil {}", t.parse::<jiff::civil::DateTime>().unwrap()),
+    }
+}
+
+/// Cutover stores every time in its XSD canonical spelling and never changes
+/// a value: each respelled time names the same instant before and after, the
+/// count of respelled values is reported, and export still gives back br's
+/// original bytes.
+#[cfg(feature = "native")]
+#[test]
+#[allow(clippy::disallowed_methods)] // the optional corpus is a test fixture file
+fn cutover_respells_times_canonically_and_never_changes_an_instant() {
+    let times = [
+        "2026-08-30T13:35:59.014436670Z",
+        "2026-08-30T13:35:59.100000000Z",
+        "2026-10-03T14:00:00.000Z",
+        "2026-10-03T14:00:00+00:00",
+        "2026-10-03T14:00:00.500+02:00",
+        "2026-10-03T24:00:00Z",
+        "2026-10-03T14:00:00",
+        "2026-10-03T14:00:00Z",
+    ];
+    let mut text = String::new();
+    for (i, t) in times.iter().enumerate() {
+        text.push_str(&json!({"id":format!("br-{i}"),"title":"t","status":"closed","priority":2,
+            "issue_type":"task","created_at":t,"updated_at":t,"closed_at":t,
+            "comments":[{"id":i+1,"issue_id":format!("br-{i}"),"author":"a","text":"x","created_at":t}]})
+            .to_string());
+        text.push('\n');
+    }
+    // An optional larger corpus (`dateTime<TAB>lexical` lines), e.g. every
+    // distinct time on a real board.
+    let corpus: Vec<String> = std::env::var("SEEDS_TEST_TIME_CORPUS")
+        .ok()
+        .map(|p| {
+            std::fs::read_to_string(p)
+                .unwrap()
+                .lines()
+                .filter_map(|l| l.strip_prefix("dateTime\t").map(String::from))
+                .collect()
+        })
+        .unwrap_or_default();
+    let original = beads::parse(&text).unwrap();
+    let snap = beads::decode(&original).unwrap();
+    let mut respelled = 0;
+    for (i, t) in times.iter().enumerate() {
+        let s = &snap.seeds[&format!("br-{i}")];
+        for after in [&s.created_at, &s.updated_at, s.closed_at.as_ref().unwrap()] {
+            assert_eq!(instant(t), instant(after), "{t} -> {after}");
+            respelled += usize::from(after != t);
+        }
+        let c = snap
+            .comments
+            .iter()
+            .find(|c| c.seed == format!("br-{i}"))
+            .unwrap();
+        assert_eq!(
+            instant(t),
+            instant(&c.created_at),
+            "comment {t} -> {}",
+            c.created_at
+        );
+        respelled += usize::from(c.created_at != *t);
+    }
+    // Six of the eight are not canonical, each in four places.
+    assert_eq!(respelled, 24);
+    assert_eq!(beads::canonicalized_times(&original), (24, 6));
+    for t in &corpus {
+        let after = seeds::model::canonical_or_same(t, false);
+        assert_eq!(instant(t), instant(&after), "{t} -> {after}");
+    }
+    eprintln!("instants compared from the corpus: {}", corpus.len());
+    // Through a real store and back out: br's bytes, not the canonical ones.
+    let mut b = QuipuBackend::in_memory("https://seeds.local/project/canonical").unwrap();
+    let (batch, _) = sync::plan(&Snapshot::default(), &snap, "beads-sync");
+    b.commit(&batch, &context()).unwrap();
+    let loaded = b.snapshot(None).unwrap();
+    assert_eq!(
+        loaded.seeds, snap.seeds,
+        "the store holds the canonical form"
+    );
+    assert_eq!(
+        beads::encode(&loaded).unwrap(),
+        original,
+        "export gives back br's bytes"
+    );
+}

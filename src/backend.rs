@@ -192,6 +192,14 @@ pub trait Backend {
     fn max_write_clauses(&self) -> Option<usize> {
         None
     }
+
+    /// How many subjects in the project (and its ephemeral graph) were
+    /// written in seeds' OLD vocabulary ([`crate::vocab::legacy_count_query`]):
+    /// a store this build would otherwise read as empty. One bounded COUNT
+    /// per graph, so every command can afford to ask.
+    fn legacy_items(&self) -> Result<u64> {
+        Ok(0)
+    }
 }
 
 /// How a refusal for exceeding [`Backend::max_write_bytes`] begins. The kind
