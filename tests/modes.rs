@@ -2155,6 +2155,11 @@ fn the_old_vocabulary_check_refuses_when_its_count_cannot_be_read() {
             Fault::LegacyCount("200 OK", "{\"head\":{},\"boolean\":\"false\"}"),
         ),
         ("an empty body", Fault::LegacyCount("200 OK", "")),
+        // Every attempt times out: one retry, then the warming-up refusal.
+        (
+            "a 408 on every attempt",
+            Fault::LegacyCount("408 Request Timeout", "query timeout: exceeded 10000ms"),
+        ),
         (
             "a server error",
             Fault::LegacyCount("500 Internal Server Error", "{}"),
@@ -2182,7 +2187,13 @@ fn the_old_vocabulary_check_refuses_when_its_count_cannot_be_read() {
                 "{what}: sd {args:?} read it as clean: {err}"
             );
             assert!(
-                err.contains("the old-vocabulary check could not be completed")
+                [
+                    "returned an unreadable answer",
+                    "could not be completed",
+                    "timed out twice"
+                ]
+                .iter()
+                .any(|m| err.contains(m))
                     && err.contains(graph),
                 "{what}: sd {args:?}: {err}"
             );

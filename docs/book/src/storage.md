@@ -105,7 +105,9 @@ new-vocabulary seed from a mixed store, and only a pre-0.1.0 sd writing beside
 doctor runs), and a pendant in the old vocabulary fails validation
 the same way. A count that cannot be read (a query error, no answer, a
 malformed or missing number) refuses too: the check fails closed, never as a
-clean ledger.
+clean ledger. A timeout (the first query on a large graph right after a quipu
+restart can outrun the server's query budget) is retried once after 2 s, then
+refused with a message saying the store may be warming up.
 
 A comment is its own entity, `https://seeds.local/item/<id>/comment/<n>`, typed
 `schema:Comment`, with `schema:parentItem` (the seed), `schema:position`
