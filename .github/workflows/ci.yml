@@ -81,7 +81,8 @@ jobs:
         run: cargo test --target wasm32-unknown-unknown --no-default-features --test core
 
   # Mode 2 and mode 3 against a real quipu server: the released
-  # quipu-server binary, pinned by version AND sha256, drives tests/modes.rs.
+  # quipu-server binary, pinned by version AND sha256, drives tests/modes.rs
+  # and the remote backend's own unit tests (src/native/remote.rs).
   # Without SEEDS_TEST_QUIPU_SERVER those tests skip (and say so), so this job
   # is the only place they are proven.
   remote:
@@ -110,11 +111,16 @@ jobs:
         run: |
           set -euo pipefail
           cargo test --test modes -- --nocapture 2>&1 | tee modes.log
+      - name: Remote backend unit tests against the server
+        run: |
+          set -euo pipefail
+          cargo test --lib native::remote::tests -- --nocapture 2>&1 | tee remote-lib.log
       - name: Prove the remote tests ran rather than skipped
         run: |
           set -euo pipefail
-          if grep -q SKIPPED modes.log; then echo "remote tests skipped" >&2; exit 1; fi
+          if grep -q SKIPPED modes.log remote-lib.log; then echo "remote tests skipped" >&2; exit 1; fi
           grep -q 'test remote_mode_reads_and_writes_a_quipu_server ... ok' modes.log
+          grep -q 'test native::remote::tests::the_batched_graph_read_equals_the_whole_graph_scan ... ok' remote-lib.log
 
   book:
     runs-on: ubuntu-latest

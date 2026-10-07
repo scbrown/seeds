@@ -32,6 +32,7 @@
 //!   makes every write as expensive as that graph is big.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use serde_json::{json, Value as Json};
@@ -79,6 +80,10 @@ fn subjects_query(graph: &str, subjects: &[&String]) -> String {
         branches.join(" UNION ")
     )
 }
+
+/// Whether this process has already said that a snapshot needed the
+/// full-scan fallback (said once, not per snapshot).
+static FALLBACK_LOGGED: AtomicBool = AtomicBool::new(false);
 
 /// Facts grouped by subject IRI.
 type Facts = BTreeMap<String, Vec<Fact>>;
@@ -603,6 +608,13 @@ impl RemoteBackend {
                     .filter(|s| !listed.contains(s))
                     .collect();
                 unlisted = others.len();
+                if unlisted > 0 && !FALLBACK_LOGGED.swap(true, Ordering::Relaxed) {
+                    eprintln!(
+                        "sd: {unlisted} subject(s) in {graph} are neither seeds nor comments \
+                         (written by something else); finding them needs a full scan of the \
+                         graph on every snapshot, which is slow on a large board"
+                    );
+                }
                 self.read_all(graph, &others, at, &mut by_subject)?;
             }
             if total(&by_subject) == expected {
@@ -1556,8 +1568,13 @@ mod tests {
     }
 
     /// Run a SPARQL update on the server; the transaction it committed.
+    ///
+    /// The tx is read from `GET /transactions` (the newest id), never from
+    /// the `/update` answer: released quipu-server 0.11.0 (CI's pin) answers
+    /// `/update` with an empty body.
     fn update(remote: &RemoteBackend, sparql: &str) -> u64 {
-        let body = remote
+        let before = latest_tx(remote);
+        remote
             .post(
                 "/update",
                 "application/x-www-form-urlencoded",
@@ -1565,9 +1582,26 @@ mod tests {
                 true,
             )
             .unwrap();
-        update_report(&body)
-            .and_then(|(_, tx)| tx)
-            .unwrap_or_else(|| panic!("no tx in {body}"))
+        let tx = latest_tx(remote);
+        assert!(tx > before, "the update committed no transaction");
+        tx
+    }
+
+    /// The store's newest transaction id.
+    fn latest_tx(remote: &RemoteBackend) -> u64 {
+        let body = ureq::get(&format!("{}/transactions", remote.base))
+            .call()
+            .unwrap()
+            .into_string()
+            .unwrap();
+        let v: Json = serde_json::from_str(&body).unwrap();
+        v["transactions"]
+            .as_array()
+            .unwrap_or_else(|| panic!("no transactions in {body}"))
+            .iter()
+            .filter_map(|t| t["id"].as_u64())
+            .max()
+            .unwrap_or(0)
     }
 
     /// Facts with each subject's facts in one order, so two reads compare.
