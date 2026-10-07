@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.1.1] - 2026-10-07
+
+### Perf
+
+- *(remote)* Read a graph by subject batches, not one sorted scan ( S1) (#98) ([9581890](https://github.com/scbrown/seeds/commit/95818904e3f3e4e0a5c9831086e8282c28cbafb7))
+- *(engine)* Scope per-command remote reads to the items they answer from ( S2) (#100) ([4aa1096](https://github.com/scbrown/seeds/commit/4aa1096b878d79313a13a8977881cda5bffaf287))
+
 ## [0.1.0] - 2026-10-07
 
 ### Added
