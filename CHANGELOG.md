@@ -2,6 +2,45 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.1.0] - 2026-10-07
+
+### Added
+
+- *(model)* Design, acceptance criteria and external ref, br's fields (#74) ([7933c0c](https://github.com/scbrown/seeds/commit/7933c0c79e47f0783a212e367bbfbcfff58a541b))
+- *(model)* Due date, estimate and --overdue, br's fields (#75) ([8df7712](https://github.com/scbrown/seeds/commit/8df7712a0905d2437f97ca47a83ed25d58233396))
+- *(update)* --check/--uncheck/--add-acceptance, br's in-place checklist edits (#77) ([b1c681b](https://github.com/scbrown/seeds/commit/b1c681b53347f7f7108c48714e3a85a9036abb00))
+- *(create)* --slug embeds a normalized slug in the id, br's form (#78) ([01869ad](https://github.com/scbrown/seeds/commit/01869adf7ec90d06a0e0b576a05affdf6828d0b4))
+- *(model)* Agent context, br's agent_context field (#79) ([49eff67](https://github.com/scbrown/seeds/commit/49eff672dbd31c93a20943e2c2672262dfa790b1))
+- *(model)* --ephemeral seeds in a sibling graph, br's flag (#81) ([d75a622](https://github.com/scbrown/seeds/commit/d75a622c0a52422f0187a6ca74c31c0a12aed62c))
+- Add lossless JSONL cutover bridge (#83) ([2153109](https://github.com/scbrown/seeds/commit/21531092f608c86f7cc51f7809588e9b168df028))
+- *(remote)* Decide claims from quipu's /update report, name the holder, record the actor (#92) ([03c8d32](https://github.com/scbrown/seeds/commit/03c8d3235d436bcd4593badac316d0e64c1385bd))
+- *(sync)* Push a write too large for one request in ordered, resumable batches (#93) ([522a305](https://github.com/scbrown/seeds/commit/522a305212050ea40383498971a4c8d68141ab85))
+- *(vocab)* [**breaking**] Write seeds as schema:Action, schema.org first (table v1.1) (#96) ([621da16](https://github.com/scbrown/seeds/commit/621da16d52d667a5db3b0877efd3278207ee558f))
+
+### Documentation
+
+- *(readme)* Caboodle wires the dp bd -> sd alias (#82) ([9790e97](https://github.com/scbrown/seeds/commit/9790e97e28a9f1649eb15d27797274a3a2e90c56))
+
+### Fixed
+
+- Emit native cutover records in br export shape (#84) ([a2665f0](https://github.com/scbrown/seeds/commit/a2665f020b34de59ca61f1e880df4c014629bd1f))
+- Persist global comment identities for cutover exports (#85) ([2d01d26](https://github.com/scbrown/seeds/commit/2d01d266618a2583f26b9ee00fe6aa774b7ba259))
+- Replace the raw JSON shadow during incremental cutover sync (#86) ([875bcb7](https://github.com/scbrown/seeds/commit/875bcb7ee331eca1441cb7a7a1e8860580c24e6d))
+- Canonicalize concurrent label unions for br round trips (#87) ([ead646a](https://github.com/scbrown/seeds/commit/ead646a98a3bfecff5f0344706332822e9ce1d66))
+- Retain dependency creation provenance through cutover (#88) ([05cd886](https://github.com/scbrown/seeds/commit/05cd886874d6c769d4a457807940bbc5b498418c))
+- Use indexed write snapshots and preserve imported comment slots (#89) ([21495fc](https://github.com/scbrown/seeds/commit/21495fc2e66f004d28d9c270469a6f37ad3d3a15))
+- *(sync)* Split a seed's comments past the clause limit into following batches (#95) ([65f41d9](https://github.com/scbrown/seeds/commit/65f41d94a5005ada680f680f6e67f23d919cac0d))
+- *(vocab)* Fail closed when the old-vocabulary check cannot complete (#97) ([92749ad](https://github.com/scbrown/seeds/commit/92749ade1971319ac737e07e7a8f9a7b20acf4d2))
+
+### Miscellaneous
+
+- *(parity)* Count --include-templates and dep add --metadata are not applicable (#80) ([946e147](https://github.com/scbrown/seeds/commit/946e1479ffdd5f8b173ccb1b9bfeeae1efc0d9fb))
+
+### Perf
+
+- Use indexed blocking context for claims and cycle checks (#90) ([66d65c2](https://github.com/scbrown/seeds/commit/66d65c2b4540e7197f9e652594ec231a0b39937e))
+- *(remote)* Check a write against the items it touches, not the whole graph (#94) ([d1cc6f6](https://github.com/scbrown/seeds/commit/d1cc6f69d84e469ed54cd3d4794449f5a5d44654))
+
 ## [0.0.4] - 2026-10-01
 
 ### Added
