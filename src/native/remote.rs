@@ -107,6 +107,15 @@ fn transport(url: &str, e: &ureq::Transport) -> SdError {
     )
 }
 
+/// Prefix of the error for a read quipu gave up on (HTTP 408 to `/query`).
+/// A read changes nothing, so the failure is definite and the caller may ask
+/// again for less.
+const QUERY_TIMEOUT: &str = "quipu query timed out";
+
+fn is_query_timeout(e: &SdError) -> bool {
+    e.message.starts_with(QUERY_TIMEOUT)
+}
+
 fn status_error(what: &str, code: u16, body: &str) -> SdError {
     if let Some(verdict) = attestation_verdict(code, body) {
         let hint = match verdict.as_str() {
@@ -279,6 +288,13 @@ impl RemoteBackend {
                     body.len()
                 )),
             )),
+            Err(ureq::Error::Status(408, r)) if path == "/query" => Err((
+                false,
+                SdError::failed(format!(
+                    "{QUERY_TIMEOUT}: quipu {path} answered HTTP 408: {}",
+                    r.into_string().unwrap_or_default()
+                )),
+            )),
             Err(ureq::Error::Status(code, r)) => Err((
                 code >= 500,
                 status_error(path, code, &r.into_string().unwrap_or_default()),
@@ -381,10 +397,16 @@ impl RemoteBackend {
             return Ok(());
         }
         let values: String = subjects.iter().map(|s| format!("<{s}> ")).collect();
-        let (rows, truncated) = self.select_marked(
+        let answer = self.select_marked(
             &format!("SELECT ?s ?p ?o WHERE {{ VALUES ?s {{ {values}}} GRAPH <{graph}> {{ ?s ?p ?o }} }}"),
             None,
-        )?;
+        );
+        // A read quipu gave up on is asked again in halves, like a truncated
+        // one: a busy server times out a long VALUES read that halves answer.
+        let (rows, truncated) = match answer {
+            Err(e) if is_query_timeout(&e) && subjects.len() > 1 => (Vec::new(), true),
+            other => other?,
+        };
         if truncated {
             if subjects.len() == 1 {
                 return Err(SdError::failed(format!(
@@ -1115,6 +1137,99 @@ mod tests {
                 e.message
             );
         }
+    }
+
+    /// A one-thread HTTP server: `/health` is 200, a `/query` binding more
+    /// than one subject is HTTP 408 (quipu's query timeout), and a
+    /// one-subject `/query` returns one fact for it. Returns the base URL and
+    /// the number of `/query` requests seen.
+    fn timing_out_server() -> (String, std::sync::Arc<std::sync::atomic::AtomicUsize>) {
+        use std::io::{BufRead, BufReader, Read, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        let queries = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let seen = std::sync::Arc::clone(&queries);
+        std::thread::spawn(move || {
+            for stream in listener.incoming().flatten() {
+                let mut reader = BufReader::new(stream);
+                let mut first = String::new();
+                if reader.read_line(&mut first).is_err() {
+                    continue;
+                }
+                let mut length = 0usize;
+                loop {
+                    let mut line = String::new();
+                    if reader.read_line(&mut line).unwrap_or(0) == 0 || line == "\r\n" {
+                        break;
+                    }
+                    if let Some(v) = line.to_ascii_lowercase().strip_prefix("content-length:") {
+                        length = v.trim().parse().unwrap_or(0);
+                    }
+                }
+                let mut body = vec![0u8; length];
+                let _ = reader.read_exact(&mut body);
+                let body = String::from_utf8_lossy(&body).to_string();
+                let (status, reply) = if first.contains("/query") {
+                    seen.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    let subjects: Vec<&str> = body
+                        .split("VALUES ?s {")
+                        .nth(1)
+                        .and_then(|rest| rest.split('}').next())
+                        .unwrap_or("")
+                        .split_whitespace()
+                        .collect();
+                    if subjects.len() > 1 {
+                        (
+                            "408 Request Timeout",
+                            r#"{"error":"query timeout"}"#.to_string(),
+                        )
+                    } else {
+                        let s = subjects
+                            .first()
+                            .map_or("", |s| s.trim_matches(&['<', '>'][..]));
+                        (
+                            "200 OK",
+                            format!(
+                                r#"{{"results":{{"bindings":[{{"s":{{"type":"uri","value":"{s}"}},"p":{{"type":"uri","value":"urn:p"}},"o":{{"type":"literal","value":"v"}}}}]}}}}"#
+                            ),
+                        )
+                    }
+                } else {
+                    ("200 OK", r#"{"status":"ok"}"#.to_string())
+                };
+                let mut stream = reader.into_inner();
+                let _ = write!(
+                    stream,
+                    "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{reply}",
+                    reply.len()
+                );
+            }
+        });
+        (base, queries)
+    }
+
+    #[test]
+    fn a_read_quipu_times_out_is_asked_again_in_halves() {
+        let (base, queries) = timing_out_server();
+        let remote = RemoteBackend::connect(&base, "urn:g", None, None, &[]).unwrap();
+        let ids: Vec<String> = (0..4).map(|i| format!("urn:s{i}")).collect();
+        let refs: Vec<&String> = ids.iter().collect();
+        let mut out = Facts::new();
+        remote.read_subjects("urn:g", &refs, &mut out).unwrap();
+        assert_eq!(
+            out.len(),
+            4,
+            "every subject read once the halves fit: {out:?}"
+        );
+        // 4 -> 2+2 -> 1+1+1+1: three timed-out reads, then four that answer.
+        assert_eq!(queries.load(std::sync::atomic::Ordering::SeqCst), 7);
+
+        // One subject that still times out is a definite error, never a gap.
+        let lone = String::from("urn:s0 urn:s1");
+        let e = remote
+            .read_subjects("urn:g", &[&lone], &mut Facts::new())
+            .unwrap_err();
+        assert!(is_query_timeout(&e), "{}", e.message);
     }
 
     #[test]
