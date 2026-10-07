@@ -151,6 +151,18 @@ impl Env {
     }
 }
 
+/// The body of `GET <path>` on the port (test helper, no TLS, no auth).
+fn http_get(port: u16, path: &str) -> String {
+    use std::io::{Read, Write};
+    let mut c = std::net::TcpStream::connect(("127.0.0.1", port)).unwrap();
+    write!(c, "GET {path} HTTP/1.0\r\nHost: localhost\r\n\r\n").unwrap();
+    let mut out = String::new();
+    c.read_to_string(&mut out).unwrap();
+    out.split_once("\r\n\r\n")
+        .map(|(_, b)| b.to_string())
+        .unwrap_or_default()
+}
+
 /// Whether `GET /health` on the port returns an HTTP 200 status line.
 fn health_ok(port: u16) -> bool {
     use std::io::{Read, Write};
@@ -424,12 +436,46 @@ fn remote_mode_reads_and_writes_a_quipu_server() {
             c.spawn().unwrap()
         })
         .collect();
-    let codes: Vec<i32> = procs
+    let outs: Vec<(i32, String)> = procs
         .into_iter()
-        .map(|p| p.wait_with_output().unwrap().status.code().unwrap_or(-1))
+        .map(|p| {
+            let o = p.wait_with_output().unwrap();
+            (
+                o.status.code().unwrap_or(-1),
+                String::from_utf8_lossy(&o.stderr).into_owned(),
+            )
+        })
         .collect();
+    let codes: Vec<i32> = outs.iter().map(|(c, _)| *c).collect();
     assert_eq!(codes.iter().filter(|c| **c == 0).count(), 1, "{codes:?}");
     assert!(codes.iter().all(|c| *c == 0 || *c == 4), "{codes:?}");
+    // Every loser is told WHO holds it (aegis-w3k75d.15), whether it lost in the
+    // server's guard or saw the claim in its own read first.
+    let winner = env.ok(&work, &["show", &a, "--json"], &remote);
+    let winner: Value = serde_json::from_str(&winner).unwrap();
+    let holder = winner[0]["assignee"]
+        .as_str()
+        .or(winner["assignee"].as_str())
+        .unwrap()
+        .to_string();
+    for (code, err) in &outs {
+        if *code == 4 {
+            assert!(
+                err.contains(&format!("claimed by {holder}")),
+                "loser not told the holder: {err}"
+            );
+        }
+    }
+    // On a server that records the caller's actor (quipu >= #413), the winning
+    // claim's transaction carries it instead of the constant "sparql-update".
+    let port: u16 = url.rsplit(':').next().unwrap().parse().unwrap();
+    let txs = http_get(port, "/transactions");
+    if txs.contains("\"seeds\"") {
+        assert!(
+            txs.contains(&format!("\"actor\":\"{holder}\"")),
+            "{holder} not on a tx: {txs}"
+        );
+    }
 
     // Simultaneous creates of ONE workflow step through the server: every
     // caller names the same seed and exactly one exists. Process start-up is
@@ -920,7 +966,12 @@ fn a_remote_create_says_created_not_exists() {
     assert!(text.starts_with("created "), "{text}");
     let j: Value =
         serde_json::from_str(&env.ok(&work, &["create", "another", "--json"], &remote)).unwrap();
-    assert!(j["tx"].is_null(), "a remote write has no tx to report: {j}");
+    // A server that reports its transactions (quipu >= #411) gives the real tx;
+    // an older one reports none, and sd says null rather than 0.
+    assert!(
+        j["tx"].is_null() || j["tx"].as_u64().is_some_and(|t| t > 0),
+        "a remote write reports its tx or null: {j}"
+    );
     // A keyed create that finds its seed still says so.
     let keyed = ["create", "step", "--workflow-run", "r1", "--step", "build"];
     assert!(env.ok(&work, &keyed, &remote).starts_with("created "));
