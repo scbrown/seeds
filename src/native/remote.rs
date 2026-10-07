@@ -52,6 +52,12 @@ const SUBJECTS_PER_READ: usize = 100;
 /// full page is never also a truncated one.
 const SUBJECT_PAGE: usize = 5000;
 
+/// quipu's `/query` row cap. Its `truncated` flag is NOT in the W3C results
+/// JSON seeds asks for (the standard shape has no field for it), so a capped
+/// answer arrives looking complete. A read that may exceed the cap therefore
+/// carries `LIMIT ROW_CAP` and takes a full answer as a truncated one.
+const ROW_CAP: usize = 10_000;
+
 /// The classes of the subjects seeds writes into a project graph: seeds
 /// (`schema:Action`) and their comments (`schema:Comment`). Every other IRI a
 /// seed's facts mention (principals, shuttle runs, other seeds) is an
@@ -68,7 +74,10 @@ fn subjects_query(graph: &str, subjects: &[&String]) -> String {
         .iter()
         .map(|s| format!("{{ BIND(<{s}> AS ?s) GRAPH <{graph}> {{ <{s}> ?p ?o }} }}"))
         .collect();
-    format!("SELECT ?s ?p ?o WHERE {{ {} }}", branches.join(" UNION "))
+    format!(
+        "SELECT ?s ?p ?o WHERE {{ {} }} LIMIT {ROW_CAP}",
+        branches.join(" UNION ")
+    )
 }
 
 /// Facts grouped by subject IRI.
@@ -455,6 +464,7 @@ impl RemoteBackend {
             Err(e) if is_query_timeout(&e) && subjects.len() > 1 => (Vec::new(), true),
             other => other?,
         };
+        let truncated = truncated || rows.len() >= ROW_CAP;
         if truncated {
             if subjects.len() == 1 {
                 return Err(SdError::failed(format!(
@@ -495,7 +505,7 @@ impl RemoteBackend {
             });
             let (rows, truncated) = self.select_marked(
                 &format!(
-                    "SELECT DISTINCT ?s WHERE {{ GRAPH <{graph}> {{ {pattern} }} \
+                    "SELECT ?s WHERE {{ GRAPH <{graph}> {{ {pattern} }} \
                      FILTER(isIRI(?s)) {after}}} \
                      ORDER BY STR(?s) LIMIT {}",
                     self.subject_page
@@ -515,10 +525,16 @@ impl RemoteBackend {
                 let Some(Obj::Iri(s)) = r.remove("s") else {
                     continue;
                 };
+                // No DISTINCT (it made a page ~80x slower on a 28k-seed
+                // board): a subject matching more than once arrives as a run
+                // of equal rows, kept once.
+                if out.last().is_some_and(|last| *last == s) {
+                    continue;
+                }
                 // The next page starts after the last subject, so the pages
                 // must come in the order the key compares; anything else
                 // could skip a subject without a sign.
-                if out.last().is_some_and(|last| s.as_str() <= last.as_str()) {
+                if out.last().is_some_and(|last| s.as_str() < last.as_str()) {
                     return Err(SdError::failed(format!(
                         "quipu listed the subjects of {graph} out of order ({s} after {}); \
                          refusing a snapshot that could skip one",
@@ -532,8 +548,8 @@ impl RemoteBackend {
             }
             if out.len() == before {
                 return Err(SdError::failed(format!(
-                    "quipu answered a full page of subjects of {graph} with no IRI; refusing \
-                     a snapshot that cannot page past it"
+                    "quipu answered a full page of subjects of {graph} with no new one; \
+                     refusing a snapshot that cannot page past it"
                 )));
             }
         }
@@ -1671,5 +1687,38 @@ mod tests {
         // An empty graph reads as empty, not as an error.
         let empty = "https://seeds.local/project/empty";
         assert!(remote.graph_facts(empty, None).unwrap().is_empty());
+
+        // quipu caps /query at 10,000 rows and, in the W3C JSON seeds reads,
+        // says nothing about it: a subject with more facts than that must be
+        // refused, never read as complete.
+        let fat_graph = "https://seeds.local/project/fat";
+        remote
+            .post(
+                "/graph/create",
+                "application/json",
+                &json!({ "graph": fat_graph }).to_string(),
+                true,
+            )
+            .unwrap();
+        let fat = vocab::item_iri("fat-1");
+        let small = vocab::item_iri("fat-2");
+        let mut nt = format!("<{small}> a <{action}> . <{fat}> a <{action}> .\n");
+        for n in 0..ROW_CAP {
+            nt.push_str(&format!("<{fat}> <urn:x:n> {n} .\n"));
+        }
+        update(
+            &remote,
+            &format!("INSERT DATA {{ GRAPH <{fat_graph}> {{ {nt} }} }}"),
+        );
+        let e = remote
+            .read_subjects(fat_graph, &[&small, &fat], None, &mut Facts::new())
+            .unwrap_err();
+        assert!(e.message.contains("even read alone"), "{}", e.message);
+        assert!(remote.graph_facts(fat_graph, None).is_err());
+        let mut alone = Facts::new();
+        remote
+            .read_subjects(fat_graph, &[&small], None, &mut alone)
+            .unwrap();
+        assert_eq!(alone[&small].len(), 1);
     }
 }
