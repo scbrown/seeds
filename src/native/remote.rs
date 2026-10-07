@@ -436,6 +436,29 @@ pub fn plain_http_allowed(url: &str, allowed: &[String]) -> bool {
             .any(|a| a.eq_ignore_ascii_case(&authority) || a.eq_ignore_ascii_case(&bare))
 }
 
+/// `application/x-www-form-urlencoded` encoding of one value.
+fn form_encode(value: &str) -> String {
+    let mut out = String::with_capacity(value.len());
+    for b in value.bytes() {
+        match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'*' => {
+                out.push(b as char);
+            }
+            b' ' => out.push('+'),
+            _ => out.push_str(&format!("%{b:02X}")),
+        }
+    }
+    out
+}
+
+/// `(asserted + retracted, tx)` from quipu's `/update` report, or `None` for a
+/// server that answers with no body (before quipu#411).
+fn update_report(body: &str) -> Option<(u64, Option<u64>)> {
+    let v: Json = serde_json::from_str(body).ok()?;
+    let changed = v.get("asserted")?.as_u64()? + v.get("retracted")?.as_u64()?;
+    Some((changed, v.get("tx").and_then(Json::as_u64)))
+}
+
 /// Whether a bearer may be sent to `url`: https anywhere, http only to this
 /// machine.
 pub fn secure_enough(url: &str) -> bool {
@@ -724,9 +747,28 @@ impl Backend for RemoteBackend {
             "WHERE {{ {guard_block}{absent}{} }}",
             unions.join(" UNION ")
         ));
-        if let Err((ambiguous, e)) =
-            self.send("/update", "application/sparql-update", &update, true)
-        {
+        // Form-encoded so the caller's actor and source travel as fields: quipu
+        // records them on the transaction (>= quipu#413), and a signed write may
+        // not carry a query string. Older servers ignore the extra fields.
+        let form = format!(
+            "update={}&actor={}&source=seeds",
+            form_encode(&update),
+            form_encode(&ctx.actor)
+        );
+        let sent = self.send("/update", "application/x-www-form-urlencoded", &form, true);
+        if let Ok(body) = &sent {
+            // quipu >= #411 reports what it committed. Every seeds write also
+            // inserts a fresh write-provenance record, so asserted > 0 exactly
+            // when the WHERE guard matched: the count, not a full re-read of the
+            // project graph, decides landed vs lost (aegis-w3k75d.15).
+            if let Some((changed, tx)) = update_report(body) {
+                if changed == 0 {
+                    return Err(SdError::conflict(self.lost_race(batch)));
+                }
+                return Ok(tx.unwrap_or(0));
+            }
+        }
+        if let Err((ambiguous, e)) = sent {
             if !ambiguous {
                 return Err(e);
             }
@@ -769,12 +811,7 @@ impl Backend for RemoteBackend {
 
         let missing = self.unconfirmed(batch)?;
         if !missing.is_empty() {
-            return Err(SdError::conflict(format!(
-                "the remote store does not show this write for {} (another writer changed it \
-                 first, or changed it again right after). Re-read and retry; nothing is assumed \
-                 to have landed.",
-                missing.join(", ")
-            )));
+            return Err(SdError::conflict(self.lost_race(batch)));
         }
         // quipu's /update returns no transaction id, so there is none to
         // report; callers see that a write happened through `Report::wrote`.
@@ -783,6 +820,44 @@ impl Backend for RemoteBackend {
 }
 
 impl RemoteBackend {
+    /// The refusal for a write whose guard did not match: another writer moved
+    /// the seed first. Names who holds each written seed NOW, so a lost claim
+    /// says "claimed by X" instead of only "re-read and retry".
+    fn lost_race(&self, batch: &WriteBatch) -> String {
+        let holders: Vec<String> = match (self.facts(None), self.ephemeral_facts(None)) {
+            (Ok(f), Ok(e)) => {
+                let now = Snapshot::from_graphs(&f, &e);
+                batch
+                    .seeds
+                    .iter()
+                    .map(|w| match now.seeds.get(&w.seed.id) {
+                        Some(s) => format!(
+                            "{} is now {}{}",
+                            s.id,
+                            s.status,
+                            s.assignee
+                                .as_deref()
+                                .map(|a| format!(", claimed by {a}"))
+                                .unwrap_or_default()
+                        ),
+                        None => format!("{} does not exist now", w.seed.id),
+                    })
+                    .collect()
+            }
+            _ => Vec::new(),
+        };
+        let ids: Vec<&str> = batch.seeds.iter().map(|w| w.seed.id.as_str()).collect();
+        let detail = if holders.is_empty() {
+            format!("for {}", ids.join(", "))
+        } else {
+            format!("({})", holders.join("; "))
+        };
+        format!(
+            "another writer changed it first {detail}; nothing was written. Re-read before \
+             retrying."
+        )
+    }
+
     /// What of `batch` the server does NOT show (empty when all of it landed).
     /// /update reports no affected count, so this read-back is the only proof
     /// that the precondition held.
