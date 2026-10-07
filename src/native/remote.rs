@@ -32,6 +32,7 @@
 //!   makes every write as expensive as that graph is big.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use serde_json::{json, Value as Json};
@@ -42,11 +43,47 @@ use crate::model::{Fact, Obj, Snapshot};
 use crate::validate::{self, escape_literal};
 use crate::vocab::{self, term};
 
-const PAGE: usize = 2000;
-
-/// Subjects per targeted read. A seed carries a few dozen facts, so a chunk
-/// stays well under quipu's result cap; a truncated answer is split anyway.
+/// Subjects per targeted read, one `UNION` branch each. A seed carries a few
+/// dozen facts, so a chunk stays well under quipu's 10,000-row result cap (a
+/// truncated answer is split anyway), and the branch count stays far below
+/// the nesting that aborts quipu-server (2,000 branches, aegis-rq1afp).
 const SUBJECTS_PER_READ: usize = 100;
+
+/// Subjects per page of a subject listing: under quipu's 10,000-row cap, so a
+/// full page is never also a truncated one.
+const SUBJECT_PAGE: usize = 5000;
+
+/// quipu's `/query` row cap. Its `truncated` flag is NOT in the W3C results
+/// JSON seeds asks for (the standard shape has no field for it), so a capped
+/// answer arrives looking complete. A read that may exceed the cap therefore
+/// carries `LIMIT ROW_CAP` and takes a full answer as a truncated one.
+const ROW_CAP: usize = 10_000;
+
+/// The classes of the subjects seeds writes into a project graph: seeds
+/// (`schema:Action`) and their comments (`schema:Comment`). Every other IRI a
+/// seed's facts mention (principals, shuttle runs, other seeds) is an
+/// object, never a subject; a subject of any other class came from another
+/// writer, and [`RemoteBackend::graph_facts`] still finds it by its count.
+fn listed_classes() -> Vec<String> {
+    vec![term::work_item(), term::comment()]
+}
+
+/// A read of every fact of `subjects` in `graph`: one bound pattern per
+/// subject, joined by `UNION`.
+fn subjects_query(graph: &str, subjects: &[&String]) -> String {
+    let branches: Vec<String> = subjects
+        .iter()
+        .map(|s| format!("{{ BIND(<{s}> AS ?s) GRAPH <{graph}> {{ <{s}> ?p ?o }} }}"))
+        .collect();
+    format!(
+        "SELECT ?s ?p ?o WHERE {{ {} }} LIMIT {ROW_CAP}",
+        branches.join(" UNION ")
+    )
+}
+
+/// Whether this process has already said that a snapshot needed the
+/// full-scan fallback (said once, not per snapshot).
+static FALLBACK_LOGGED: AtomicBool = AtomicBool::new(false);
 
 /// Facts grouped by subject IRI.
 type Facts = BTreeMap<String, Vec<Fact>>;
@@ -95,6 +132,9 @@ pub struct RemoteBackend {
     max_write_bytes: usize,
     /// Refuse, unsent, a write nesting more guard clauses than this.
     max_write_clauses: usize,
+    /// Subjects per page of a subject listing ([`SUBJECT_PAGE`]; smaller in
+    /// tests, so a small graph still spans pages).
+    subject_page: usize,
 }
 
 fn transport(url: &str, e: &ureq::Transport) -> SdError {
@@ -198,6 +238,7 @@ impl RemoteBackend {
             ephemeral_registered: false,
             max_write_bytes: super::config::DEFAULT_MAX_WRITE_BYTES,
             max_write_clauses: super::config::DEFAULT_MAX_WRITE_CLAUSES,
+            subject_page: SUBJECT_PAGE,
         };
         match b.agent.get(&format!("{}/health", b.base)).call() {
             Ok(_) => Ok(b),
@@ -375,7 +416,6 @@ impl RemoteBackend {
     /// reading the whole graph instead made every batch of a large push cost
     /// more than the last (aegis-w3k75d.15).
     fn subjects_facts(&self, subjects: &BTreeSet<String>) -> Result<(Facts, Facts)> {
-        let all: Vec<&String> = subjects.iter().collect();
         let mut main = Facts::new();
         let mut eph = Facts::new();
         let eph_graph = crate::vocab::ephemeral_graph(&self.graph);
@@ -383,41 +423,64 @@ impl RemoteBackend {
             (self.graph.as_str(), &mut main),
             (eph_graph.as_str(), &mut eph),
         ] {
-            for chunk in all.chunks(SUBJECTS_PER_READ) {
-                self.read_subjects(graph, chunk, out)?;
-            }
+            self.read_all(graph, subjects, None, out)?;
         }
         Ok((main, eph))
     }
 
-    /// One `VALUES` read of `subjects` in `graph`, halved and retried when
-    /// quipu reports the answer truncated.
-    fn read_subjects(&self, graph: &str, subjects: &[&String], out: &mut Facts) -> Result<()> {
+    /// The facts of every subject in `subjects`, in `graph`, as of `at`, read
+    /// [`SUBJECTS_PER_READ`] at a time.
+    fn read_all(
+        &self,
+        graph: &str,
+        subjects: &BTreeSet<String>,
+        at: Option<u64>,
+        out: &mut Facts,
+    ) -> Result<()> {
+        let all: Vec<&String> = subjects.iter().collect();
+        for chunk in all.chunks(SUBJECTS_PER_READ) {
+            self.read_subjects(graph, chunk, at, out)?;
+        }
+        Ok(())
+    }
+
+    /// One read of `subjects` in `graph`, halved and retried when quipu
+    /// reports the answer truncated.
+    ///
+    /// Shaped as a `UNION` of one bound pattern per subject, never
+    /// `VALUES ?s { ... }`: quipu does not push a `VALUES` block into the
+    /// pattern, so a `VALUES` read scanned the whole graph on every call
+    /// (40 subjects: 6-9 s on a 28k-seed board), while each bound branch is
+    /// an index lookup (the same 40: 0.02 s, the same rows).
+    fn read_subjects(
+        &self,
+        graph: &str,
+        subjects: &[&String],
+        at: Option<u64>,
+        out: &mut Facts,
+    ) -> Result<()> {
         if subjects.is_empty() {
             return Ok(());
         }
-        let values: String = subjects.iter().map(|s| format!("<{s}> ")).collect();
-        let answer = self.select_marked(
-            &format!("SELECT ?s ?p ?o WHERE {{ VALUES ?s {{ {values}}} GRAPH <{graph}> {{ ?s ?p ?o }} }}"),
-            None,
-        );
+        let answer = self.select_marked(&subjects_query(graph, subjects), at);
         // A read quipu gave up on is asked again in halves, like a truncated
-        // one: a busy server times out a long VALUES read that halves answer.
+        // one: a busy server times out a long read that halves answer.
         let (rows, truncated) = match answer {
             Err(e) if is_query_timeout(&e) && subjects.len() > 1 => (Vec::new(), true),
             other => other?,
         };
+        let truncated = truncated || rows.len() >= ROW_CAP;
         if truncated {
             if subjects.len() == 1 {
                 return Err(SdError::failed(format!(
-                    "quipu truncated the facts of {} even read alone; refusing to write \
-                     against a partial view",
+                    "quipu truncated the facts of {} even read alone; refusing to act \
+                     on a partial view",
                     subjects[0]
                 )));
             }
             let (a, b) = subjects.split_at(subjects.len() / 2);
-            self.read_subjects(graph, a, out)?;
-            return self.read_subjects(graph, b, out);
+            self.read_subjects(graph, a, at, out)?;
+            return self.read_subjects(graph, b, at, out);
         }
         for mut r in rows {
             if let (Some(Obj::Iri(s)), Some(Obj::Iri(p)), Some(o)) =
@@ -429,8 +492,149 @@ impl RemoteBackend {
         Ok(())
     }
 
-    /// One graph's facts, grouped by subject, read consistently in pages.
-    fn graph_facts(&self, graph: &str, at: Option<u64>) -> Result<BTreeMap<String, Vec<Fact>>> {
+    /// The IRI subjects matching `pattern` (over `?s`, inside `graph`), as
+    /// of `at`, in code-point order.
+    ///
+    /// Paged by key (`STR(?s) > last`), never by `OFFSET`: each page is
+    /// bounded and starts where the last ended, and no page can be cut short
+    /// by quipu's row cap without saying so (a truncated page is refused).
+    /// Ordered by `STR(?s)`, the key the filter compares: quipu orders bare
+    /// IRIs by its own term ids, not by their text, and paging by one order
+    /// while filtering by another skips subjects (the order is checked, and
+    /// a page out of order is refused).
+    fn subjects_where(&self, graph: &str, pattern: &str, at: Option<u64>) -> Result<Vec<String>> {
+        let mut out: Vec<String> = Vec::new();
+        loop {
+            let after = out.last().map_or_else(String::new, |last| {
+                format!("FILTER(STR(?s) > \"{}\") ", escape_literal(last))
+            });
+            let (rows, truncated) = self.select_marked(
+                &format!(
+                    "SELECT ?s WHERE {{ GRAPH <{graph}> {{ {pattern} }} \
+                     FILTER(isIRI(?s)) {after}}} \
+                     ORDER BY STR(?s) LIMIT {}",
+                    self.subject_page
+                ),
+                at,
+            )?;
+            if truncated {
+                return Err(SdError::failed(format!(
+                    "quipu truncated a page of {} subjects of {graph}; refusing a partial \
+                     snapshot",
+                    self.subject_page
+                )));
+            }
+            let n = rows.len();
+            let before = out.len();
+            for mut r in rows {
+                let Some(Obj::Iri(s)) = r.remove("s") else {
+                    continue;
+                };
+                // No DISTINCT (it made a page ~80x slower on a 28k-seed
+                // board): a subject matching more than once arrives as a run
+                // of equal rows, kept once.
+                if out.last().is_some_and(|last| *last == s) {
+                    continue;
+                }
+                // The next page starts after the last subject, so the pages
+                // must come in the order the key compares; anything else
+                // could skip a subject without a sign.
+                if out.last().is_some_and(|last| s.as_str() < last.as_str()) {
+                    return Err(SdError::failed(format!(
+                        "quipu listed the subjects of {graph} out of order ({s} after {}); \
+                         refusing a snapshot that could skip one",
+                        out.last().map_or("", String::as_str)
+                    )));
+                }
+                out.push(s);
+            }
+            if n < self.subject_page {
+                return Ok(out);
+            }
+            if out.len() == before {
+                return Err(SdError::failed(format!(
+                    "quipu answered a full page of subjects of {graph} with no new one; \
+                     refusing a snapshot that cannot page past it"
+                )));
+            }
+        }
+    }
+
+    /// One graph's facts, grouped by subject, as of `at`: exactly the facts
+    /// of a whole-graph read, without one.
+    ///
+    /// A whole-graph `ORDER BY ?s ?p ?o LIMIT/OFFSET` scan re-sorted every
+    /// triple for every page (726k triples on a 28k-seed board: ~363 pages of
+    /// ~5.4 s). Instead the subjects are listed by the classes seeds writes
+    /// ([`listed_classes`], bound patterns, keyset-paged) and their facts read
+    /// in [`SUBJECTS_PER_READ`] batches. The graph's triple count is the
+    /// check: facts left over belong to subjects of no listed class (written
+    /// by something other than seeds), and only then are those listed, with
+    /// a full scan, so the answer equals the whole-graph read either way.
+    fn graph_facts(&self, graph: &str, at: Option<u64>) -> Result<Facts> {
+        self.graph_facts_listing(graph, at, &listed_classes())
+            .map(|(facts, _)| facts)
+    }
+
+    /// [`Self::graph_facts`] over the subjects of `classes`, also returning
+    /// how many subjects only the fallback scan found.
+    fn graph_facts_listing(
+        &self,
+        graph: &str,
+        at: Option<u64>,
+        classes: &[String],
+    ) -> Result<(Facts, usize)> {
+        let total = |f: &Facts| f.values().map(Vec::len).sum::<usize>();
+        for _attempt in 0..3 {
+            let expected = self.count(graph, at)?;
+            let mut by_subject = Facts::new();
+            if expected == 0 {
+                return Ok((by_subject, 0));
+            }
+            let mut listed = BTreeSet::new();
+            for class in classes {
+                listed.extend(self.subjects_where(graph, &format!("?s a <{class}>"), at)?);
+            }
+            self.read_all(graph, &listed, at, &mut by_subject)?;
+            let mut unlisted = 0;
+            if total(&by_subject) < expected {
+                let not_listed: String = classes
+                    .iter()
+                    .map(|c| format!("FILTER NOT EXISTS {{ ?s a <{c}> }} "))
+                    .collect();
+                let others: BTreeSet<String> = self
+                    .subjects_where(graph, &format!("?s ?p ?o {not_listed}"), at)?
+                    .into_iter()
+                    .filter(|s| !listed.contains(s))
+                    .collect();
+                unlisted = others.len();
+                if unlisted > 0 && !FALLBACK_LOGGED.swap(true, Ordering::Relaxed) {
+                    eprintln!(
+                        "sd: {unlisted} subject(s) in {graph} are neither seeds nor comments \
+                         (written by something else); finding them needs a full scan of the \
+                         graph on every snapshot, which is slow on a large board"
+                    );
+                }
+                self.read_all(graph, &others, at, &mut by_subject)?;
+            }
+            if total(&by_subject) == expected {
+                return Ok((by_subject, unlisted));
+            }
+            // The graph changed between the count and the reads (or the
+            // server capped a read): read it again rather than return a
+            // short ledger.
+        }
+        Err(SdError::failed(
+            "could not read a consistent snapshot of the remote graph (it kept changing, \
+             or the server truncates results below the page size)",
+        ))
+    }
+
+    /// The old whole-graph read, kept as the reference the batched read is
+    /// tested against.
+    #[cfg(test)]
+    fn graph_facts_scan(&self, graph: &str, at: Option<u64>) -> Result<Facts> {
+        const PAGE: usize = 2000;
         for _attempt in 0..3 {
             let expected = self.count(graph, at)?;
             let mut by_subject: BTreeMap<String, Vec<Fact>> = BTreeMap::new();
@@ -464,13 +668,8 @@ impl RemoteBackend {
             if total == expected {
                 return Ok(by_subject);
             }
-            // The graph changed between the count and the pages (or the server
-            // capped a page): read it again rather than return a short ledger.
         }
-        Err(SdError::failed(
-            "could not read a consistent snapshot of the remote graph (it kept changing, \
-             or the server truncates results below the page size)",
-        ))
+        Err(SdError::failed("inconsistent scan"))
     }
 
     fn register_graph(&mut self, ephemeral: bool) -> Result<()> {
@@ -1140,9 +1339,9 @@ mod tests {
     }
 
     /// A one-thread HTTP server: `/health` is 200, a `/query` binding more
-    /// than one subject is HTTP 408 (quipu's query timeout), and a
-    /// one-subject `/query` returns one fact for it. Returns the base URL and
-    /// the number of `/query` requests seen.
+    /// than one subject (or a subject named `slow`) is HTTP 408 (quipu's
+    /// query timeout), and a one-subject `/query` returns one fact for it.
+    /// Returns the base URL and the number of `/query` requests seen.
     fn timing_out_server() -> (String, std::sync::Arc<std::sync::atomic::AtomicUsize>) {
         use std::io::{BufRead, BufReader, Read, Write};
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
@@ -1172,21 +1371,17 @@ mod tests {
                 let (status, reply) = if first.contains("/query") {
                     seen.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
                     let subjects: Vec<&str> = body
-                        .split("VALUES ?s {")
-                        .nth(1)
-                        .and_then(|rest| rest.split('}').next())
-                        .unwrap_or("")
-                        .split_whitespace()
+                        .split("BIND(<")
+                        .skip(1)
+                        .filter_map(|rest| rest.split('>').next())
                         .collect();
-                    if subjects.len() > 1 {
+                    if subjects.len() > 1 || subjects.iter().any(|s| s.contains("slow")) {
                         (
                             "408 Request Timeout",
                             r#"{"error":"query timeout"}"#.to_string(),
                         )
                     } else {
-                        let s = subjects
-                            .first()
-                            .map_or("", |s| s.trim_matches(&['<', '>'][..]));
+                        let s = subjects.first().copied().unwrap_or("");
                         (
                             "200 OK",
                             format!(
@@ -1215,7 +1410,9 @@ mod tests {
         let ids: Vec<String> = (0..4).map(|i| format!("urn:s{i}")).collect();
         let refs: Vec<&String> = ids.iter().collect();
         let mut out = Facts::new();
-        remote.read_subjects("urn:g", &refs, &mut out).unwrap();
+        remote
+            .read_subjects("urn:g", &refs, None, &mut out)
+            .unwrap();
         assert_eq!(
             out.len(),
             4,
@@ -1225,9 +1422,9 @@ mod tests {
         assert_eq!(queries.load(std::sync::atomic::Ordering::SeqCst), 7);
 
         // One subject that still times out is a definite error, never a gap.
-        let lone = String::from("urn:s0 urn:s1");
+        let lone = String::from("urn:slow");
         let e = remote
-            .read_subjects("urn:g", &[&lone], &mut Facts::new())
+            .read_subjects("urn:g", &[&lone], None, &mut Facts::new())
             .unwrap_err();
         assert!(is_query_timeout(&e), "{}", e.message);
     }
@@ -1304,5 +1501,258 @@ mod tests {
             .err()
             .unwrap();
         assert_eq!(e.kind, ErrorKind::Config);
+    }
+
+    /// A quipu-server of our own on a free loopback port, killed on drop.
+    struct Server {
+        child: std::process::Child,
+        base: String,
+        dir: std::path::PathBuf,
+    }
+
+    impl Drop for Server {
+        fn drop(&mut self) {
+            let _ = self.child.kill();
+            let _ = self.child.wait();
+            let _ = std::fs::remove_dir_all(&self.dir);
+        }
+    }
+
+    /// Start `SEEDS_TEST_QUIPU_SERVER`, or `None` when it is not set.
+    fn quipu_server() -> Option<Server> {
+        let bin = std::env::var("SEEDS_TEST_QUIPU_SERVER").ok()?;
+        for attempt in 0..5 {
+            let dir = std::env::temp_dir().join(format!(
+                "seeds-remote-test-{}-{attempt}-{}",
+                std::process::id(),
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_nanos()
+            ));
+            std::fs::create_dir_all(&dir).unwrap();
+            let port = std::net::TcpListener::bind("127.0.0.1:0")
+                .unwrap()
+                .local_addr()
+                .unwrap()
+                .port();
+            let child = std::process::Command::new(&bin)
+                .args(["--db", dir.join("q.db").to_str().unwrap()])
+                .args(["--bind", &format!("127.0.0.1:{port}")])
+                .current_dir(&dir)
+                .env("HOME", &dir)
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .spawn()
+                .unwrap();
+            let mut server = Server {
+                child,
+                base: format!("http://127.0.0.1:{port}"),
+                dir,
+            };
+            for _ in 0..100 {
+                if !matches!(server.child.try_wait(), Ok(None)) {
+                    break; // ours exited: the port was taken
+                }
+                let healthy = ureq::get(&format!("{}/health", server.base))
+                    .timeout(Duration::from_secs(2))
+                    .call()
+                    .is_ok();
+                if healthy && matches!(server.child.try_wait(), Ok(None)) {
+                    return Some(server);
+                }
+                std::thread::sleep(Duration::from_millis(100));
+            }
+        }
+        panic!("quipu-server did not start");
+    }
+
+    /// Run a SPARQL update on the server; the transaction it committed.
+    ///
+    /// The tx is read from `GET /transactions` (the newest id), never from
+    /// the `/update` answer: released quipu-server 0.11.0 (CI's pin) answers
+    /// `/update` with an empty body.
+    fn update(remote: &RemoteBackend, sparql: &str) -> u64 {
+        let before = latest_tx(remote);
+        remote
+            .post(
+                "/update",
+                "application/x-www-form-urlencoded",
+                &format!("update={}", form_encode(sparql)),
+                true,
+            )
+            .unwrap();
+        let tx = latest_tx(remote);
+        assert!(tx > before, "the update committed no transaction");
+        tx
+    }
+
+    /// The store's newest transaction id.
+    fn latest_tx(remote: &RemoteBackend) -> u64 {
+        let body = ureq::get(&format!("{}/transactions", remote.base))
+            .call()
+            .unwrap()
+            .into_string()
+            .unwrap();
+        let v: Json = serde_json::from_str(&body).unwrap();
+        v["transactions"]
+            .as_array()
+            .unwrap_or_else(|| panic!("no transactions in {body}"))
+            .iter()
+            .filter_map(|t| t["id"].as_u64())
+            .max()
+            .unwrap_or(0)
+    }
+
+    /// Facts with each subject's facts in one order, so two reads compare.
+    fn sorted(mut f: Facts) -> Facts {
+        for v in f.values_mut() {
+            v.sort();
+        }
+        f
+    }
+
+    // aegis-aane52 S1: the batched read returns exactly the facts the old
+    // whole-graph scan did, now and as of an earlier transaction, including
+    // subjects seeds never types, and lists every seed and comment by class
+    // (a fallback scan finds only the subjects of no listed class).
+    #[test]
+    fn the_batched_graph_read_equals_the_whole_graph_scan() {
+        let Some(server) = quipu_server() else {
+            eprintln!("SKIPPED: set SEEDS_TEST_QUIPU_SERVER to a quipu-server binary to run this");
+            return;
+        };
+        let graph = "https://seeds.local/project/equiv";
+        let mut remote = RemoteBackend::connect(&server.base, graph, None, None, &[]).unwrap();
+        // Pages of 7 subjects, so 250 seeds and their comments span many.
+        remote.subject_page = 7;
+        remote.register_graph(false).unwrap();
+
+        let action = term::work_item();
+        let comment = term::comment();
+        let mut nt = String::new();
+        let seeds = 250;
+        let mut comments = 0;
+        for i in 0..seeds {
+            // Ids whose IRIs sort differently by byte and by number.
+            let id = format!("eq-{i}{}", if i % 3 == 0 { "a.b" } else { "" });
+            let s = vocab::item_iri(&id);
+            nt.push_str(&format!(
+                "<{s}> a <{action}> ; <{}> \"{id}\" ; <{}> \"title {i}\" ; \
+                 <{}> {i} ; <{}> \"line one\\nline \\\"two\\\"\" .\n",
+                term::identifier(),
+                term::name(),
+                term::priority(),
+                term::description(),
+            ));
+            if i > 0 {
+                nt.push_str(&format!(
+                    "<{s}> <{}> <{}> .\n",
+                    term::blocked_on(),
+                    vocab::item_iri(&format!("eq-{}", i - 1))
+                ));
+            }
+            for n in 1..=(i % 3) {
+                let c = vocab::comment_iri(&id, n as u64);
+                nt.push_str(&format!(
+                    "<{c}> a <{comment}> ; <{}> <{s}> ; <{}> {n} ; <{}> \"c{n}\"@en .\n",
+                    term::comment_on(),
+                    term::comment_index(),
+                    term::text(),
+                ));
+                comments += 1;
+            }
+        }
+        // Subjects seeds never writes: one untyped (and not ASCII), one of
+        // another class.
+        nt.push_str("<urn:x:annotation-\u{e9}> <urn:x:note> \"from another writer\" ; <urn:x:on> <urn:x:thing> .\n");
+        nt.push_str("<urn:x:event> a <https://schema.org/Event> ; <urn:x:when> \"2026-10-07\"^^<http://www.w3.org/2001/XMLSchema#date> .\n");
+        let tx1 = update(
+            &remote,
+            &format!("INSERT DATA {{ GRAPH <{graph}> {{ {nt} }} }}"),
+        );
+        assert!(comments > 100, "enough comments to matter: {comments}");
+
+        let (batched, unlisted) = remote
+            .graph_facts_listing(graph, None, &listed_classes())
+            .unwrap();
+        let scanned = remote.graph_facts_scan(graph, None).unwrap();
+        assert_eq!(scanned.len(), seeds + comments + 2);
+        assert_eq!(sorted(batched.clone()), sorted(scanned));
+        // Only the two foreign subjects needed the fallback: every seed and
+        // every comment was listed by its class.
+        assert_eq!(unlisted, 2, "subjects found only by the fallback scan");
+        assert_eq!(
+            remote.graph_facts(graph, None).unwrap().len(),
+            batched.len()
+        );
+
+        // Change the graph, then read as of before the change.
+        let first = vocab::item_iri("eq-1");
+        update(
+            &remote,
+            &format!(
+                "DELETE {{ GRAPH <{graph}> {{ <{first}> ?p ?o }} }} \
+                 INSERT {{ GRAPH <{graph}> {{ <urn:x:late> <urn:x:p> \"late\" . }} }} \
+                 WHERE {{ GRAPH <{graph}> {{ <{first}> ?p ?o }} }}"
+            ),
+        );
+        let then = sorted(remote.graph_facts(graph, Some(tx1)).unwrap());
+        assert_eq!(
+            then,
+            sorted(remote.graph_facts_scan(graph, Some(tx1)).unwrap())
+        );
+        assert_eq!(
+            then,
+            sorted(batched),
+            "as of tx {tx1}, the graph as written"
+        );
+        let now = sorted(remote.graph_facts(graph, None).unwrap());
+        assert_eq!(now, sorted(remote.graph_facts_scan(graph, None).unwrap()));
+        assert!(!now.contains_key(&first) && now.contains_key("urn:x:late"));
+
+        // The targeted read (writes' checks) answers the same facts.
+        let some: BTreeSet<String> = now.keys().take(150).cloned().collect();
+        let (main, eph) = remote.subjects_facts(&some).unwrap();
+        assert!(eph.is_empty());
+        let want: Facts = now.into_iter().filter(|(k, _)| some.contains(k)).collect();
+        assert_eq!(sorted(main), want);
+
+        // An empty graph reads as empty, not as an error.
+        let empty = "https://seeds.local/project/empty";
+        assert!(remote.graph_facts(empty, None).unwrap().is_empty());
+
+        // quipu caps /query at 10,000 rows and, in the W3C JSON seeds reads,
+        // says nothing about it: a subject with more facts than that must be
+        // refused, never read as complete.
+        let fat_graph = "https://seeds.local/project/fat";
+        remote
+            .post(
+                "/graph/create",
+                "application/json",
+                &json!({ "graph": fat_graph }).to_string(),
+                true,
+            )
+            .unwrap();
+        let fat = vocab::item_iri("fat-1");
+        let small = vocab::item_iri("fat-2");
+        let mut nt = format!("<{small}> a <{action}> . <{fat}> a <{action}> .\n");
+        for n in 0..ROW_CAP {
+            nt.push_str(&format!("<{fat}> <urn:x:n> {n} .\n"));
+        }
+        update(
+            &remote,
+            &format!("INSERT DATA {{ GRAPH <{fat_graph}> {{ {nt} }} }}"),
+        );
+        let e = remote
+            .read_subjects(fat_graph, &[&small, &fat], None, &mut Facts::new())
+            .unwrap_err();
+        assert!(e.message.contains("even read alone"), "{}", e.message);
+        assert!(remote.graph_facts(fat_graph, None).is_err());
+        let mut alone = Facts::new();
+        remote
+            .read_subjects(fat_graph, &[&small], None, &mut alone)
+            .unwrap();
+        assert_eq!(alone[&small].len(), 1);
     }
 }
