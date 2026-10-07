@@ -428,6 +428,86 @@ impl RemoteBackend {
         Ok((main, eph))
     }
 
+    /// A [`Snapshot`] of exactly `subjects` (plus nothing), current state,
+    /// read from the project graph and its ephemeral graph like a whole
+    /// snapshot is.
+    fn snapshot_of(&self, subjects: &BTreeSet<String>) -> Result<Snapshot> {
+        let (main, eph) = self.subjects_facts(subjects)?;
+        Ok(Snapshot::from_graphs(&main, &eph))
+    }
+
+    /// The subjects of `graph` holding a fact `?s <p> <o>` for any `p` in
+    /// `predicates` and `o` in `objects`: one bound pattern per pair (an
+    /// index lookup each), joined by `UNION`, at most [`SUBJECTS_PER_READ`]
+    /// branches per read, a truncated read halved and asked again.
+    fn subjects_pointing_at(
+        &self,
+        graph: &str,
+        predicates: &[String],
+        objects: &BTreeSet<String>,
+    ) -> Result<BTreeSet<String>> {
+        let mut out = BTreeSet::new();
+        let all: Vec<&String> = objects.iter().collect();
+        let per = (SUBJECTS_PER_READ / predicates.len().max(1)).max(1);
+        for chunk in all.chunks(per) {
+            self.pointing_at(graph, predicates, chunk, &mut out)?;
+        }
+        Ok(out)
+    }
+
+    fn pointing_at(
+        &self,
+        graph: &str,
+        predicates: &[String],
+        objects: &[&String],
+        out: &mut BTreeSet<String>,
+    ) -> Result<()> {
+        if objects.is_empty() {
+            return Ok(());
+        }
+        let branches: Vec<String> = objects
+            .iter()
+            .flat_map(|o| {
+                predicates
+                    .iter()
+                    .map(move |p| format!("{{ GRAPH <{graph}> {{ ?s <{p}> <{o}> }} }}"))
+            })
+            .collect();
+        let sparql = format!(
+            "SELECT ?s WHERE {{ {} }} LIMIT {ROW_CAP}",
+            branches.join(" UNION ")
+        );
+        let (rows, truncated) = match self.select_marked(&sparql, None) {
+            Err(e) if is_query_timeout(&e) && objects.len() > 1 => (Vec::new(), true),
+            other => other?,
+        };
+        if truncated || rows.len() >= ROW_CAP {
+            if objects.len() == 1 {
+                return Err(SdError::failed(format!(
+                    "quipu truncated the subjects pointing at {} even read alone; refusing \
+                     to act on a partial view",
+                    objects[0]
+                )));
+            }
+            let (a, b) = objects.split_at(objects.len() / 2);
+            self.pointing_at(graph, predicates, a, out)?;
+            return self.pointing_at(graph, predicates, b, out);
+        }
+        out.extend(rows.into_iter().filter_map(|mut r| match r.remove("s") {
+            Some(Obj::Iri(s)) => Some(s),
+            _ => None,
+        }));
+        Ok(())
+    }
+
+    /// The graphs a snapshot reads: the project graph and its ephemeral graph.
+    fn both_graphs(&self) -> [String; 2] {
+        [
+            self.graph.clone(),
+            crate::vocab::ephemeral_graph(&self.graph),
+        ]
+    }
+
     /// The facts of every subject in `subjects`, in `graph`, as of `at`, read
     /// [`SUBJECTS_PER_READ`] at a time.
     fn read_all(
@@ -887,6 +967,56 @@ impl Backend for RemoteBackend {
         Ok(snap)
     }
 
+    fn scoped_reads(&self) -> bool {
+        true
+    }
+
+    /// The named seeds and their comments: the seeds by IRI, the comments
+    /// found by a bound `schema:parentItem` pattern per seed, in both graphs.
+    fn snapshot_items(&self, ids: &[String]) -> Result<Snapshot> {
+        let items: BTreeSet<String> = ids.iter().map(|id| vocab::item_iri(id)).collect();
+        let mut subjects = items.clone();
+        for graph in self.both_graphs() {
+            subjects.extend(self.subjects_pointing_at(&graph, &[term::comment_on()], &items)?);
+        }
+        self.snapshot_of(&subjects)
+    }
+
+    fn snapshot_seeds(&self, ids: &[String]) -> Result<Snapshot> {
+        self.snapshot_of(&ids.iter().map(|id| vocab::item_iri(id)).collect())
+    }
+
+    /// The seeds [`vocab::seed_query_pattern`] lists, keyset-paged in each
+    /// graph, then read by subject. An unconstrained query is a whole
+    /// snapshot.
+    fn snapshot_where(&self, q: &crate::backend::SeedQuery) -> Result<Snapshot> {
+        let Some(pattern) = vocab::seed_query_pattern(q) else {
+            return self.snapshot(None);
+        };
+        let mut subjects = BTreeSet::new();
+        for graph in self.both_graphs() {
+            subjects.extend(self.subjects_where(&graph, &pattern, None)?);
+        }
+        self.snapshot_of(&subjects)
+    }
+
+    /// The seeds with a dependency edge of any type on one of `ids`: bound
+    /// `?s <edge> <item>` patterns, in both graphs.
+    fn snapshot_dependents(&self, ids: &[String]) -> Result<Snapshot> {
+        let items: BTreeSet<String> = ids.iter().map(|id| vocab::item_iri(id)).collect();
+        let edges = [
+            term::blocked_on(),
+            term::child_of(),
+            term::related_to(),
+            term::discovered_from(),
+        ];
+        let mut subjects = BTreeSet::new();
+        for graph in self.both_graphs() {
+            subjects.extend(self.subjects_pointing_at(&graph, &edges, &items)?);
+        }
+        self.snapshot_of(&subjects)
+    }
+
     fn ready_ids(&self, at: Option<u64>) -> Result<Vec<String>> {
         let rows = self.select(&vocab::ready_query(&self.graph), at)?;
         let mut ids: Vec<String> = rows
@@ -1313,6 +1443,10 @@ impl RemoteBackend {
 }
 
 #[cfg(test)]
+#[path = "remote_scoped_tests.rs"]
+mod scoped_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -1504,9 +1638,9 @@ mod tests {
     }
 
     /// A quipu-server of our own on a free loopback port, killed on drop.
-    struct Server {
+    pub(super) struct Server {
         child: std::process::Child,
-        base: String,
+        pub(super) base: String,
         dir: std::path::PathBuf,
     }
 
@@ -1519,7 +1653,7 @@ mod tests {
     }
 
     /// Start `SEEDS_TEST_QUIPU_SERVER`, or `None` when it is not set.
-    fn quipu_server() -> Option<Server> {
+    pub(super) fn quipu_server() -> Option<Server> {
         let bin = std::env::var("SEEDS_TEST_QUIPU_SERVER").ok()?;
         for attempt in 0..5 {
             let dir = std::env::temp_dir().join(format!(

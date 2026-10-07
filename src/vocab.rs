@@ -287,15 +287,125 @@ pub fn project_graph_iri(prefix: &str) -> String {
 /// `blockedOn` target whose status is anything but `closed`. This is the
 /// query camayoc is meant to carry as a stored query; `sd ready` runs it
 /// verbatim and then applies the caller's filters and the defer date.
+///
+/// Shaped for quipu's evaluator, which runs patterns in the order written
+/// (measured on a 28k-seed board, aegis-aane52 S2): the bound status pattern
+/// comes first (622 rows, not 28k), and the blocker check is a `MINUS` on
+/// `?item`, the same answer as `FILTER NOT EXISTS` here (`?item` is the only
+/// variable the two sides share and it is always bound) in 0.15 s instead
+/// of 8.8 s.
 pub fn ready_query(graph_iri: &str) -> String {
     format!(
         "PREFIX schema: <{SCHEMA}>\n\
          PREFIX quechua: <{QUECHUA}>\n\
          PREFIX seeds: <{SEEDS}>\n\
          SELECT ?id WHERE {{ GRAPH <{graph_iri}> {{\n\
-         \x20 ?item a schema:Action ; schema:identifier ?id ; seeds:status \"open\" .\n\
-         \x20 FILTER NOT EXISTS {{ ?item quechua:blockedOn ?blocker . ?blocker seeds:status ?bs . FILTER(?bs != \"closed\" && ?bs != \"tombstone\") }}\n\
+         \x20 ?item seeds:status \"open\" .\n\
+         \x20 ?item a schema:Action ; schema:identifier ?id .\n\
+         \x20 MINUS {{ ?item quechua:blockedOn ?blocker . ?blocker seeds:status ?bs . FILTER(?bs != \"closed\" && ?bs != \"tombstone\") }}\n\
          }} }}"
+    )
+}
+
+/// A SPARQL group pattern over `?s` (to sit inside `GRAPH <g> { ... }`)
+/// matching a SUPERSET of the subjects whose seed matches `q`
+/// ([`crate::backend::SeedQuery::matches`]), or `None` when `q` constrains
+/// nothing. Each constraint is a bound pattern (an index lookup) for the
+/// value as seeds writes it, plus, where [`crate::model::Seed::from_facts`]
+/// would fall back to a default or skip a value, a branch for the facts that
+/// read that way: a missing or irregular status reads as `open`, a missing or
+/// irregular type as `task`. A default priority is not pushed down at all.
+/// So a graph some other writer filled is still answered exactly; the caller
+/// filters the seeds it gets back again.
+pub fn seed_query_pattern(q: &crate::backend::SeedQuery) -> Option<String> {
+    use crate::validate::escape_literal;
+    if q.is_unconstrained() {
+        return None;
+    }
+    const XSD_INTEGER: &str = "http://www.w3.org/2001/XMLSchema#integer";
+    let lit = |v: &str| format!("\"{}\"", escape_literal(v));
+    let mut n = 0;
+    let mut var = || {
+        n += 1;
+        format!("?sd_v{n}")
+    };
+    // A value read as absent: no fact, or none of the kind from_facts reads.
+    let missing = |p: &str, v: String, regular: String| {
+        format!(
+            "{{ ?s a <{action}> FILTER NOT EXISTS {{ ?s <{p}> {v} FILTER({regular}) }} }}",
+            action = term::work_item(),
+        )
+    };
+    // A plain string, the only kind `Seed::from_facts` reads for these
+    // fields (quipu has no DATATYPE(); a plain literal is the one that is the
+    // same term as its own STR()).
+    let plain = |v: &str| format!("isLiteral({v}) && sameTerm({v}, STR({v}))");
+    let mut groups: Vec<String> = Vec::new();
+    if let Some(want) = &q.statuses {
+        let p = term::status();
+        let mut alts: Vec<String> = want
+            .iter()
+            .map(|w| format!("{{ ?s <{p}> {} }}", lit(w)))
+            .collect();
+        if want.contains("open") {
+            let v = var();
+            alts.push(missing(&p, v.clone(), plain(&v)));
+        }
+        if q.other_statuses {
+            let v = var();
+            let known: Vec<String> = crate::model::STATUSES.iter().map(|s| lit(s)).collect();
+            alts.push(format!(
+                "{{ ?s <{p}> {v} FILTER(isLiteral({v}) && STR({v}) NOT IN ({})) }}",
+                known.join(", ")
+            ));
+        }
+        groups.push(alts.join(" UNION "));
+    }
+    if let Some(t) = &q.issue_type {
+        let p = term::issue_type();
+        let mut alts = vec![format!("{{ ?s <{p}> {} }}", lit(t))];
+        if t == "task" {
+            let v = var();
+            alts.push(missing(&p, v.clone(), plain(&v)));
+        }
+        groups.push(alts.join(" UNION "));
+    }
+    if let Some(a) = &q.assignee {
+        let p = term::assigned_to();
+        groups.push(format!(
+            "{{ ?s <{p}> <{}> }} UNION {{ ?s <{p}> {} }}",
+            principal_iri(a),
+            lit(a)
+        ));
+    }
+    for l in &q.labels {
+        groups.push(format!("{{ ?s <{}> {} }}", term::label(), lit(l)));
+    }
+    // The default priority is also what a missing or unreadable one reads
+    // as, which no bound pattern can find; that constraint stays with the
+    // caller's filter.
+    if let Some(prio) = q.priority.filter(|p| *p != crate::model::DEFAULT_PRIORITY) {
+        groups.push(format!(
+            "{{ ?s <{}> \"{prio}\"^^<{XSD_INTEGER}> }}",
+            term::priority()
+        ));
+    }
+    if let Some(parent) = &q.parent {
+        groups.push(format!(
+            "{{ ?s <{}> <{}> }}",
+            term::child_of(),
+            item_iri(parent)
+        ));
+    }
+    if groups.is_empty() {
+        return None;
+    }
+    Some(
+        groups
+            .into_iter()
+            .map(|g| format!("{{ {g} }}"))
+            .collect::<Vec<_>>()
+            .join(" "),
     )
 }
 
@@ -406,6 +516,29 @@ pub fn claims_query(graph_iri: &str, id: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // aegis-aane52 S2: a query that cannot narrow by a bound pattern says so
+    // (None: read everything) instead of narrowing wrongly. The default
+    // priority is also what a missing priority reads as.
+    #[test]
+    fn a_query_with_nothing_to_push_down_has_no_pattern() {
+        use crate::backend::SeedQuery;
+        assert_eq!(seed_query_pattern(&SeedQuery::default()), None);
+        let default_priority = SeedQuery {
+            priority: Some(crate::model::DEFAULT_PRIORITY),
+            ..SeedQuery::default()
+        };
+        assert_eq!(seed_query_pattern(&default_priority), None);
+        let open = SeedQuery {
+            statuses: Some(["open".to_string()].into()),
+            ..SeedQuery::default()
+        };
+        let p = seed_query_pattern(&open).unwrap();
+        assert!(
+            p.contains("\"open\"") && p.contains("FILTER NOT EXISTS"),
+            "{p}"
+        );
+    }
 
     #[test]
     fn iris_round_trip() {

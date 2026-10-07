@@ -13,7 +13,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use crate::backend::{Backend, Ctx, SeedWrite, WriteBatch};
+use crate::backend::{merge_snapshots, Backend, Ctx, SeedQuery, SeedWrite, WriteBatch};
 use crate::error::{ErrorKind, Result, SdError};
 use crate::ids;
 use crate::model::{self, Comment, Seed, Snapshot};
@@ -494,8 +494,98 @@ pub struct SeedView {
 
 /// `sd show`: the seeds named, as of `at`.
 pub fn show(b: &dyn Backend, ids: &[String], at: Option<u64>) -> Result<Vec<SeedView>> {
-    let snap = b.snapshot(at)?;
+    let snap = if scoped(b, at) {
+        show_scope(b, ids)?
+    } else {
+        b.snapshot(at)?
+    };
     ids.iter().map(|id| view(&snap, id)).collect()
+}
+
+/// Whether a command should read only the items it answers from
+/// ([`Backend::scoped_reads`]): current state on a backend that indexes it.
+/// A pinned read (`--at`) keeps the whole snapshot as of that transaction.
+fn scoped(b: &dyn Backend, at: Option<u64>) -> bool {
+    at.is_none() && b.scoped_reads()
+}
+
+/// Everything [`view`] reads for `ids`: the seeds and their comments, the
+/// seeds they depend on, and the seeds that depend on them.
+fn show_scope(b: &dyn Backend, ids: &[String]) -> Result<Snapshot> {
+    let mut snap = b.snapshot_items(ids)?;
+    let targets: Vec<String> = ids
+        .iter()
+        .filter_map(|id| snap.seeds.get(id))
+        .flat_map(|s| s.dependencies().into_iter().map(|(t, _)| t))
+        .filter(|t| !snap.seeds.contains_key(t))
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect();
+    if !targets.is_empty() {
+        merge_snapshots(&mut snap, b.snapshot_seeds(&targets)?);
+    }
+    merge_snapshots(&mut snap, b.snapshot_dependents(ids)?);
+    Ok(snap)
+}
+
+/// Add to `snap` the seeds that depend on any of `ids`, so
+/// [`Snapshot::dependents`] (a page's dependent counts) answers for them.
+fn with_dependents(b: &dyn Backend, snap: &mut Snapshot, ids: &[String]) -> Result<()> {
+    if !ids.is_empty() {
+        merge_snapshots(snap, b.snapshot_dependents(ids)?);
+    }
+    Ok(())
+}
+
+/// The ids on the page [`page_at`] will cut from `seeds`.
+fn page_ids(seeds: &[Seed], offset: usize, limit: usize) -> Vec<String> {
+    seeds
+        .iter()
+        .skip(offset)
+        .take(if limit == 0 { usize::MAX } else { limit })
+        .map(|s| s.id.clone())
+        .collect()
+}
+
+/// The [`SeedQuery`] for `f` over the seeds a listing shows when no status
+/// is given: every status except those `hidden` (seeds of a status no
+/// writer of this build uses are shown, as a whole-snapshot listing shows
+/// them).
+fn listing_query(f: &CompiledFilter, hidden: &[&str]) -> SeedQuery {
+    let (statuses, other_statuses) = match &f.status {
+        Some(s) => (Some([s.clone()].into()), false),
+        None if hidden.is_empty() => (None, false),
+        None => (
+            Some(
+                model::STATUSES
+                    .iter()
+                    .filter(|s| !hidden.contains(s))
+                    .map(|s| s.to_string())
+                    .collect(),
+            ),
+            true,
+        ),
+    };
+    SeedQuery {
+        statuses,
+        other_statuses,
+        issue_type: f.issue_type.clone(),
+        assignee: f.assignee.clone(),
+        labels: f.labels.clone(),
+        priority: f.priority,
+        parent: f.parent.clone(),
+    }
+}
+
+/// A superset of the seeds `f` (with `q` describing its pushable part) can
+/// match, read as narrowly as the backend allows: the named ids when the
+/// filter names some, else the seeds `q` selects.
+fn matching_snapshot(b: &dyn Backend, f: &CompiledFilter, q: &SeedQuery) -> Result<Snapshot> {
+    if f.ids.is_empty() {
+        b.snapshot_where(q)
+    } else {
+        b.snapshot_seeds(&f.ids.iter().cloned().collect::<Vec<_>>())
+    }
 }
 
 fn view(snap: &Snapshot, id: &str) -> Result<SeedView> {
@@ -729,7 +819,19 @@ pub struct Page {
 /// `sd list`, as of `at`.
 pub fn list(b: &dyn Backend, req: &ListReq, at: Option<u64>) -> Result<Page> {
     let f = req.filter.compile()?;
-    let snap = b.snapshot(at)?;
+    let scoped = scoped(b, at);
+    let mut snap = if scoped {
+        let mut hidden = vec![model::TOMBSTONE];
+        if !req.all {
+            hidden.push("closed");
+            if !req.deferred {
+                hidden.push("deferred");
+            }
+        }
+        matching_snapshot(b, &f, &listing_query(&f, &hidden))?
+    } else {
+        b.snapshot(at)?
+    };
     let mut seeds: Vec<Seed> = snap
         .seeds
         .values()
@@ -746,12 +848,11 @@ pub fn list(b: &dyn Backend, req: &ListReq, at: Option<u64>) -> Result<Page> {
     if req.reverse {
         seeds.reverse();
     }
-    Ok(page_at(
-        seeds,
-        req.offset,
-        req.limit.unwrap_or(DEFAULT_LIST_LIMIT),
-        &snap,
-    ))
+    let limit = req.limit.unwrap_or(DEFAULT_LIST_LIMIT);
+    if scoped {
+        with_dependents(b, &mut snap, &page_ids(&seeds, req.offset, limit))?;
+    }
+    Ok(page_at(seeds, req.offset, limit, &snap))
 }
 
 fn page(seeds: Vec<Seed>, limit: usize, snap: &Snapshot) -> Page {
@@ -1697,7 +1798,36 @@ pub fn ready(b: &dyn Backend, ctx: &Ctx, req: &ReadyReq, at: Option<u64>) -> Res
         _ => None,
     };
     let f = filter.compile()?;
-    let snap = b.snapshot(at)?;
+    // A descendant scope walks the whole parent tree: it keeps the snapshot.
+    let scoped = scoped(b, at) && scope.is_none();
+    let ready_ids = b.ready_ids(at)?;
+    let mut snap = if scoped {
+        let mut snap = b.snapshot_seeds(&ready_ids)?;
+        if req.include_deferred {
+            // Every deferred seed, and what it is blocked on, so the
+            // unblocked ones are found below exactly as in a snapshot.
+            let deferred = SeedQuery {
+                statuses: Some(["deferred".to_string()].into()),
+                ..SeedQuery::default()
+            };
+            merge_snapshots(&mut snap, b.snapshot_where(&deferred)?);
+            let targets: Vec<String> = snap
+                .seeds
+                .values()
+                .filter(|s| s.status == "deferred")
+                .flat_map(|s| s.blocked_on.iter().cloned())
+                .filter(|t| !snap.seeds.contains_key(t))
+                .collect::<BTreeSet<_>>()
+                .into_iter()
+                .collect();
+            if !targets.is_empty() {
+                merge_snapshots(&mut snap, b.snapshot_seeds(&targets)?);
+            }
+        }
+        snap
+    } else {
+        b.snapshot(at)?
+    };
     let under = match &scope {
         Some(p) => {
             snap.get(p)?;
@@ -1705,7 +1835,7 @@ pub fn ready(b: &dyn Backend, ctx: &Ctx, req: &ReadyReq, at: Option<u64>) -> Res
         }
         None => None,
     };
-    let mut ids = b.ready_ids(at)?;
+    let mut ids = ready_ids;
     if req.include_deferred {
         // Status `deferred` is not open, so the backend's ready query never
         // returns it; the unblocked ones are added here.
@@ -1731,7 +1861,11 @@ pub fn ready(b: &dyn Backend, ctx: &Ctx, req: &ReadyReq, at: Option<u64>) -> Res
         "oldest" => sort_seeds(&mut seeds, Some("created"))?,
         _ => sort_seeds(&mut seeds, Some("priority"))?,
     }
-    Ok(page(seeds, req.limit.unwrap_or(0), &snap))
+    let limit = req.limit.unwrap_or(0);
+    if scoped {
+        with_dependents(b, &mut snap, &page_ids(&seeds, 0, limit))?;
+    }
+    Ok(page(seeds, limit, &snap))
 }
 
 /// Every seed below `root` in the parent chain, not `root` itself. A visited
@@ -1801,7 +1935,15 @@ pub struct Count {
 /// `sd count`, as of `at`.
 pub fn count(b: &dyn Backend, req: &CountReq, at: Option<u64>) -> Result<Count> {
     let f = req.filter.compile()?;
-    let snap = b.snapshot(at)?;
+    let snap = if scoped(b, at) {
+        let mut hidden = vec![model::TOMBSTONE];
+        if !req.include_closed {
+            hidden.push("closed");
+        }
+        matching_snapshot(b, &f, &listing_query(&f, &hidden))?
+    } else {
+        b.snapshot(at)?
+    };
     let seeds: Vec<&Seed> = snap
         .seeds
         .values()
@@ -2954,7 +3096,9 @@ pub fn close_as(
                 .to_string(),
         );
     }
-    let snap = b.snapshot(None)?;
+    // The seeds, their comments (a transition comment's index) and their
+    // direct blockers: everything the close checks.
+    let snap = blocking_snapshot(b, ids, false)?;
     let mut writes = Vec::new();
     for id in ids {
         let before = snap.get(id)?;
