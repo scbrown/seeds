@@ -573,6 +573,24 @@ impl Backend for RemoteBackend {
         Some(self.max_write_bytes)
     }
 
+    fn legacy_items(&self) -> Result<u64> {
+        let mut n = 0;
+        for graph in [
+            self.graph.clone(),
+            crate::vocab::ephemeral_graph(&self.graph),
+        ] {
+            let rows = self.select(&vocab::legacy_count_query(&graph), None)?;
+            n += match rows.first().and_then(|r| r.get("n")) {
+                Some(Obj::Int(n)) => u64::try_from(*n).unwrap_or(0),
+                Some(Obj::Str(s) | Obj::Typed { lexical: s, .. }) => s.parse().map_err(|_| {
+                    SdError::failed("quipu returned a non-numeric old-vocabulary count")
+                })?,
+                _ => 0,
+            };
+        }
+        Ok(n)
+    }
+
     fn max_write_clauses(&self) -> Option<usize> {
         Some(self.max_write_clauses)
     }

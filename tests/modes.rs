@@ -1915,3 +1915,165 @@ fn comments_past_the_clause_limit_cross_in_batches_with_their_parent_from_the_re
     let v: Value = serde_json::from_slice(&o.stdout).unwrap();
     assert_eq!(v["remote"]["wrote"], false, "{v}");
 }
+
+// ---------------------------------------------------------------- old vocabulary (sattler, seeds#96)
+
+/// Plant one seed in seeds' OLD vocabulary (as sd 0.0.x wrote it) in a local
+/// store's graph.
+fn plant_old_seed(db: &Path, graph: &str, id: &str) {
+    use quipu::store::{Datum, Store};
+    use quipu::types::{Op, Value as Q};
+    let mut st = Store::open(db.to_str().unwrap()).unwrap();
+    let g = st.graph_create(graph).unwrap();
+    let e = st.intern(&seeds::vocab::item_iri(id)).unwrap();
+    let ty = st
+        .intern("http://www.w3.org/1999/02/22-rdf-syntax-ns#type")
+        .unwrap();
+    let work_item = st.intern(seeds::vocab::LEGACY_WORK_ITEM).unwrap();
+    let rev = st.intern(seeds::vocab::LEGACY_REVISION).unwrap();
+    let ident = st
+        .intern("http://aegis.gastown.local/ontology/identifier")
+        .unwrap();
+    let datums: Vec<Datum> = [
+        (ty, Q::Ref(work_item)),
+        (rev, Q::Int(1)),
+        (ident, Q::Str(id.into())),
+    ]
+    .into_iter()
+    .map(|(attribute, value)| Datum {
+        entity: e,
+        attribute,
+        value,
+        valid_from: "2026-10-01T00:00:00Z".into(),
+        valid_to: None,
+        op: Op::Assert,
+    })
+    .collect();
+    st.transact_to_graph(
+        &datums,
+        "2026-10-01T00:00:00Z",
+        Some("old-sd"),
+        Some("test"),
+        g,
+    )
+    .unwrap();
+}
+
+/// The refusal an old-vocabulary ledger gets: nonzero, the count, the recipe.
+fn assert_old_vocabulary_refused(o: &Output, n: u64, what: &str) {
+    let err = String::from_utf8_lossy(&o.stderr);
+    assert_eq!(o.status.code(), Some(5), "{what}: {err}");
+    assert!(
+        err.contains(&format!(
+            "holds {n} item(s) written in seeds' OLD vocabulary"
+        )) && err.contains("sd cutover export")
+            && err.contains("sd cutover import"),
+        "{what}: {err}"
+    );
+}
+
+/// A local store in the old vocabulary, and a mixed one, are refused by every
+/// read and reported by doctor as a failure; a new-vocabulary store passes.
+#[test]
+fn an_old_vocabulary_store_is_refused_not_read_as_empty() {
+    let env = Env::new("old-vocab");
+    let graph = "https://seeds.local/project/old-vocab";
+    let local = [("SEEDS_GRAPH", graph)];
+
+    // Control: a new-vocabulary store reads and doctors clean.
+    let fresh = env.dir("fresh");
+    let id = env
+        .ok(&fresh, &["create", "new terms", "--silent"], &local)
+        .trim()
+        .to_string();
+    assert!(env.ok(&fresh, &["list"], &local).contains(&id));
+    let d: Value = serde_json::from_str(&env.ok(&fresh, &["doctor", "--json"], &local)).unwrap();
+    let vocab = d["checks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|c| c["name"] == "store.vocabulary")
+        .cloned()
+        .unwrap_or_else(|| panic!("doctor has a vocabulary check: {d}"));
+    assert_eq!(vocab["status"], "ok", "{d}");
+
+    // Old only, then mixed (old planted beside a new seed).
+    let old = env.dir("old");
+    env.ok(&old, &["init"], &local);
+    plant_old_seed(&old.join(".seeds/seeds.db"), graph, "sd-old");
+    plant_old_seed(&fresh.join(".seeds/seeds.db"), graph, "sd-old2");
+    for (dir, what) in [(&old, "old store"), (&fresh, "mixed store")] {
+        for args in [
+            &["list"][..],
+            &["show", "sd-old"],
+            &["ready"],
+            &["create", "would split the board"],
+        ] {
+            let o = env.sd(dir, args, &local);
+            assert_old_vocabulary_refused(&o, 1, &format!("{what}: sd {args:?}"));
+        }
+        let o = env.sd(dir, &["doctor", "--json"], &local);
+        assert_eq!(o.status.code(), Some(1), "{what}: doctor fails");
+        let d: Value = serde_json::from_slice(&o.stdout).unwrap();
+        let vocab = d["checks"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|c| c["name"] == "store.vocabulary")
+            .cloned()
+            .unwrap();
+        assert_eq!(vocab["status"], "error", "{what}: {d}");
+        assert!(vocab["message"]
+            .as_str()
+            .unwrap()
+            .contains("OLD vocabulary"));
+    }
+}
+
+/// The same on a remote graph: a quipu server holding old-vocabulary seeds is
+/// refused, not read as an empty board.
+#[test]
+fn an_old_vocabulary_remote_graph_is_refused() {
+    let mut env = Env::new("old-vocab-remote");
+    let Some(url) = env.start_server() else {
+        eprintln!("SKIPPED: set SEEDS_TEST_QUIPU_SERVER to a quipu-server binary to run this");
+        return;
+    };
+    let port: u16 = url.rsplit(':').next().unwrap().parse().unwrap();
+    let graph = "https://seeds.local/project/old-vocab-remote";
+    let remote = [("SEEDS_QUIPU_URL", url.as_str()), ("SEEDS_GRAPH", graph)];
+    let work = env.dir("work");
+    // Control: the graph reads clean before the old seeds arrive.
+    let id = env
+        .ok(&work, &["create", "new terms", "--silent"], &remote)
+        .trim()
+        .to_string();
+    assert!(env.ok(&work, &["list"], &remote).contains(&id));
+    let old = |id: &str| {
+        format!(
+            "<{}> a <{}> ; <{}> 1 . ",
+            seeds::vocab::item_iri(id),
+            seeds::vocab::LEGACY_WORK_ITEM,
+            seeds::vocab::LEGACY_REVISION
+        )
+    };
+    http_post(
+        port,
+        "/update",
+        "application/x-www-form-urlencoded",
+        &format!(
+            "update={}",
+            form(&format!(
+                "INSERT DATA {{ GRAPH <{graph}> {{ {}{}}} }}",
+                old("sd-a"),
+                old("sd-b")
+            ))
+        ),
+    );
+    for args in [&["list"][..], &["ready"], &["show", &id]] {
+        let o = env.sd(&work, args, &remote);
+        assert_old_vocabulary_refused(&o, 2, &format!("remote: sd {args:?}"));
+    }
+    let o = env.sd(&work, &["doctor"], &remote);
+    assert_eq!(o.status.code(), Some(1), "doctor fails on the remote graph");
+}

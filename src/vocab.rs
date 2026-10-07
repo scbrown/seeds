@@ -299,6 +299,23 @@ pub fn ready_query(graph_iri: &str) -> String {
     )
 }
 
+/// The class seeds wrote before the schema.org switch (aegis-bqgdr3).
+pub const LEGACY_WORK_ITEM: &str = "http://aegis.gastown.local/ontology/WorkItem";
+/// The compare-and-set predicate seeds wrote before the schema.org switch.
+pub const LEGACY_REVISION: &str = "https://seeds.local/ontology/revision";
+
+/// Count the subjects in one graph that carry seeds' OLD vocabulary: an
+/// `aegis:WorkItem` under seeds' item IRIs, or any `seeds:revision` fact.
+/// This build reads neither, so such a store would otherwise look empty.
+pub fn legacy_count_query(graph_iri: &str) -> String {
+    format!(
+        "SELECT (COUNT(DISTINCT ?s) AS ?n) WHERE {{ GRAPH <{graph_iri}> {{\n\
+         \x20 {{ ?s a <{LEGACY_WORK_ITEM}> . FILTER(STRSTARTS(STR(?s), \"{SEEDS_BASE}item/\")) }}\n\
+         \x20 UNION {{ ?s <{LEGACY_REVISION}> ?r }}\n\
+         }} }}"
+    )
+}
+
 /// Percent-encode anything outside the unreserved set, so an id or a name
 /// can sit in an IRI path segment and come back out unchanged.
 pub fn encode(s: &str) -> String {

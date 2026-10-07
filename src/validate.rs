@@ -230,6 +230,26 @@ fn time_problems(batch: &WriteBatch) -> Result<()> {
 /// merge result). Returns every problem found, empty when it conforms.
 pub fn validate_ledger(nt: &str, by_subject: &BTreeMap<String, Vec<Fact>>) -> Vec<String> {
     let mut problems = functional_problems(by_subject);
+    // A ledger in seeds' old vocabulary would read as empty, and importing
+    // it would silently drop every seed.
+    let legacy = by_subject
+        .iter()
+        .filter(|(s, facts)| {
+            facts.iter().any(|(p, o)| {
+                *p == vocab::LEGACY_REVISION
+                    || (p == vocab::RDF_TYPE
+                        && *o == Obj::Iri(vocab::LEGACY_WORK_ITEM.into())
+                        && vocab::item_id(s).is_some())
+            })
+        })
+        .count();
+    if legacy > 0 {
+        problems.push(format!(
+            "{legacy} item(s) are in seeds' OLD vocabulary (aegis:WorkItem / seeds:revision), \
+             which this sd does not read. Migrate with the old sd's `sd cutover export` and \
+             this sd's `sd cutover import`"
+        ));
+    }
     for facts in by_subject.values() {
         if let Some(s) = crate::model::Seed::from_facts(facts) {
             problems.extend(s.time_problems());

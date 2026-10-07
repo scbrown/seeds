@@ -317,6 +317,31 @@ impl Backend for QuipuBackend {
         Ok(crate::backend::claims_rows(id, rows))
     }
 
+    fn legacy_items(&self) -> Result<u64> {
+        let mut n = 0;
+        for graph in [&self.graph_iri, &vocab::ephemeral_graph(&self.graph_iri)] {
+            if self.store.lookup(graph)?.is_none() {
+                continue;
+            }
+            let result = query_temporal(
+                &self.store,
+                &vocab::legacy_count_query(graph),
+                &Self::ctx(None)?,
+            )?;
+            n += result
+                .rows()
+                .first()
+                .and_then(|r| r.get("n"))
+                .and_then(|v| match v {
+                    Value::Int(n) => u64::try_from(*n).ok(),
+                    Value::Typed { lexical, .. } => lexical.parse().ok(),
+                    _ => None,
+                })
+                .unwrap_or(0);
+        }
+        Ok(n)
+    }
+
     fn ready_ids(&self, at: Option<u64>) -> Result<Vec<String>> {
         let result = query_temporal(
             &self.store,

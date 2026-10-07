@@ -92,6 +92,15 @@ a local store, a server and a sync between them hold identical bytes. `sd
 cutover` reports how many times it respelled (`canonicalized_times`), and its
 export gives br back the original spelling.
 
+**A ledger in the old vocabulary is refused, not read as empty.** sd 0.1
+does not read what sd 0.0.x wrote (`aegis:WorkItem`, `seeds:revision`). Every
+command first counts such items in the project graph (one bounded query), and
+when there are any it refuses (exit 5) naming the store or server, the graph
+and the count, with the migration: `sd cutover export` with the old sd, then
+`sd cutover import` with this one into a new store. `sd doctor` reports it as
+a failed `store.vocabulary` check, and a pendant in the old vocabulary fails
+validation the same way.
+
 A comment is its own entity, `https://seeds.local/item/<id>/comment/<n>`, typed
 `schema:Comment`, with `schema:parentItem` (the seed), `schema:position`
 (1-based), `schema:author` (a principal IRI), `schema:text` and

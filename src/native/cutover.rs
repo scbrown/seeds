@@ -55,7 +55,15 @@ fn outcome(v: Value, code: i32) -> Outcome {
 }
 fn snapshot(path: &Path, graph: &str) -> Result<Snapshot> {
     match store::open_for_read(path, graph)? {
-        Some(b) => b.snapshot(None),
+        Some(b) => {
+            // An old-vocabulary store reads as empty; importing into it would
+            // leave two boards in one graph.
+            super::refuse_old_vocabulary(
+                &format!("the store {} (graph {graph})", path.display()),
+                &b,
+            )?;
+            b.snapshot(None)
+        }
         None => Ok(Snapshot::default()),
     }
 }
@@ -255,7 +263,13 @@ pub(super) fn run(cli: &Cli, cfg: &Resolved, ctx: &Ctx, a: &CutoverArgs) -> Resu
         Some(store::open_for_write(path, graph)?)
     };
     let current = match &handle {
-        Some(h) => h.backend.snapshot(None)?,
+        Some(h) => {
+            super::refuse_old_vocabulary(
+                &format!("the store {} (graph {graph})", path.display()),
+                &h.backend,
+            )?;
+            h.backend.snapshot(None)?
+        }
         None => snapshot(path, graph)?,
     };
     if current.seeds.values().any(|s| s.ephemeral) {
