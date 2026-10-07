@@ -48,7 +48,7 @@ attached to each [GitHub release](https://github.com/scbrown/seeds/releases)
 (tags `seeds-ai-v<version>`), with a `SHA256SUMS.txt`.
 
 ```bash
-V=seeds-ai-v0.0.2 T=x86_64-unknown-linux-gnu   # or aarch64-unknown-linux-gnu, aarch64-apple-darwin, x86_64-apple-darwin
+V=seeds-ai-v0.1.1 T=x86_64-unknown-linux-gnu   # or aarch64-unknown-linux-gnu, aarch64-apple-darwin, x86_64-apple-darwin
 curl -fsSLO "https://github.com/scbrown/seeds/releases/download/$V/sd-$V-$T.tar.gz"
 curl -fsSLO "https://github.com/scbrown/seeds/releases/download/$V/SHA256SUMS.txt"
 sha256sum --ignore-missing -c SHA256SUMS.txt     # macOS: shasum -a 256 --ignore-missing -c SHA256SUMS.txt
@@ -68,7 +68,7 @@ sd --version
 ```
 
 ```text
-sd 0.0.2
+sd 0.1.1 (seeds)
 ```
 
 **Already have `sd`?** [chmln/sd](https://github.com/chmln/sd), the popular
@@ -166,11 +166,11 @@ The core (verbs, ready, JSON) also builds for WebAssembly:
 
 | | Linux x86_64 | macOS arm64 | macOS x86_64 | Linux arm64 |
 |---|---|---|---|---|
-| seeds | build | build | build | build |
+| seeds | release | release | release | release |
 
-Rust 1.89 or newer to build. No quipu server: the store is a local file by
-default. A shared quipu server is configurable but not built yet
-([What is built](docs/book/src/status.md)).
+Rust 1.89 or newer to build from source. No quipu server needed: the store is a
+local file by default. A shared quipu server over HTTP is also supported
+(`--quipu <url>`, and `sd sync` between the two; [What is built](docs/book/src/status.md)).
 
 ## What's next
 
