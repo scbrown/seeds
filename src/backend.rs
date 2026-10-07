@@ -7,6 +7,8 @@
 //! reads a clock or the filesystem on its own behalf; time arrives in [`Ctx`].
 
 use crate::error::Result;
+use std::collections::BTreeSet;
+
 use crate::model::{Comment, Fact, Obj, Seed, Snapshot};
 
 /// Who is acting, and when. Injected by the caller: the core never reads a
@@ -108,6 +110,81 @@ pub fn write_record(write_iri: &str, batch: &WriteBatch, ctx: &Ctx) -> Vec<(Stri
     out
 }
 
+/// What a listing's filters say about which seeds can match, in the terms a
+/// backend can answer from an index ([`Backend::snapshot_where`]). Every
+/// field narrows; an empty query matches every seed. Values are compared the
+/// way [`Seed::from_facts`] reads them, so a backend can push each down as a
+/// bound pattern; [`SeedQuery::matches`] is the exact meaning.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct SeedQuery {
+    /// Only seeds whose status is one of these. Statuses outside
+    /// [`crate::model::STATUSES`] are matched too when `other_statuses`.
+    pub statuses: Option<BTreeSet<String>>,
+    /// With `statuses`: also seeds whose status is none of
+    /// [`crate::model::STATUSES`] (a value some other writer stored).
+    pub other_statuses: bool,
+    /// Only this type.
+    pub issue_type: Option<String>,
+    /// Only this assignee.
+    pub assignee: Option<String>,
+    /// Only seeds carrying every one of these labels.
+    pub labels: BTreeSet<String>,
+    /// Only this priority.
+    pub priority: Option<u8>,
+    /// Only children of this seed.
+    pub parent: Option<String>,
+}
+
+impl SeedQuery {
+    /// Whether the query constrains nothing (every seed matches).
+    pub fn is_unconstrained(&self) -> bool {
+        self.statuses.is_none()
+            && self.issue_type.is_none()
+            && self.assignee.is_none()
+            && self.labels.is_empty()
+            && self.priority.is_none()
+            && self.parent.is_none()
+    }
+
+    /// Whether `s` matches: the exact meaning a backend's answer must cover.
+    pub fn matches(&self, s: &Seed) -> bool {
+        let known = crate::model::STATUSES.contains(&s.status.as_str());
+        self.statuses
+            .as_ref()
+            .is_none_or(|w| w.contains(&s.status) || (self.other_statuses && !known))
+            && self.issue_type.as_ref().is_none_or(|t| &s.issue_type == t)
+            && self
+                .assignee
+                .as_ref()
+                .is_none_or(|a| s.assignee.as_ref() == Some(a))
+            && self.labels.is_subset(&s.labels)
+            && self.priority.is_none_or(|p| s.priority == p)
+            && self
+                .parent
+                .as_ref()
+                .is_none_or(|p| s.parent.as_ref() == Some(p))
+    }
+}
+
+/// Add `more` to `snap`: its seeds (a later read of a seed replaces the
+/// earlier one; both are current) and the comments `snap` does not hold yet,
+/// so scoped reads of overlapping items never duplicate a comment.
+pub fn merge_snapshots(snap: &mut Snapshot, more: Snapshot) {
+    snap.seeds.extend(more.seeds);
+    let have: BTreeSet<(String, u64)> = snap
+        .comments
+        .iter()
+        .map(|c| (c.seed.clone(), c.index))
+        .collect();
+    snap.comments.extend(
+        more.comments
+            .into_iter()
+            .filter(|c| !have.contains(&(c.seed.clone(), c.index))),
+    );
+    snap.comments
+        .sort_by(|a, b| (&a.seed, a.index).cmp(&(&b.seed, b.index)));
+}
+
 /// One seed to write, with the revision the writer read it at.
 #[derive(Debug, Clone)]
 pub struct SeedWrite {
@@ -162,6 +239,50 @@ pub trait Backend {
     /// this method alone cannot prove that a claim is unblocked or an edge acyclic.
     fn snapshot_items(&self, _ids: &[String]) -> Result<Snapshot> {
         self.snapshot(None)
+    }
+
+    /// Whether the scoped reads below are answered from an index, so a command
+    /// that answers from a few items should ask for those rather than take a
+    /// whole snapshot. `false` (the default) keeps every command on
+    /// [`Backend::snapshot`]: a local store's snapshot is fast. A remote
+    /// store's is not (a 28k-seed board: ~13 s), so it says `true`
+    /// (aegis-aane52 S2).
+    fn scoped_reads(&self) -> bool {
+        false
+    }
+
+    /// The current state of the named seeds, WITHOUT the guarantee that
+    /// their comments are included (a listing never prints them). Like every
+    /// scoped read it may return more than asked (the default returns
+    /// [`Backend::snapshot_items`]); callers only look up what they asked for.
+    fn snapshot_seeds(&self, ids: &[String]) -> Result<Snapshot> {
+        self.snapshot_items(ids)
+    }
+
+    /// The current state of every seed that may match `q`: a SUPERSET of the
+    /// seeds that do (the caller applies its exact filter again), never a
+    /// subset. Comments are not guaranteed. The default is the whole
+    /// snapshot, the largest superset.
+    fn snapshot_where(&self, _q: &SeedQuery) -> Result<Snapshot> {
+        self.snapshot(None)
+    }
+
+    /// The current state of every seed that declares a dependency of any type
+    /// (blocks, parent-child, related, discovered-from) on one of `ids`, so
+    /// [`Snapshot::dependents`] answers for those ids from the result. A
+    /// superset again; comments are not guaranteed. The default is the whole
+    /// snapshot.
+    fn snapshot_dependents(&self, _ids: &[String]) -> Result<Snapshot> {
+        self.snapshot(None)
+    }
+
+    /// The subjects, in the project graph or its ephemeral graph, whose
+    /// `schema:identifier` is `id`: how a scoped read that missed a seed at
+    /// its canonical IRI ([`crate::vocab::item_iri`]) says where it is
+    /// instead. The default answers nothing (a backend without scoped reads
+    /// never needs it).
+    fn subjects_of_id(&self, _id: &str) -> Result<Vec<String>> {
+        Ok(Vec::new())
     }
 
     /// The ids the ready definition ([`crate::vocab::ready_query`]) selects, as

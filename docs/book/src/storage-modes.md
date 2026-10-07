@@ -120,7 +120,15 @@ token_file = "~/.config/seeds/quipu-token"   # if the server wants a bearer for 
 
 Reads are SPARQL on the server's `/query`, paged so the server's row ceiling
 can never silently shorten a snapshot (a page count that disagrees with a
-`COUNT` is re-read, then refused). Writes are one SPARQL Update per command,
+`COUNT` is re-read, then refused). The everyday commands do not read the
+whole graph: `show`, `update` (but `--parent`), `close`, `comments add` and
+`dep add` (but `parent-child`) read
+the seeds they name, their comments, and the seeds on the other end of their
+edges; `ready` runs the ready query on the server and reads only the seeds it
+returns; `list` and `count` push their status, type, assignee, label,
+priority and parent filters into the query and read only the matches. Each
+prints exactly what a whole-graph read would. `--at` and the remaining
+commands read the whole graph. Writes are one SPARQL Update per command,
 shaped as a compare-and-set:
 
 ```text
