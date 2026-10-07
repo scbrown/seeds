@@ -3291,3 +3291,42 @@ fn a_sync_with_too_many_guard_clauses_is_split_under_the_clause_limit() {
     assert_eq!(remote.seen.iter().sum::<usize>(), 60);
     assert_same(&local, &store);
 }
+
+#[test]
+fn a_seed_with_more_comments_than_the_clause_limit_still_syncs() {
+    // One seed carrying more comments than one write may guard: aegis-h7xuql
+    // has 558 comments against the 500-clause default.
+    let mut local = backend();
+    let id = mk(&mut local, "long thread", 1);
+    for i in 0..30 {
+        engine::comment_add(&mut local, &ctx(3), &id, &format!("reply {i}"), None).unwrap();
+    }
+    let batch = sync::plan_sync(&Default::default(), &local, &backend())
+        .unwrap()
+        .remote
+        .0;
+    let parts = seeds::sync_batch::split_for_cap(&batch, usize::MAX, 9);
+    assert!(
+        parts
+            .iter()
+            .all(|p| seeds::sync_batch::clause_count(p) <= 9),
+        "{:?}",
+        parts
+            .iter()
+            .map(seeds::sync_batch::clause_count)
+            .collect::<Vec<_>>()
+    );
+    assert!(
+        parts[0].seeds.iter().any(|w| w.seed.id == id) && !parts[0].comments.is_empty(),
+        "the seed lands first, with as many of its comments as fit"
+    );
+    let mut store = backend();
+    let mut remote = ClauseCapped {
+        inner: &mut store,
+        clauses: 9,
+        seen: Vec::new(),
+    };
+    sync::sync(&Default::default(), &mut local, &mut remote, &ctx(9), false).unwrap();
+    assert_eq!(remote.seen.iter().sum::<usize>(), 32, "{:?}", remote.seen);
+    assert_same(&local, &store);
+}
