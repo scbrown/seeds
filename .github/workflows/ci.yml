@@ -87,9 +87,13 @@ jobs:
   remote:
     name: Remote (quipu-server)
     runs-on: ubuntu-latest
+    # The newest published release, 0.11.0: the version the production server
+    # reports. Its build is 0.11.0 plus later main commits not yet released
+    # (among them /update reporting counts), so tests must not depend on
+    # what /update answers; they verify by reading back.
     env:
-      QUIPU_TAG: quipu-ai-v0.9.1
-      QUIPU_SHA256: a6e92f38b38400d6254e4a74559a62f97ee8c9ccd7bb33254960feb59bfc480c
+      QUIPU_TAG: quipu-ai-v0.11.0
+      QUIPU_SHA256: 328eacceb9f9c0e8fcb03c0ef2a4af53ca390b65bc02ca25550fce72f98806c7
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable

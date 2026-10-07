@@ -1697,7 +1697,10 @@ fn seeds_canonical_times_equal_a_quipu_servers() {
                 format!("<urn:s:{i}> <urn:p> \"{v}\"^^<http://www.w3.org/2001/XMLSchema#{t}> . ")
             })
             .collect();
-        let report = http_post(
+        // What /update answers differs by server version (a 204 with no body
+        // before quipu#411, counts after), so the write is proven by reading
+        // the stored literals back, which is what this test is about.
+        http_post(
             port,
             "/update",
             "application/x-www-form-urlencoded",
@@ -1705,10 +1708,6 @@ fn seeds_canonical_times_equal_a_quipu_servers() {
                 "update={}",
                 form(&format!("INSERT DATA {{ GRAPH <{g}> {{ {triples}}} }}"))
             ),
-        );
-        assert!(
-            report.contains("\"asserted\""),
-            "the update landed: {report}"
         );
         let q =
             format!("{{\"query\":\"SELECT ?s ?o WHERE {{ GRAPH <{g}> {{ ?s <urn:p> ?o }} }}\"}}");
@@ -1729,6 +1728,11 @@ fn seeds_canonical_times_equal_a_quipu_servers() {
             .iter()
             .map(|r| (text(&r["s"]), text(&r["o"])))
             .collect();
+        assert_eq!(
+            stored.len(),
+            chunk.len(),
+            "read back every literal written to {g}: {body}"
+        );
         for (i, (t, v)) in chunk.iter().enumerate() {
             let server = stored.get(&format!("urn:s:{i}")).expect("stored");
             checked += 1;
