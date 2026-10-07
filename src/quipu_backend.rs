@@ -317,6 +317,29 @@ impl Backend for QuipuBackend {
         Ok(crate::backend::claims_rows(id, rows))
     }
 
+    fn legacy_present(&self) -> Result<bool> {
+        for graph in [&self.graph_iri, &vocab::ephemeral_graph(&self.graph_iri)] {
+            if self.store.lookup(graph)?.is_none() {
+                continue;
+            }
+            match query_temporal(
+                &self.store,
+                &vocab::legacy_presence_query(graph),
+                &Self::ctx(None)?,
+            )? {
+                quipu::sparql::QueryResult::Ask(false) => {}
+                quipu::sparql::QueryResult::Ask(true) => return Ok(true),
+                other => {
+                    return Err(SdError::failed(format!(
+                        "the old-vocabulary check on graph {graph} could not be completed: \
+                         an ASK answered {other:?}"
+                    )))
+                }
+            }
+        }
+        Ok(false)
+    }
+
     fn legacy_items(&self) -> Result<u64> {
         let mut n = 0;
         for graph in [&self.graph_iri, &vocab::ephemeral_graph(&self.graph_iri)] {

@@ -1976,14 +1976,15 @@ fn plant_old_seed(db: &Path, graph: &str, id: &str) {
     .unwrap();
 }
 
-/// The refusal an old-vocabulary ledger gets: nonzero, the count, the recipe.
-fn assert_old_vocabulary_refused(o: &Output, n: u64, what: &str) {
+/// The refusal an old-vocabulary ledger gets: nonzero, what was found, the
+/// recipe. Every command runs the cheap existence check, so it says the data
+/// is there and leaves the count to `sd doctor`.
+fn assert_old_vocabulary_refused(o: &Output, what: &str) {
     let err = String::from_utf8_lossy(&o.stderr);
     assert_eq!(o.status.code(), Some(5), "{what}: {err}");
     assert!(
-        err.contains(&format!(
-            "holds {n} item(s) written in seeds' OLD vocabulary"
-        )) && err.contains("sd cutover export")
+        err.contains("holds old-vocabulary data in seeds' OLD vocabulary")
+            && err.contains("sd cutover export")
             && err.contains("sd cutover import"),
         "{what}: {err}"
     );
@@ -2027,7 +2028,7 @@ fn an_old_vocabulary_store_is_refused_not_read_as_empty() {
             &["create", "would split the board"],
         ] {
             let o = env.sd(dir, args, &local);
-            assert_old_vocabulary_refused(&o, 1, &format!("{what}: sd {args:?}"));
+            assert_old_vocabulary_refused(&o, &format!("{what}: sd {args:?}"));
         }
         let o = env.sd(dir, &["doctor", "--json"], &local);
         assert_eq!(o.status.code(), Some(1), "{what}: doctor fails");
@@ -2040,10 +2041,14 @@ fn an_old_vocabulary_store_is_refused_not_read_as_empty() {
             .cloned()
             .unwrap();
         assert_eq!(vocab["status"], "error", "{what}: {d}");
-        assert!(vocab["message"]
-            .as_str()
-            .unwrap()
-            .contains("OLD vocabulary"));
+        // Doctor alone runs the exact count.
+        assert!(
+            vocab["message"]
+                .as_str()
+                .unwrap()
+                .contains("holds 1 item(s) in seeds' OLD vocabulary"),
+            "{what}: {d}"
+        );
     }
 }
 
@@ -2089,7 +2094,7 @@ fn an_old_vocabulary_remote_graph_is_refused() {
     );
     for args in [&["list"][..], &["ready"], &["show", &id]] {
         let o = env.sd(&work, args, &remote);
-        assert_old_vocabulary_refused(&o, 2, &format!("remote: sd {args:?}"));
+        assert_old_vocabulary_refused(&o, &format!("remote: sd {args:?}"));
     }
     let o = env.sd(&work, &["doctor"], &remote);
     assert_eq!(o.status.code(), Some(1), "doctor fails on the remote graph");
@@ -2145,6 +2150,11 @@ fn the_old_vocabulary_check_refuses_when_its_count_cannot_be_read() {
             "not results JSON",
             Fault::LegacyCount("200 OK", "{\"oops\":true}"),
         ),
+        (
+            "an ASK answer that is not a boolean",
+            Fault::LegacyCount("200 OK", "{\"head\":{},\"boolean\":\"false\"}"),
+        ),
+        ("an empty body", Fault::LegacyCount("200 OK", "")),
         (
             "a server error",
             Fault::LegacyCount("500 Internal Server Error", "{}"),

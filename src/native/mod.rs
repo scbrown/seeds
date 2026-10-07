@@ -498,8 +498,10 @@ fn doctor(json: bool, cfg: &Resolved, b: &mut dyn Backend, a: &cli::DoctorArgs) 
             None
         }
     };
-    // One bounded COUNT, so --quick runs it too: an old-vocabulary ledger
-    // reads as empty, which every other check would report as healthy.
+    // The exact COUNT (slower than the existence check every other command
+    // runs), so the report says how much there is. --quick runs it too: an
+    // old-vocabulary ledger reads as empty, which every other check would
+    // report as healthy.
     match b.legacy_items() {
         Ok(0) => add(
             "store.vocabulary",
@@ -509,7 +511,7 @@ fn doctor(json: bool, cfg: &Resolved, b: &mut dyn Backend, a: &cli::DoctorArgs) 
         Ok(n) => add(
             "store.vocabulary",
             "error",
-            old_vocabulary(&ledger_label(cfg), n).message,
+            old_vocabulary(&ledger_label(cfg), &format!("{n} item(s)")).message,
         ),
         Err(e) => add("store.vocabulary", "error", e.message.clone()),
     }
@@ -2019,11 +2021,12 @@ fn ledger_label(cfg: &Resolved) -> String {
 
 /// The refusal for a ledger holding seeds' old vocabulary (`aegis:WorkItem`,
 /// `seeds:revision`), which this build does not read: without it the ledger
-/// would read as empty, or a write would split it in two.
-fn old_vocabulary(label: &str, n: u64) -> SdError {
+/// would read as empty, or a write would split it in two. `found` says what
+/// was found: an exact count (doctor) or only that it is there.
+fn old_vocabulary(label: &str, found: &str) -> SdError {
     SdError::refused(format!(
-        "{label} holds {n} item(s) written in seeds' OLD vocabulary (aegis:WorkItem / \
-         seeds:revision), which sd {} does not read; nothing was read or written. Migrate \
+        "{label} holds {found} in seeds' OLD vocabulary (aegis:WorkItem / seeds:revision), \
+         which sd {} does not read; nothing was read or written. `sd doctor` counts it. Migrate \
          it: with the old sd (0.0.x), `sd cutover export --file board.jsonl --store <old \
          store> --graph <graph>`; then with this sd, `sd cutover import --file board.jsonl \
          --store <a NEW store> --graph <graph>`. That export drops any seed already in the \
@@ -2037,9 +2040,9 @@ fn old_vocabulary(label: &str, n: u64) -> SdError {
 /// check that cannot complete refuses too, keeping the error's kind: it is
 /// never read as a clean ledger.
 fn refuse_old_vocabulary(label: &str, b: &dyn Backend) -> Result<()> {
-    match b.legacy_items() {
-        Ok(0) => Ok(()),
-        Ok(n) => Err(old_vocabulary(label, n)),
+    match b.legacy_present() {
+        Ok(false) => Ok(()),
+        Ok(true) => Err(old_vocabulary(label, "old-vocabulary data")),
         Err(e) => Err(SdError::new(
             e.kind,
             format!(

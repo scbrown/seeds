@@ -304,9 +304,20 @@ pub const LEGACY_WORK_ITEM: &str = "http://aegis.gastown.local/ontology/WorkItem
 /// The compare-and-set predicate seeds wrote before the schema.org switch.
 pub const LEGACY_REVISION: &str = "https://seeds.local/ontology/revision";
 
+/// Whether one graph holds ANY of seeds' old vocabulary: a bounded existence
+/// check on one bound predicate, cheap enough to run before every command.
+///
+/// `seeds:revision` alone is enough. Every sd that could write a store (0.0.2
+/// to 0.0.4; 0.0.1 shipped no code) wrote it on every seed, unconditionally,
+/// in `Seed::facts`, so a store holding old seeds holds that predicate; the
+/// `aegis:WorkItem` type adds nothing to the answer and cost a scan.
+pub fn legacy_presence_query(graph_iri: &str) -> String {
+    format!("ASK {{ GRAPH <{graph_iri}> {{ ?s <{LEGACY_REVISION}> ?r }} }}")
+}
+
 /// Count the subjects in one graph that carry seeds' OLD vocabulary: an
 /// `aegis:WorkItem` under seeds' item IRIs, or any `seeds:revision` fact.
-/// This build reads neither, so such a store would otherwise look empty.
+/// Exact but slower than [`legacy_presence_query`]; only `sd doctor` runs it.
 pub fn legacy_count_query(graph_iri: &str) -> String {
     format!(
         "SELECT (COUNT(DISTINCT ?s) AS ?n) WHERE {{ GRAPH <{graph_iri}> {{\n\

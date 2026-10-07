@@ -193,10 +193,18 @@ pub trait Backend {
         None
     }
 
-    /// How many subjects in the project (and its ephemeral graph) were
-    /// written in seeds' OLD vocabulary ([`crate::vocab::legacy_count_query`]):
-    /// a store this build would otherwise read as empty. One bounded COUNT
-    /// per graph, so every command can afford to ask.
+    /// Whether the project (or its ephemeral graph) holds ANY data in
+    /// seeds' OLD vocabulary ([`crate::vocab::legacy_presence_query`]): a
+    /// store this build would otherwise read as empty. One bounded existence
+    /// check per graph, so every command can afford to ask. Fails closed: an
+    /// answer that is not a clear yes or no is an error.
+    fn legacy_present(&self) -> Result<bool> {
+        Ok(false)
+    }
+
+    /// How many subjects hold the old vocabulary
+    /// ([`crate::vocab::legacy_count_query`]). Exact and slower; `sd doctor`
+    /// reports it.
     fn legacy_items(&self) -> Result<u64> {
         Ok(0)
     }
