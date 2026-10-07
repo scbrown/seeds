@@ -2938,3 +2938,356 @@ fn indexed_dependency_walk_keeps_long_cycle_and_revision_guards() {
     assert!(err.message.contains("context changed"));
     assert_eq!(b.inner.snapshot(None).unwrap().seeds, before.seeds);
 }
+
+// ---- a sync too large for one request (aegis-w3k75d.15) ----
+
+/// A remote with a request limit: it advertises `advertised` and really
+/// refuses (TOO_LARGE, unsent) any batch whose estimate is over `limit`.
+/// `fail_at` makes the n-th commit attempt (1-based) fail unwritten, as a
+/// dropped connection would before the server read the request.
+struct Capped<'a> {
+    inner: &'a mut QuipuBackend,
+    advertised: usize,
+    limit: usize,
+    fail_at: Option<usize>,
+    attempts: usize,
+    landed: Vec<usize>,
+}
+
+impl Backend for Capped<'_> {
+    fn snapshot(&self, at: Option<u64>) -> seeds::error::Result<seeds::model::Snapshot> {
+        self.inner.snapshot(at)
+    }
+    fn ready_ids(&self, at: Option<u64>) -> seeds::error::Result<Vec<String>> {
+        self.inner.ready_ids(at)
+    }
+    fn claims_of(&self, id: &str) -> seeds::error::Result<Vec<(u64, seeds::backend::Claims)>> {
+        self.inner.claims_of(id)
+    }
+    fn max_write_bytes(&self) -> Option<usize> {
+        Some(self.advertised)
+    }
+    fn commit(&mut self, batch: &WriteBatch, ctx: &Ctx) -> seeds::error::Result<u64> {
+        self.attempts += 1;
+        if self.fail_at == Some(self.attempts) {
+            return Err(seeds::error::SdError::new(
+                ErrorKind::Unreachable,
+                "connection refused",
+            ));
+        }
+        if seeds::sync_batch::estimate_bytes(batch) > self.limit {
+            return Err(seeds::error::SdError::refused(format!(
+                "{}: test limit",
+                seeds::backend::TOO_LARGE
+            )));
+        }
+        let tx = self.inner.commit(batch, ctx)?;
+        self.landed.push(
+            batch.seeds.len()
+                + batch.comments.len()
+                + batch.delete_seeds.len()
+                + batch.delete_comments.len(),
+        );
+        Ok(tx)
+    }
+}
+
+/// A chain of `n` seeds, each blocked on the one before, each with a comment.
+fn chain(b: &mut QuipuBackend, n: usize) -> Vec<String> {
+    let mut ids: Vec<String> = Vec::new();
+    for i in 0..n {
+        let id = mk(b, &format!("step {i}"), 1);
+        if let Some(prev) = ids.last() {
+            engine::dep_add(b, &ctx(2), &id, prev, "blocks").unwrap();
+        }
+        engine::comment_add(b, &ctx(3), &id, &format!("note on step {i}"), None).unwrap();
+        ids.push(id);
+    }
+    ids
+}
+
+fn assert_same(local: &QuipuBackend, remote: &QuipuBackend) {
+    let (l, r) = (
+        local.snapshot(None).unwrap(),
+        remote.snapshot(None).unwrap(),
+    );
+    assert_eq!(l.seeds, r.seeds, "remote holds exactly the local seeds");
+    assert_eq!(
+        l.comments, r.comments,
+        "and exactly its comments, once each"
+    );
+}
+
+#[test]
+fn a_sync_over_the_request_limit_lands_in_ordered_batches() {
+    let mut local = backend();
+    chain(&mut local, 24);
+    let whole = sync::plan_sync(&Default::default(), &local, &backend())
+        .unwrap()
+        .remote
+        .0;
+    let cap = seeds::sync_batch::estimate_bytes(&whole) / 5;
+    let mut store = backend();
+    let mut remote = Capped {
+        inner: &mut store,
+        advertised: cap,
+        limit: cap,
+        fail_at: None,
+        attempts: 0,
+        landed: Vec::new(),
+    };
+    let mut seen = Vec::new();
+    sync::sync_with_progress(
+        &Default::default(),
+        &mut local,
+        &mut remote,
+        &ctx(9),
+        false,
+        &mut |b| seen.push(b),
+    )
+    .unwrap();
+    assert!(remote.landed.len() >= 5, "split: {:?}", remote.landed);
+    assert_eq!(remote.attempts, remote.landed.len(), "no batch was refused");
+    assert_eq!(
+        seen.len(),
+        remote.landed.len(),
+        "one progress line per batch"
+    );
+    assert_eq!(seen.last().unwrap().done, seen.last().unwrap().planned);
+    assert_eq!(
+        remote.landed.iter().sum::<usize>(),
+        48,
+        "24 seeds + 24 comments"
+    );
+    assert_same(&local, &store);
+    // Nothing left to push.
+    let base = local.snapshot(None).unwrap();
+    let (_, _, rr) = sync::sync(
+        &base,
+        &mut local,
+        &mut backend_ref(&mut store),
+        &ctx(10),
+        false,
+    )
+    .unwrap();
+    assert!(!rr.wrote);
+}
+
+/// `&mut QuipuBackend` as an owned-looking backend, for a plain sync.
+fn backend_ref(b: &mut QuipuBackend) -> Capped<'_> {
+    Capped {
+        inner: b,
+        advertised: usize::MAX,
+        limit: usize::MAX,
+        fail_at: None,
+        attempts: 0,
+        landed: Vec::new(),
+    }
+}
+
+#[test]
+fn a_split_push_that_stops_part_way_resumes_without_duplicates() {
+    let mut local = backend();
+    chain(&mut local, 24);
+    let local_before = local.snapshot(None).unwrap();
+    let whole = sync::plan_sync(&Default::default(), &local, &backend())
+        .unwrap()
+        .remote
+        .0;
+    let cap = seeds::sync_batch::estimate_bytes(&whole) / 5;
+    let mut store = backend();
+    let mut remote = Capped {
+        inner: &mut store,
+        advertised: cap,
+        limit: cap,
+        fail_at: Some(3),
+        attempts: 0,
+        landed: Vec::new(),
+    };
+    let e = sync::sync(&Default::default(), &mut local, &mut remote, &ctx(9), false).unwrap_err();
+    assert_eq!(e.kind, ErrorKind::Unreachable, "the failure keeps its kind");
+    assert!(e.message.contains("2 landed"), "{}", e.message);
+    assert!(e.message.contains("re-run"), "{}", e.message);
+    assert_eq!(remote.landed.len(), 2);
+    let landed_first = remote.landed.iter().sum::<usize>();
+    let after = local.snapshot(None).unwrap();
+    assert_eq!(after.seeds, local_before.seeds, "local untouched");
+    assert_eq!(after.comments, local_before.comments);
+
+    // The same sync again: only what did not land is written.
+    remote.fail_at = None;
+    remote.landed.clear();
+    sync::sync(
+        &Default::default(),
+        &mut local,
+        &mut remote,
+        &ctx(10),
+        false,
+    )
+    .unwrap();
+    assert_eq!(
+        remote.landed.iter().sum::<usize>() + landed_first,
+        48,
+        "every item written exactly once across both runs"
+    );
+    assert_same(&local, &store);
+}
+
+#[test]
+fn a_batch_refused_as_too_large_is_halved_and_still_lands() {
+    let mut local = backend();
+    chain(&mut local, 16);
+    let whole = sync::plan_sync(&Default::default(), &local, &backend())
+        .unwrap()
+        .remote
+        .0;
+    let est = seeds::sync_batch::estimate_bytes(&whole);
+    let mut store = backend();
+    // The server's real limit is far below what it advertises.
+    let mut remote = Capped {
+        inner: &mut store,
+        advertised: est / 2,
+        limit: est / 7,
+        fail_at: None,
+        attempts: 0,
+        landed: Vec::new(),
+    };
+    sync::sync(&Default::default(), &mut local, &mut remote, &ctx(9), false).unwrap();
+    assert!(
+        remote.attempts > remote.landed.len(),
+        "some batch was halved"
+    );
+    assert_same(&local, &store);
+}
+
+#[test]
+fn a_write_too_large_to_split_is_refused_and_writes_nothing() {
+    let mut local = backend();
+    chain(&mut local, 1);
+    let mut store = backend();
+    let mut remote = Capped {
+        inner: &mut store,
+        advertised: 64,
+        limit: 64,
+        fail_at: None,
+        attempts: 0,
+        landed: Vec::new(),
+    };
+    let e = sync::sync(&Default::default(), &mut local, &mut remote, &ctx(9), false).unwrap_err();
+    assert_eq!(e.kind, ErrorKind::Refused);
+    assert!(seeds::backend::is_too_large(&e), "{}", e.message);
+    assert!(store.snapshot(None).unwrap().seeds.is_empty());
+}
+
+#[test]
+fn split_for_cap_orders_blockers_first_and_keeps_cycles_and_comments_together() {
+    let mut local = backend();
+    let ids = chain(&mut local, 12);
+    let mut batch = sync::plan_sync(&Default::default(), &local, &backend())
+        .unwrap()
+        .remote
+        .0;
+    // Reverse the input so the order is the splitter's work, not the plan's.
+    batch.seeds.reverse();
+    // Close a cycle between the last two seeds (the splitter does not
+    // validate; it must still keep a cycle in one batch).
+    let (x, y) = (ids[10].clone(), ids[11].clone());
+    for w in &mut batch.seeds {
+        if w.seed.id == x {
+            w.seed.blocked_on.insert(y.clone());
+        }
+    }
+    let cap = seeds::sync_batch::estimate_bytes(&batch) / 6;
+    let parts = seeds::sync_batch::split_for_cap(&batch, cap, usize::MAX);
+    assert!(parts.len() >= 4, "{}", parts.len());
+    let pos = |id: &str| {
+        parts
+            .iter()
+            .position(|p| p.seeds.iter().any(|w| w.seed.id == id))
+            .unwrap()
+    };
+    for w in &batch.seeds {
+        for b in &w.seed.blocked_on {
+            assert!(
+                pos(b) <= pos(&w.seed.id),
+                "{b} lands no later than {}",
+                w.seed.id
+            );
+        }
+    }
+    assert_eq!(pos(&x), pos(&y), "the cycle travels together");
+    for p in &parts {
+        assert_eq!(p.source, batch.source);
+        for c in &p.comments {
+            assert!(
+                p.seeds.iter().any(|w| w.seed.id == c.seed),
+                "comment with its seed"
+            );
+        }
+    }
+    let mut all: Vec<String> = parts
+        .iter()
+        .flat_map(|p| p.seeds.iter().map(|w| w.seed.id.clone()))
+        .collect();
+    all.sort();
+    let mut want = ids.clone();
+    want.sort();
+    assert_eq!(all, want, "every seed exactly once");
+    assert_eq!(
+        parts.iter().map(|p| p.comments.len()).sum::<usize>(),
+        batch.comments.len()
+    );
+    // A batch that fits is not split.
+    assert_eq!(
+        seeds::sync_batch::split_for_cap(&batch, usize::MAX, usize::MAX).len(),
+        1
+    );
+}
+
+/// A remote that nests at most `clauses` guard clauses per write, the
+/// quipu-server abort this limit exists for (aegis-rq1afp).
+struct ClauseCapped<'a> {
+    inner: &'a mut QuipuBackend,
+    clauses: usize,
+    seen: Vec<usize>,
+}
+
+impl Backend for ClauseCapped<'_> {
+    fn snapshot(&self, at: Option<u64>) -> seeds::error::Result<seeds::model::Snapshot> {
+        self.inner.snapshot(at)
+    }
+    fn ready_ids(&self, at: Option<u64>) -> seeds::error::Result<Vec<String>> {
+        self.inner.ready_ids(at)
+    }
+    fn claims_of(&self, id: &str) -> seeds::error::Result<Vec<(u64, seeds::backend::Claims)>> {
+        self.inner.claims_of(id)
+    }
+    fn max_write_clauses(&self) -> Option<usize> {
+        Some(self.clauses)
+    }
+    fn commit(&mut self, batch: &WriteBatch, ctx: &Ctx) -> seeds::error::Result<u64> {
+        let n = seeds::sync_batch::clause_count(batch);
+        assert!(
+            n <= self.clauses,
+            "a batch nesting {n} clauses reached the server"
+        );
+        self.seen.push(n);
+        self.inner.commit(batch, ctx)
+    }
+}
+
+#[test]
+fn a_sync_with_too_many_guard_clauses_is_split_under_the_clause_limit() {
+    let mut local = backend();
+    chain(&mut local, 20); // 20 new seeds (2 clauses each) + 20 comments = 60
+    let mut store = backend();
+    let mut remote = ClauseCapped {
+        inner: &mut store,
+        clauses: 9,
+        seen: Vec::new(),
+    };
+    sync::sync(&Default::default(), &mut local, &mut remote, &ctx(9), false).unwrap();
+    assert!(remote.seen.len() >= 7, "{:?}", remote.seen);
+    assert_eq!(remote.seen.iter().sum::<usize>(), 60);
+    assert_same(&local, &store);
+}

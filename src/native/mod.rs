@@ -900,9 +900,12 @@ fn capabilities(command_path: Option<&str>) -> Result<Json> {
             .collect::<Vec<_>>(),
         "env_vars": ["SEEDS_ACTOR", "SEEDS_QUIPU_STORE", "SEEDS_QUIPU_URL", "SEEDS_GRAPH",
                      "SEEDS_PREFIX", "SEEDS_SYNC_REMOTE", "SEEDS_QUIPU_TOKEN",
-                     "SEEDS_QUIPU_TOKEN_FILE"],
+                     "SEEDS_QUIPU_TOKEN_FILE", "SEEDS_MAX_WRITE_BYTES",
+                     "SEEDS_MAX_WRITE_CLAUSES"],
         "safety": [
             "every write is one quipu transaction: all named seeds change, or none do",
+            "a sync over the server's request limit is pushed in dependency-ordered batches, one transaction each; a re-run resumes",
+            "a write over the request limit is refused before it is sent (exit 5), never reported as unknown",
             "a lost response is read back; an unconfirmed write is exit 8, never a blind retry",
             "an unreachable server is exit 7; sd never falls back to a local store",
             "a token is never sent to a project-chosen server unless the user trusts its host",
@@ -1327,7 +1330,9 @@ fn run_remote(cli: &Cli, cfg: &Resolved, ctx: &Ctx, url: &str) -> Result<Outcome
         token(cfg, url, cfg.location_from_project)?,
         signer(cfg, url, cfg.location_from_project)?,
         &cfg.allow_plain_http_hosts,
-    )?;
+    )?
+    .with_max_write_bytes(cfg.max_write_bytes)
+    .with_max_write_clauses(cfg.max_write_clauses);
     match &cli.command {
         Command::Export(a) => {
             let dir = export_dir(a.to.as_deref(), cfg)?;
@@ -1553,7 +1558,9 @@ fn run_sync(
         token(cfg, &url, from_project)?,
         signer(cfg, &url, from_project)?,
         &cfg.allow_plain_http_hosts,
-    )?;
+    )?
+    .with_max_write_bytes(cfg.max_write_bytes)
+    .with_max_write_clauses(cfg.max_write_clauses);
     let base_path = store::sync_base_path(path, &url, cfg.graph());
     let base_existed = base_path.exists();
     let base = match std::fs::read_to_string(&base_path) {
@@ -1607,12 +1614,21 @@ fn run_sync(
         };
         return Ok(with_notes(o, notes));
     }
-    let (_, local_r, remote_r) = sync::sync(
+    let quiet = cli.quiet;
+    let (_, local_r, remote_r) = sync::sync_with_progress(
         &base,
         &mut h.backend,
         &mut remote,
         ctx,
         a.allow_remote_deletes,
+        &mut |b| {
+            if !quiet {
+                eprintln!(
+                    "sd: remote batch {}/{} landed: {} item(s), tx {}",
+                    b.done, b.planned, b.items, b.tx
+                );
+            }
+        },
     )?;
     // The new base is what both sides now hold.
     let merged = pendant::export(&h.backend)?;

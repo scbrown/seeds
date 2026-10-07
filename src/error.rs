@@ -76,7 +76,7 @@ impl ErrorKind {
             ErrorKind::Usage => "a malformed request: a bad flag value, --at on a write; clap usage errors too",
             ErrorKind::NotFound => "a seed, dependency or comment that does not exist",
             ErrorKind::Conflict => "a compare-and-set lost or a claim was taken; nothing was written, re-read and retry",
-            ErrorKind::Refused => "well-formed but refused: shapes, a dependency cycle, closing with open blockers",
+            ErrorKind::Refused => "well-formed but refused: shapes, a dependency cycle, closing with open blockers, a write over the request limit (never sent)",
             ErrorKind::Config => "the configuration is contradictory or unreadable",
             ErrorKind::Unreachable => "the configured quipu server could not be reached; sd never falls back to a local store",
             ErrorKind::Indeterminate => "a write's outcome is unknown (response lost, read-back unconfirmed); check before anything else",

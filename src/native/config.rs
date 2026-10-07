@@ -172,7 +172,22 @@ pub struct Resolved {
     pub token_file: Option<PathBuf>,
     /// The signing key file, session and introducer, if configured.
     pub signing: Option<Signing>,
+    /// The largest write request to send a quipu server, in bytes
+    /// (`SEEDS_MAX_WRITE_BYTES`, default [`DEFAULT_MAX_WRITE_BYTES`]). A larger
+    /// sync is pushed in batches; a larger single write is refused unsent.
+    pub max_write_bytes: usize,
+    /// The most guard clauses one write request may nest
+    /// (`SEEDS_MAX_WRITE_CLAUSES`, default [`DEFAULT_MAX_WRITE_CLAUSES`]).
+    pub max_write_clauses: usize,
 }
+
+/// The default write request cap: under quipu's 64 MiB `/update` body
+/// limit, with room for a proxy's own headers.
+pub const DEFAULT_MAX_WRITE_BYTES: usize = 48 * 1024 * 1024;
+
+/// The default guard-clause cap per write: a quarter of the smallest nesting
+/// measured to abort quipu-server's `/update` (2,000 `UNION` branches).
+pub const DEFAULT_MAX_WRITE_CLAUSES: usize = 500;
 
 /// A configured signing identity (user-level only).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -207,6 +222,10 @@ pub struct Inputs {
     pub env_token: Option<String>,
     /// `SEEDS_QUIPU_TOKEN_FILE`.
     pub env_token_file: Option<String>,
+    /// `SEEDS_MAX_WRITE_BYTES`.
+    pub env_max_write_bytes: Option<String>,
+    /// `SEEDS_MAX_WRITE_CLAUSES`.
+    pub env_max_write_clauses: Option<String>,
     /// `--store`.
     pub flag_store: Option<String>,
     /// `--quipu`.
@@ -240,6 +259,8 @@ impl Inputs {
             env_sync_remote: var("SEEDS_SYNC_REMOTE"),
             env_token: var("SEEDS_QUIPU_TOKEN"),
             env_token_file: var("SEEDS_QUIPU_TOKEN_FILE"),
+            env_max_write_bytes: var("SEEDS_MAX_WRITE_BYTES"),
+            env_max_write_clauses: var("SEEDS_MAX_WRITE_CLAUSES"),
             flag_store,
             flag_url,
             flag_graph,
@@ -500,6 +521,27 @@ pub fn resolve(inputs: &Inputs) -> Result<Resolved> {
         },
         None => None,
     };
+    let positive = |v: &Option<String>, name: &str, default: usize| -> Result<usize> {
+        match v {
+            None => Ok(default),
+            Some(v) => match v.trim().parse::<usize>() {
+                Ok(n) if n > 0 => Ok(n),
+                _ => Err(config_error(format!(
+                    "{name} must be a positive whole number, not {v:?}"
+                ))),
+            },
+        }
+    };
+    let max_write_bytes = positive(
+        &inputs.env_max_write_bytes,
+        "SEEDS_MAX_WRITE_BYTES",
+        DEFAULT_MAX_WRITE_BYTES,
+    )?;
+    let max_write_clauses = positive(
+        &inputs.env_max_write_clauses,
+        "SEEDS_MAX_WRITE_CLAUSES",
+        DEFAULT_MAX_WRITE_CLAUSES,
+    )?;
     Ok(Resolved {
         location,
         location_source,
@@ -515,6 +557,8 @@ pub fn resolve(inputs: &Inputs) -> Result<Resolved> {
         token: inputs.env_token.clone(),
         token_file,
         signing,
+        max_write_bytes,
+        max_write_clauses,
     })
 }
 
