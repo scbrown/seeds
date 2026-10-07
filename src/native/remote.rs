@@ -580,13 +580,8 @@ impl Backend for RemoteBackend {
             crate::vocab::ephemeral_graph(&self.graph),
         ] {
             let rows = self.select(&vocab::legacy_count_query(&graph), None)?;
-            n += match rows.first().and_then(|r| r.get("n")) {
-                Some(Obj::Int(n)) => u64::try_from(*n).unwrap_or(0),
-                Some(Obj::Str(s) | Obj::Typed { lexical: s, .. }) => s.parse().map_err(|_| {
-                    SdError::failed("quipu returned a non-numeric old-vocabulary count")
-                })?,
-                _ => 0,
-            };
+            let counts: Vec<Option<&Obj>> = rows.iter().map(|r| r.get("n")).collect();
+            n += crate::backend::legacy_count(&graph, &counts)?;
         }
         Ok(n)
     }

@@ -2026,16 +2026,28 @@ fn old_vocabulary(label: &str, n: u64) -> SdError {
          seeds:revision), which sd {} does not read; nothing was read or written. Migrate \
          it: with the old sd (0.0.x), `sd cutover export --file board.jsonl --store <old \
          store> --graph <graph>`; then with this sd, `sd cutover import --file board.jsonl \
-         --store <a NEW store> --graph <graph>`",
+         --store <a NEW store> --graph <graph>`. That export drops any seed already in the \
+         new vocabulary in a mixed store; only a pre-0.1.0 sd writing beside 0.1.0 could \
+         have made one",
         env!("CARGO_PKG_VERSION")
     ))
 }
 
-/// Refuse a ledger that holds old-vocabulary items (one bounded COUNT).
+/// Refuse a ledger that holds old-vocabulary items (one bounded COUNT). A
+/// check that cannot complete refuses too, keeping the error's kind: it is
+/// never read as a clean ledger.
 fn refuse_old_vocabulary(label: &str, b: &dyn Backend) -> Result<()> {
-    match b.legacy_items()? {
-        0 => Ok(()),
-        n => Err(old_vocabulary(label, n)),
+    match b.legacy_items() {
+        Ok(0) => Ok(()),
+        Ok(n) => Err(old_vocabulary(label, n)),
+        Err(e) => Err(SdError::new(
+            e.kind,
+            format!(
+                "{label}: the old-vocabulary check could not be completed, so the ledger \
+                 cannot be shown to be readable; nothing was read or written: {}",
+                e.message
+            ),
+        )),
     }
 }
 

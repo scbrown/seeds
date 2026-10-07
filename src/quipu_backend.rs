@@ -328,16 +328,16 @@ impl Backend for QuipuBackend {
                 &vocab::legacy_count_query(graph),
                 &Self::ctx(None)?,
             )?;
-            n += result
+            let counts = result
                 .rows()
-                .first()
-                .and_then(|r| r.get("n"))
-                .and_then(|v| match v {
-                    Value::Int(n) => u64::try_from(*n).ok(),
-                    Value::Typed { lexical, .. } => lexical.parse().ok(),
-                    _ => None,
-                })
-                .unwrap_or(0);
+                .iter()
+                .map(|r| r.get("n").map(|v| self.obj_of(v)).transpose())
+                .collect::<Result<Vec<_>>>()?;
+            let counts: Vec<Option<&Obj>> = counts
+                .iter()
+                .map(|c| c.as_ref().and_then(Option::as_ref))
+                .collect();
+            n += crate::backend::legacy_count(graph, &counts)?;
         }
         Ok(n)
     }

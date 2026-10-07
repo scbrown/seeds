@@ -202,6 +202,31 @@ pub trait Backend {
     }
 }
 
+/// The old-vocabulary count from the rows of
+/// [`crate::vocab::legacy_count_query`] on `graph`. Fails CLOSED: anything but
+/// exactly one row with one non-negative integer `n` (no row, several rows, a
+/// missing or non-numeric count) is an error, never a clean zero, because a
+/// zero read from a broken answer is the silent-empty failure this check
+/// exists to prevent.
+pub fn legacy_count(graph: &str, rows: &[Option<&Obj>]) -> Result<u64> {
+    let bad = |why: &str| {
+        crate::error::SdError::failed(format!(
+            "the old-vocabulary check on graph {graph} could not be completed: {why}"
+        ))
+    };
+    let [only] = rows else {
+        return Err(bad(&format!("expected one count row, got {}", rows.len())));
+    };
+    match only {
+        Some(Obj::Int(n)) => u64::try_from(*n).map_err(|_| bad(&format!("negative count {n}"))),
+        Some(Obj::Str(s) | Obj::Typed { lexical: s, .. }) => s
+            .parse()
+            .map_err(|_| bad(&format!("the count {s:?} is not a number"))),
+        Some(other) => Err(bad(&format!("the count is not a literal: {other:?}"))),
+        None => Err(bad("the answer has no count")),
+    }
+}
+
 /// How a refusal for exceeding [`Backend::max_write_bytes`] begins. The kind
 /// is [`crate::error::ErrorKind::Refused`]: the write was never sent.
 pub const TOO_LARGE: &str = "write too large for the server";
@@ -242,4 +267,44 @@ pub fn claims_rows(
     out.sort_by_key(|a| a.0);
     out.dedup();
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // seeds#96 follow-up (sattler): the old-vocabulary count fails CLOSED.
+    // Reading any of these as 0 would report a broken answer as a clean,
+    // new-vocabulary ledger.
+    #[test]
+    fn the_old_vocabulary_count_fails_closed() {
+        let g = "urn:g";
+        let int = |n| Obj::Int(n);
+        let s = |v: &str| Obj::Str(v.into());
+        assert_eq!(legacy_count(g, &[Some(&int(0))]).unwrap(), 0);
+        assert_eq!(legacy_count(g, &[Some(&int(3))]).unwrap(), 3);
+        assert_eq!(legacy_count(g, &[Some(&s("2"))]).unwrap(), 2);
+        let typed = Obj::Typed {
+            lexical: "4".into(),
+            datatype: crate::model::XSD_INTEGER.into(),
+        };
+        assert_eq!(legacy_count(g, &[Some(&typed)]).unwrap(), 4);
+        let iri = Obj::Iri("urn:x".into());
+        for (what, rows) in [
+            ("no row", vec![]),
+            ("no count in the row", vec![None]),
+            ("two rows", vec![Some(&int(0)), Some(&int(0))]),
+            ("a negative count", vec![Some(&int(-1))]),
+            ("a non-numeric count", vec![Some(&s("lots"))]),
+            ("an empty count", vec![Some(&s(""))]),
+            ("an IRI for a count", vec![Some(&iri)]),
+        ] {
+            let e = legacy_count(g, &rows).expect_err(what);
+            assert!(
+                e.message.contains("could not be completed") && e.message.contains(g),
+                "{what}: {}",
+                e.message
+            );
+        }
+    }
 }
