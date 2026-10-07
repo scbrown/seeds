@@ -6,7 +6,7 @@ built on the other tools:
 | tool | what seeds uses it for |
 |---|---|
 | [quipu](https://github.com/scbrown/quipu) | the store, embedded as a library: SPARQL reads, transactions, time travel, qpacks |
-| [camayoc](https://github.com/scbrown/camayoc) | the `WorkItem` vocabulary and shape every write is checked against; the ready query is meant to become one of its stored queries |
+| [camayoc](https://github.com/scbrown/camayoc) | the governance terms (Quechua `sourceKind`, `outcome`, `blockedOn`) and constraints every write is checked against; the ready query is meant to become one of its stored queries |
 | [caboodle](https://github.com/scbrown/caboodle) | installs seeds and proves it in `caboodle verify` |
 | [desire-path](https://github.com/scbrown/desire-path) | redirects `bd` to seeds, and records every verb seeds refuses |
 | [shuttle](https://github.com/scbrown/shuttle) | formulas: the workflow engine that will stamp and drive seeds; a seed records its run today |

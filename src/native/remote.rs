@@ -7,7 +7,7 @@
 //! ```text
 //! DELETE { GRAPH <g> { <seed> ?p ?o ... } }     every fact of every seed written
 //! INSERT { GRAPH <g> { ...the new facts... } }
-//! WHERE  { GRAPH <g> { <seed> seeds:revision N ... }     the revisions the writer read
+//! WHERE  { GRAPH <g> { <seed> schema:version N ... }     the versions the writer read
 //!          FILTER NOT EXISTS { GRAPH <g> { <new> ?x ?y } }   what must not exist yet
 //!          { <seed> ?p ?o } UNION ... UNION { } }
 //! ```

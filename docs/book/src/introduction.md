@@ -34,8 +34,8 @@ is what a work item is: something in motion that ends up in the record.
   no garbage collection to schedule and no SQL server to start and stop.
 - **Identity is built in.** A project is a named graph, and its IRI is its
   identity. There is no separate project-id row to drift out of sync.
-- **Governed writes.** Every write is validated against camayoc's WorkItem
-  shape and seeds' own, so a seed with an unknown status or a dependency on
+- **Governed writes.** Every write is validated against the seeds profile
+  (camayoc's governance constraints plus the tracker's own), so a seed with an unknown status or a dependency on
   nothing is refused at the door. See [The storage model](storage.md).
 - **Share a ledger like a package.** A project's graph, its shapes and the
   queries that define "ready" travel together as a qpack.

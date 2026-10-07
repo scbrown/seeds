@@ -15,7 +15,7 @@
           ├──▶ QuipuBackend ── quipu (embedded) ── .seeds/seeds.db ⇄ .seeds/pendant/ (git)
           └──▶ RemoteBackend ── quipu server: /query, /update (compare-and-set)
                 one project = one named graph; one write = one transaction
-                shapes: camayoc WorkItem + seeds
+                shapes: the seeds profile over schema:Action
 ```
 
 ## The pieces
@@ -32,9 +32,11 @@
   (`ready` runs a query) and fact scans; each write is one transaction of
   retractions and assertions. See [The storage model](storage.md), including
   why seeds embeds quipu rather than calling a quipu server.
-- **camayoc** owns what a work item *means*: seeds reuses its `WorkItem`
-  vocabulary and validates every write against its shape. The ready query is
-  written to become a camayoc stored query.
+- **camayoc** owns what a work item *means*: a seed is a `schema:Action`
+  carrying camayoc's governance terms (Quechua `sourceKind`, `outcome`,
+  `blockedOn`), and every write is validated against the seeds profile that
+  carries camayoc's constraints. The ready query is written to become a
+  camayoc stored query.
 - **A crew harness** can treat seeds as one more work-item tracker: the
   `--json` shapes are br's, so a tracker adapter written for br reads them.
 - **caboodle** and **desire-path** integration (install and verify; the `bd`

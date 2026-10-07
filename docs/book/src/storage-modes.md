@@ -80,8 +80,9 @@ working tree stays clean until something actually changes.
 
 A loaded pendant is always **validated on its own terms**, not just checked
 against its manifest: every seed must hold exactly one status, priority, title
-and revision, every `blocks` edge must point at a seed in the ledger, and (in
-the native build) the whole ledger must pass the WorkItem shapes. A pendant that
+and version, every time must be a valid `xsd:date` or `xsd:dateTime`, every
+`blocks` edge must point at a seed in the ledger, and (in the native build)
+the whole ledger must pass the seeds shapes. A pendant that
 fails is refused with every problem listed, and the store is left as it was.
 
 ### Merging branches
@@ -125,7 +126,7 @@ shaped as a compare-and-set:
 ```text
 DELETE { GRAPH <project> { <seed> ?p ?o } }
 INSERT { GRAPH <project> { …the new facts… } }
-WHERE  { GRAPH <project> { <seed> seeds:revision 4 }       # the revision read
+WHERE  { GRAPH <project> { <seed> schema:version 4 }       # the version read
          FILTER NOT EXISTS { GRAPH <project> { <new-seed> ?x ?y } }
          { GRAPH <project> { <seed> ?p ?o } } UNION { } }
 ```

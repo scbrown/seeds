@@ -149,7 +149,7 @@ dp alias --cmd bd --replace sd
 A `bd` verb seeds rejects is recorded, so `dp paths` becomes the seeds backlog
 (the alias itself lives in desire-path and is not wired up yet). seeds embeds
 quipu as a library: every write is one quipu transaction in the project's
-named graph, validated against camayoc's WorkItem shape. How the pieces fit:
+named graph, a `schema:Action` validated against the seeds profile. How the pieces fit:
 [Architecture](docs/book/src/architecture.md) and
 [The storage model](docs/book/src/storage.md).
 
@@ -188,7 +188,7 @@ Caboodle installs these together and proves each one works; every tool also stan
 | [seeds](https://github.com/scbrown/seeds) **(you are here)** | the work your agents track, as facts in the graph with full history |
 
 seeds is the stack's work tracker, built on the others: quipu stores it,
-camayoc supplies its WorkItem vocabulary and shape, caboodle installs and
+camayoc supplies its governance terms and constraints, caboodle installs and
 verifies it, and desire-path redirects `bd` to it.
 [How seeds fits the stack](docs/book/src/stack.md).
 

@@ -755,7 +755,16 @@ fn schema_info() -> serde_json::Value {
     serde_json::json!({
         "shapes_sha256": format!("{digest:x}"),
         "target_classes": targets,
-        "vocabularies": {"seeds": crate::vocab::SEEDS, "aegis": crate::vocab::AEGIS},
+        "vocabularies": {
+            "seeds": crate::vocab::SEEDS,
+            "schema": crate::vocab::SCHEMA,
+            "quechua": crate::vocab::QUECHUA,
+            "ical": crate::vocab::ICAL,
+            "dcterms": crate::vocab::DCTERMS,
+            "prov": crate::vocab::PROV,
+            // Still on the provenance side graph's attribution claims.
+            "aegis": crate::vocab::AEGIS,
+        },
         "json_schemas": "sd schema",
     })
 }
@@ -1386,7 +1395,7 @@ fn export_outcome(
         .export_nt()
         .map(|t| {
             t.lines()
-                .filter(|l| l.contains("/ontology/identifier>"))
+                .filter(|l| l.contains(&format!("<{}>", crate::vocab::term::identifier())))
                 .count()
         })
         .unwrap_or(0);

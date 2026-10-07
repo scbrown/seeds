@@ -269,8 +269,10 @@ fn a_repo_local_pendant_is_written_on_every_change_and_a_copy_is_the_board() {
     let new = std::fs::read_to_string(clone.join(".seeds/pendant/export.nt")).unwrap();
     let removed = old.lines().filter(|l| !new.contains(l)).count();
     let added = new.lines().filter(|l| !old.contains(l)).count();
+    // status, dateModified, version and the derived actionStatus change; a
+    // close adds endTime, result and outcome.
     assert!(
-        removed <= 4 && added <= 6,
+        removed <= 5 && added <= 7,
         "small diff: -{removed} +{added}"
     );
 
@@ -414,6 +416,26 @@ fn remote_mode_reads_and_writes_a_quipu_server() {
     env.ok(&work, &["dep", "add", &a, &g], &remote);
     assert_eq!(env.ready(&work, &remote), vec![g.clone()]);
     env.ok(&work, &["comments", "add", &a, "over http"], &remote);
+    // Typed values over /update: the server stores the canonical form of a
+    // duration (PT90M as PT1H30M), which must still read as the estimate,
+    // and a due instant keeps its exact lexical form.
+    env.ok(
+        &work,
+        &[
+            "update",
+            &a,
+            "--estimate",
+            "90",
+            "--due",
+            "2026-09-06T18:47:22.616951891Z",
+        ],
+        &remote,
+    );
+    let shown: Value =
+        serde_json::from_str(&env.ok(&work, &["show", &a, "--json"], &remote)).unwrap();
+    let shown = if shown.is_array() { &shown[0] } else { &shown };
+    assert_eq!(shown["estimated_minutes"], 90, "{shown}");
+    assert_eq!(shown["due_at"], "2026-09-06T18:47:22.616951891Z", "{shown}");
     env.ok(&work, &["close", &g, "--reason", "done"], &remote);
     assert_eq!(env.ready(&work, &remote), vec![a.clone()]);
     // Only the project id (which names the remote graph); no local store.

@@ -5,9 +5,9 @@
 - **Verbs**: `create`, `show`, `list`, `ready`, `count`, `update` (including
   an atomic `--claim`), `close`, `dep add|remove|list`, `comments add|list`,
   each with `--json` in br's shape. See [the verbs](verbs/README.md).
-- **Storage**: work items as facts in a quipu named graph, typed with
-  camayoc's WorkItem vocabulary and validated against its shape on every
-  write. See [The storage model](storage.md).
+- **Storage**: work items as facts in a quipu named graph, typed as
+  `schema:Action` (schema.org first, Quechua for governance) and validated
+  against the seeds profile on every write. See [The storage model](storage.md).
 - **Pinning**: `--at <tx>` on every read resolves the project as of that
   transaction. See [Pinning](pinning.md).
 - **Concurrency**: writers are serialised by a file lock and every write is a

@@ -58,7 +58,7 @@ pub fn parse_type(s: &str) -> Result<String> {
     }
 }
 
-/// How a closed seed ended: camayoc's `aegis:outcome` values.
+/// How a closed seed ended: the governed `quechua:outcome` values.
 pub const OUTCOMES: [&str; 4] = ["done", "abandoned", "superseded", "failed"];
 
 /// Parse a close outcome (one of [`OUTCOMES`]).
@@ -104,7 +104,7 @@ pub fn parse_dep_type(s: &str) -> Result<String> {
 pub struct Seed {
     /// The id, e.g. `sd-a3f` or `sd-a3f.1`.
     pub id: String,
-    /// The title (`rdfs:label`).
+    /// The title (`schema:name`, and `rdfs:label` with the same value).
     pub title: String,
     /// Long description.
     pub description: Option<String>,
@@ -277,17 +277,26 @@ impl Seed {
             (vocab::RDF_TYPE.into(), Obj::Iri(term::work_item())),
             (term::source_kind(), Obj::Str("declared".into())),
             (term::identifier(), Obj::Str(self.id.clone())),
+            (term::name(), Obj::Str(self.title.clone())),
             (vocab::RDFS_LABEL.into(), Obj::Str(self.title.clone())),
             (term::status(), Obj::Str(self.status.clone())),
             (term::priority(), Obj::Int(i64::from(self.priority))),
             (term::issue_type(), Obj::Str(self.issue_type.clone())),
-            (term::created_at(), Obj::Str(self.created_at.clone())),
-            (term::updated_at(), Obj::Str(self.updated_at.clone())),
+            (term::created_at(), date_time(&self.created_at)),
+            (term::updated_at(), date_time(&self.updated_at)),
             (term::revision(), Obj::Int(self.revision as i64)),
         ];
+        if let Some(a) = action_status(&self.status, self.outcome.as_deref()) {
+            f.push((term::action_status(), Obj::Iri(vocab::schema(a))));
+        }
         let opt = |f: &mut Vec<Fact>, p: String, v: &Option<String>| {
             if let Some(v) = v {
                 f.push((p, Obj::Str(v.clone())));
+            }
+        };
+        let person = |f: &mut Vec<Fact>, p: String, v: &Option<String>| {
+            if let Some(v) = v {
+                f.push((p, Obj::Iri(vocab::principal_iri(v))));
             }
         };
         opt(&mut f, term::description(), &self.description);
@@ -300,15 +309,21 @@ impl Seed {
             &self.acceptance_criteria,
         );
         opt(&mut f, term::external_ref(), &self.external_ref);
-        opt(&mut f, term::due_at(), &self.due_at);
-        if let Some(m) = self.estimated_minutes {
-            f.push((term::estimated_minutes(), Obj::Int(i64::from(m))));
+        if let Some(d) = &self.due_at {
+            f.push((term::due_at(), date_or_date_time(d)));
         }
-        opt(&mut f, term::owner(), &self.owner);
-        opt(&mut f, term::created_by(), &self.created_by);
-        opt(&mut f, term::closed_at(), &self.closed_at);
+        if let Some(m) = self.estimated_minutes {
+            f.push((term::estimated_minutes(), minutes_duration(m)));
+        }
+        person(&mut f, term::owner(), &self.owner);
+        person(&mut f, term::created_by(), &self.created_by);
+        if let Some(c) = &self.closed_at {
+            f.push((term::closed_at(), date_time(c)));
+        }
         opt(&mut f, term::close_reason(), &self.close_reason);
-        opt(&mut f, term::defer_until(), &self.defer_until);
+        if let Some(d) = &self.defer_until {
+            f.push((term::defer_until(), date_or_date_time(d)));
+        }
         if self.status == "closed" {
             let outcome = self.outcome.clone().unwrap_or_else(|| "done".into());
             f.push((term::outcome(), Obj::Str(outcome)));
@@ -406,7 +421,10 @@ impl Seed {
     }
 
     /// Rebuild a seed from its facts. `None` when the facts do not describe a
-    /// seed (no `aegis:WorkItem` type or no identifier).
+    /// seed (no `schema:Action` type or no identifier). The derived
+    /// `schema:actionStatus` and the `rdfs:label` beside `schema:name` are
+    /// modelled, so they are recomputed on the next write, never carried as
+    /// extras.
     pub fn from_facts(facts: &[Fact]) -> Option<Seed> {
         let mut by: BTreeMap<&str, Vec<&Obj>> = BTreeMap::new();
         for (p, o) in facts {
@@ -430,6 +448,26 @@ impl Seed {
             by.get(p.as_str()).and_then(|v| {
                 v.iter().find_map(|o| match o {
                     Obj::Int(n) => Some(*n),
+                    _ => None,
+                })
+            })
+        };
+        // A time's lexical form, whatever datatype it arrived with (an older
+        // store wrote plain strings).
+        let t = |p: String| -> Option<String> {
+            by.get(p.as_str()).and_then(|v| {
+                v.iter().find_map(|o| match o {
+                    Obj::Str(s) | Obj::Typed { lexical: s, .. } => Some(s.clone()),
+                    _ => None,
+                })
+            })
+        };
+        // A principal: its IRI's name, or a plain string as written.
+        let who = |p: String| -> Option<String> {
+            by.get(p.as_str()).and_then(|v| {
+                v.iter().find_map(|o| match o {
+                    Obj::Iri(iri) => vocab::principal_name(iri),
+                    Obj::Str(s) => Some(s.clone()),
                     _ => None,
                 })
             })
@@ -461,36 +499,34 @@ impl Seed {
         let id = s(term::identifier())?;
         Some(Seed {
             id,
-            title: s(vocab::RDFS_LABEL.into()).unwrap_or_default(),
+            title: s(term::name())
+                .or_else(|| s(vocab::RDFS_LABEL.into()))
+                .unwrap_or_default(),
             description: s(term::description()),
             notes: s(term::notes()),
             design: s(term::design()),
             agent_context: s(term::agent_context()),
             acceptance_criteria: s(term::acceptance_criteria()),
             external_ref: s(term::external_ref()),
-            due_at: s(term::due_at()),
-            estimated_minutes: i(term::estimated_minutes()).and_then(|m| u32::try_from(m).ok()),
-            owner: s(term::owner()),
+            due_at: t(term::due_at()),
+            estimated_minutes: t(term::estimated_minutes())
+                .as_deref()
+                .and_then(parse_minutes_duration),
+            owner: who(term::owner()),
             status: s(term::status()).unwrap_or_else(|| "open".into()),
             priority: i(term::priority())
                 .and_then(|p| u8::try_from(p).ok())
                 .unwrap_or(DEFAULT_PRIORITY),
             issue_type: s(term::issue_type()).unwrap_or_else(|| "task".into()),
-            assignee: by.get(term::assigned_to().as_str()).and_then(|v| {
-                v.iter().find_map(|o| match o {
-                    Obj::Iri(iri) => vocab::principal_name(iri),
-                    Obj::Str(s) => Some(s.clone()),
-                    _ => None,
-                })
-            }),
+            assignee: who(term::assigned_to()),
             labels: strs(term::label()),
-            created_at: s(term::created_at()).unwrap_or_default(),
-            created_by: s(term::created_by()),
-            updated_at: s(term::updated_at()).unwrap_or_default(),
-            closed_at: s(term::closed_at()),
+            created_at: t(term::created_at()).unwrap_or_default(),
+            created_by: who(term::created_by()),
+            updated_at: t(term::updated_at()).unwrap_or_default(),
+            closed_at: t(term::closed_at()),
             close_reason: s(term::close_reason()),
             outcome: s(term::outcome()),
-            defer_until: s(term::defer_until()),
+            defer_until: t(term::defer_until()),
             blocked_on: ids(term::blocked_on()),
             related: ids(term::related_to()),
             parent: ids(term::child_of()).into_iter().next(),
@@ -506,8 +542,39 @@ impl Seed {
                 .unwrap_or(0),
             // Set by Snapshot::from_graphs, which knows the graph.
             ephemeral: false,
-            extra: unmodelled(facts, &term::work_item()),
+            extra: unread_estimate(facts)
+                .chain(unmodelled(facts, &term::work_item()))
+                .collect(),
         })
+    }
+
+    /// Why this seed's times cannot be written, one line per bad field, empty
+    /// when they all can. Nothing is coerced: a value that is not already a
+    /// valid `xsd:dateTime` (or, for due and defer, `xsd:date`) lexical form
+    /// is refused, so what is stored round-trips byte for byte.
+    pub fn time_problems(&self) -> Vec<String> {
+        let mut out = Vec::new();
+        let mut check = |field: &str, v: Option<&str>, date_ok: bool| {
+            if let Some(v) = v {
+                if !(is_xsd_date_time(v) || (date_ok && is_xsd_date(v))) {
+                    out.push(format!(
+                        "{}: {field} {v:?} is not {}",
+                        self.id,
+                        if date_ok {
+                            "an xsd:date (YYYY-MM-DD) or an xsd:dateTime"
+                        } else {
+                            "an xsd:dateTime"
+                        }
+                    ));
+                }
+            }
+        };
+        check("created_at", Some(&self.created_at), false);
+        check("updated_at", Some(&self.updated_at), false);
+        check("closed_at", self.closed_at.as_deref(), false);
+        check("due_at", self.due_at.as_deref(), true);
+        check("defer_until", self.defer_until.as_deref(), true);
+        out
     }
 
     /// Every dependency this seed declares, as (depends-on id, type).
@@ -666,9 +733,9 @@ impl Comment {
             (vocab::RDF_TYPE.into(), Obj::Iri(term::comment())),
             (term::comment_on(), Obj::Iri(vocab::item_iri(&self.seed))),
             (term::comment_index(), Obj::Int(self.index as i64)),
-            (term::author(), Obj::Str(self.author.clone())),
+            (term::author(), Obj::Iri(vocab::principal_iri(&self.author))),
             (term::text(), Obj::Str(self.text.clone())),
-            (term::created_at(), Obj::Str(self.created_at.clone())),
+            (term::created_at(), date_time(&self.created_at)),
         ];
         f.extend(self.extra.iter().cloned());
         f
@@ -687,9 +754,12 @@ impl Comment {
                 (vocab::RDF_TYPE, Obj::Iri(c)) if *c == term::comment() => typed = true,
                 (p, Obj::Iri(i)) if p == term::comment_on() => seed = vocab::item_id(i),
                 (p, Obj::Int(n)) if p == term::comment_index() => index = u64::try_from(*n).ok(),
+                (p, Obj::Iri(i)) if p == term::author() => author = vocab::principal_name(i),
                 (p, Obj::Str(s)) if p == term::author() => author = Some(s.clone()),
                 (p, Obj::Str(s)) if p == term::text() => text = Some(s.clone()),
-                (p, Obj::Str(s)) if p == term::created_at() => created_at = Some(s.clone()),
+                (p, Obj::Str(s) | Obj::Typed { lexical: s, .. }) if p == term::created_at() => {
+                    created_at = Some(s.clone())
+                }
                 _ => {}
             }
         }
@@ -706,6 +776,18 @@ impl Comment {
         })
     }
 
+    /// Why this comment's time cannot be written (see
+    /// [`Seed::time_problems`]).
+    pub fn time_problems(&self) -> Vec<String> {
+        if is_xsd_date_time(&self.created_at) {
+            return Vec::new();
+        }
+        vec![format!(
+            "{} comment {}: created_at {:?} is not an xsd:dateTime",
+            self.seed, self.index, self.created_at
+        )]
+    }
+
     /// bd's comment JSON shape.
     pub fn to_json(&self) -> Json {
         json!({
@@ -716,6 +798,206 @@ impl Comment {
             "created_at": self.created_at,
         })
     }
+}
+
+/// The derived `schema:actionStatus` (its local name) for a status and
+/// outcome, written in the same write as the status so the two cannot drift
+/// (the shapes check they agree). `None` for a tombstone, which is not an
+/// action any more. A closed seed with no outcome counts as `done`, the
+/// outcome `facts()` writes for it.
+pub fn action_status(status: &str, outcome: Option<&str>) -> Option<&'static str> {
+    match status {
+        "open" | "hooked" | "blocked" | "deferred" => Some("PotentialActionStatus"),
+        "in_progress" => Some("ActiveActionStatus"),
+        "closed" => match outcome.unwrap_or("done") {
+            "done" => Some("CompletedActionStatus"),
+            _ => Some("FailedActionStatus"),
+        },
+        _ => None,
+    }
+}
+
+/// An instant as an `xsd:dateTime` literal, lexical form unchanged.
+fn date_time(v: &str) -> Obj {
+    Obj::Typed {
+        lexical: v.to_string(),
+        datatype: vocab::XSD_DATE_TIME.into(),
+    }
+}
+
+/// A due or defer value: `xsd:date` when it is a bare `YYYY-MM-DD`, else
+/// `xsd:dateTime`, lexical form unchanged ([`Seed::time_problems`] refuses
+/// one that is neither).
+fn date_or_date_time(v: &str) -> Obj {
+    if is_xsd_date(v) {
+        Obj::Typed {
+            lexical: v.to_string(),
+            datatype: vocab::XSD_DATE.into(),
+        }
+    } else {
+        date_time(v)
+    }
+}
+
+/// A minute estimate as `"PT<n>M"^^xsd:duration`.
+fn minutes_duration(m: u32) -> Obj {
+    Obj::Typed {
+        lexical: format!("PT{m}M"),
+        datatype: vocab::XSD_DURATION.into(),
+    }
+}
+
+/// The whole minutes in a day/hour/minute duration. seeds writes `PT<n>M`,
+/// but a quipu server's `/update` stores the XSD canonical form, so `PT90M`
+/// reads back as `PT1H30M`, `PT1440M` as `P1D` and `PT0M` as `PT0S`; all of
+/// those are the same minutes. Anything else (years, months, a sign, a
+/// fraction, seconds that are not zero) is not read as minutes: the fact is
+/// carried as an extra instead, so it is neither rewritten nor dropped.
+fn parse_minutes_duration(v: &str) -> Option<u32> {
+    let rest = v.strip_prefix('P')?;
+    let (day_part, time_part) = match rest.split_once('T') {
+        Some((d, t)) if !t.is_empty() => (d, Some(t)),
+        Some(_) => return None,
+        None => (rest, None),
+    };
+    if day_part.is_empty() && time_part.is_none() {
+        return None;
+    }
+    // Number-designator pairs in the order XSD requires, each at most once.
+    let fields = |s: &str, order: &[u8]| -> Option<Vec<(u8, u64)>> {
+        let mut out = Vec::new();
+        let mut n = String::new();
+        let mut next = 0;
+        for c in s.bytes() {
+            if c.is_ascii_digit() {
+                n.push(c as char);
+                continue;
+            }
+            let at = order[next..].iter().position(|&d| d == c)? + next;
+            if n.is_empty() {
+                return None;
+            }
+            out.push((c, n.parse().ok()?));
+            n.clear();
+            next = at + 1;
+        }
+        n.is_empty().then_some(out)
+    };
+    let mut minutes: u64 = 0;
+    for (d, n) in fields(day_part, b"D")? {
+        debug_assert_eq!(d, b'D');
+        minutes = minutes.checked_add(n.checked_mul(1440)?)?;
+    }
+    if let Some(t) = time_part {
+        for (d, n) in fields(t, b"HMS")? {
+            minutes = match d {
+                b'H' => minutes.checked_add(n.checked_mul(60)?)?,
+                b'M' => minutes.checked_add(n)?,
+                _ if n == 0 => minutes,
+                _ => return None,
+            };
+        }
+    }
+    u32::try_from(minutes).ok()
+}
+
+/// A `schema:timeRequired` this sd cannot read as minutes, kept as an extra.
+fn unread_estimate(facts: &[Fact]) -> impl Iterator<Item = (String, Obj)> + '_ {
+    let p = term::estimated_minutes();
+    facts
+        .iter()
+        .filter(move |(q, o)| {
+            *q == p
+                && !matches!(o, Obj::Str(s) | Obj::Typed { lexical: s, .. }
+                    if parse_minutes_duration(s).is_some())
+        })
+        .cloned()
+}
+
+/// Whether `s` is a bare `YYYY-MM-DD` that names a real day: the only
+/// `xsd:date` form seeds writes (no time zone).
+pub fn is_xsd_date(s: &str) -> bool {
+    let b = s.as_bytes();
+    b.len() == 10
+        && b[4] == b'-'
+        && b[7] == b'-'
+        && digits(&b[..4])
+        && real_day(&b[..4], &b[5..7], &b[8..10])
+}
+
+/// Whether `s` is a valid `xsd:dateTime` lexical form (XML Schema 1.1):
+/// `YYYY-MM-DDThh:mm:ss`, optional fractional seconds, optional `Z` or
+/// `+hh:mm`/`-hh:mm`. A four-digit year only (seeds' instants are all
+/// four-digit), `24:00:00` allowed as the end of a day. Pure byte checks, so
+/// the wasm build carries it.
+pub fn is_xsd_date_time(s: &str) -> bool {
+    let b = s.as_bytes();
+    if b.len() < 19 || b[4] != b'-' || b[7] != b'-' || b[10] != b'T' {
+        return false;
+    }
+    if b[13] != b':' || b[16] != b':' {
+        return false;
+    }
+    if !digits(&b[..4]) || !real_day(&b[..4], &b[5..7], &b[8..10]) {
+        return false;
+    }
+    let (Some(h), Some(mi), Some(sec)) = (two(&b[11..13]), two(&b[14..16]), two(&b[17..19])) else {
+        return false;
+    };
+    let mut rest = &b[19..];
+    let mut fraction_nonzero = false;
+    if let Some(f) = rest.strip_prefix(b".") {
+        let n = f.iter().take_while(|c| c.is_ascii_digit()).count();
+        if n == 0 {
+            return false;
+        }
+        fraction_nonzero = f[..n].iter().any(|&c| c != b'0');
+        rest = &f[n..];
+    }
+    let time_ok =
+        (h < 24 && mi < 60 && sec < 60) || (h == 24 && mi == 0 && sec == 0 && !fraction_nonzero);
+    if !time_ok {
+        return false;
+    }
+    match rest {
+        b"" | b"Z" => true,
+        [sign, tz @ ..] if (*sign == b'+' || *sign == b'-') && tz.len() == 5 && tz[2] == b':' => {
+            match (two(&tz[..2]), two(&tz[3..])) {
+                (Some(th), Some(tm)) => (th < 14 && tm < 60) || (th == 14 && tm == 0),
+                _ => false,
+            }
+        }
+        _ => false,
+    }
+}
+
+fn digits(b: &[u8]) -> bool {
+    b.iter().all(u8::is_ascii_digit)
+}
+
+/// A two-digit field's value.
+fn two(b: &[u8]) -> Option<u32> {
+    (b.len() == 2 && digits(b)).then(|| u32::from(b[0] - b'0') * 10 + u32::from(b[1] - b'0'))
+}
+
+/// Whether year/month/day (as ASCII digits) name a real Gregorian day.
+fn real_day(y: &[u8], m: &[u8], d: &[u8]) -> bool {
+    let (Some(m), Some(d)) = (two(m), two(d)) else {
+        return false;
+    };
+    let y: u32 = std::str::from_utf8(y)
+        .ok()
+        .and_then(|y| y.parse().ok())
+        .unwrap_or(0);
+    let leap = (y.is_multiple_of(4) && !y.is_multiple_of(100)) || y.is_multiple_of(400);
+    let days = match m {
+        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
+        4 | 6 | 9 | 11 => 30,
+        2 if leap => 29,
+        2 => 28,
+        _ => return false,
+    };
+    (1..=days).contains(&d)
 }
 
 /// The facts among `facts` this sd does not model: any predicate outside
@@ -891,12 +1173,160 @@ mod tests {
     }
 
     #[test]
-    fn closed_seed_carries_camayoc_outcome() {
+    fn closed_seed_carries_the_governed_outcome() {
         let mut s = sample();
         s.status = "closed".into();
         assert!(s
             .facts()
             .contains(&(term::outcome(), Obj::Str("done".into()))));
+    }
+
+    // aegis-bqgdr3 table v1.1: every field round-trips through the typed,
+    // schema.org-first facts, with the derived terms never read back as extras.
+    #[test]
+    fn the_maximal_seed_round_trips_with_no_extras() {
+        let mut s = Seed::maximal();
+        s.created_at = "2026-09-06T18:47:22.616951891Z".into();
+        s.updated_at = "2026-09-06T18:47:22Z".into();
+        s.closed_at = Some("2026-09-07T00:00:00+02:00".into());
+        s.defer_until = Some("2026-10-03T14:00:00Z".into());
+        s.revision = 7;
+        let back = Seed::from_facts(&s.facts()).unwrap();
+        assert!(back.extra.is_empty(), "{:?}", back.extra);
+        assert_eq!(back, s);
+        let f = s.facts();
+        let name = f.iter().filter(|(p, _)| *p == term::name()).count();
+        let label = f.iter().filter(|(p, _)| p == vocab::RDFS_LABEL).count();
+        assert_eq!((name, label), (1, 1), "name and label once each");
+        assert!(f.contains(&(
+            term::estimated_minutes(),
+            Obj::Typed {
+                lexical: "PT30M".into(),
+                datatype: vocab::XSD_DURATION.into()
+            }
+        )));
+        assert!(f.contains(&(
+            term::due_at(),
+            Obj::Typed {
+                lexical: "2026-01-01".into(),
+                datatype: vocab::XSD_DATE.into()
+            }
+        )));
+        assert!(f.contains(&(term::created_by(), Obj::Iri(vocab::principal_iri("b")))));
+    }
+
+    #[test]
+    fn action_status_is_derived_from_status_and_outcome() {
+        let cases = [
+            ("open", None, Some("PotentialActionStatus")),
+            ("hooked", None, Some("PotentialActionStatus")),
+            ("blocked", None, Some("PotentialActionStatus")),
+            ("deferred", None, Some("PotentialActionStatus")),
+            ("in_progress", None, Some("ActiveActionStatus")),
+            ("closed", None, Some("CompletedActionStatus")),
+            ("closed", Some("done"), Some("CompletedActionStatus")),
+            ("closed", Some("abandoned"), Some("FailedActionStatus")),
+            ("closed", Some("superseded"), Some("FailedActionStatus")),
+            ("closed", Some("failed"), Some("FailedActionStatus")),
+            (TOMBSTONE, None, None),
+        ];
+        for (status, outcome, want) in cases {
+            assert_eq!(action_status(status, outcome), want, "{status} {outcome:?}");
+        }
+    }
+
+    #[test]
+    fn a_duration_seeds_does_not_write_is_carried_not_dropped() {
+        let mut f = sample().facts();
+        let odd = (
+            term::estimated_minutes(),
+            Obj::Typed {
+                lexical: "P1M".into(),
+                datatype: vocab::XSD_DURATION.into(),
+            },
+        );
+        f.push(odd.clone());
+        let s = Seed::from_facts(&f).unwrap();
+        assert_eq!(
+            s.estimated_minutes, None,
+            "a month is not coerced to minutes"
+        );
+        assert!(s.facts().contains(&odd), "and written back as it was");
+    }
+
+    // A quipu server's /update stores the XSD canonical form of a duration
+    // (measured: PT90M reads back as PT1H30M, PT0M as PT0S). Those are the
+    // same minutes, so they must read as the estimate, not as an extra.
+    #[test]
+    fn canonical_durations_read_back_as_the_same_minutes() {
+        for (lexical, want) in [
+            ("PT90M", Some(90)),
+            ("PT1H30M", Some(90)),
+            ("PT0S", Some(0)),
+            ("P1D", Some(1440)),
+            ("P1DT1M", Some(1441)),
+            ("PT2H", Some(120)),
+            ("PT1M0S", Some(1)),
+            ("PT1M30S", None),
+            ("PT1.5M", None),
+            ("P1M", None),
+            ("P1Y", None),
+            ("-PT5M", None),
+            ("PT", None),
+            ("P", None),
+            ("PT30H1H", None),
+            ("PTM", None),
+        ] {
+            assert_eq!(parse_minutes_duration(lexical), want, "{lexical}");
+        }
+    }
+
+    #[test]
+    fn xsd_lexical_forms_are_checked_not_coerced() {
+        for ok in [
+            "2026-10-03T14:00:00Z",
+            "2026-08-30T13:35:59.014436677Z",
+            "2026-09-01T22:41:04.116Z",
+            "2026-10-03T14:00:00",
+            "2026-10-03T14:00:00-05:00",
+            "2026-10-03T14:00:00+14:00",
+            "2026-10-03T24:00:00Z",
+            "2024-02-29T00:00:00Z",
+        ] {
+            assert!(is_xsd_date_time(ok), "{ok}");
+        }
+        for bad in [
+            "2026-10-03 14:00:00Z",
+            "2026-10-03T14:00Z",
+            "2026-10-03T14:00:00.Z",
+            "2026-10-03T14:00:00z",
+            "2026-10-03T14:00:00+0500",
+            "2026-10-03T14:00:00+15:00",
+            "2026-10-03T24:00:01Z",
+            "2026-10-03T14:60:00Z",
+            "2026-02-29T00:00:00Z",
+            "2026-13-01T00:00:00Z",
+            "2026-10-03T14:00:00Zjunk",
+            "2026-10-03",
+            "",
+        ] {
+            assert!(!is_xsd_date_time(bad), "{bad}");
+        }
+        assert!(is_xsd_date("2026-10-03"));
+        for bad in ["2026-10-3", "2026-02-30", "2026-10-03Z", "tomorrow"] {
+            assert!(!is_xsd_date(bad), "{bad}");
+        }
+        let mut s = sample();
+        s.defer_until = Some("next tuesday".into());
+        s.due_at = Some("2026-10-09".into());
+        s.closed_at = Some("2026-10-09".into());
+        let p = s.time_problems();
+        assert_eq!(p.len(), 2, "{p:?}");
+        assert!(
+            p[0].contains("closed_at \"2026-10-09\" is not an xsd:dateTime"),
+            "{p:?}"
+        );
+        assert!(p[1].contains("defer_until \"next tuesday\""), "{p:?}");
     }
 
     #[test]

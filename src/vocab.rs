@@ -1,22 +1,42 @@
 //! The vocabulary a seed is written in.
 //!
-//! Where camayoc already names a thing, seeds uses camayoc's term (camayoc
-//! publishes its vocabulary in the `aegis:` namespace below; that string is an
-//! RDF namespace, not a host). Where a tracker needs something camayoc does not
-//! model (status, priority, labels, the compare-and-set revision), seeds mints
-//! it in its own `seeds:` namespace. See `docs/book/src/storage.md`.
+//! schema.org first, then other public W3C vocabularies, then Quechua for the
+//! governance terms camayoc's gate reads, and seeds' own `seeds:` namespace
+//! only for tracker mechanics no public vocabulary names (status, priority,
+//! type, the body sections). The mapping is ruled in aegis-bqgdr3 (table
+//! v1.1); see `docs/book/src/storage.md`. Item, comment, principal and graph
+//! IRIs are seeds' own and did not change with the vocabulary.
 
-/// camayoc's vocabulary namespace (`ontology/core.ttl` in scbrown/camayoc).
+/// camayoc's vocabulary namespace. seeds' items no longer use it; the
+/// provenance side graph's attribution claims still carry its `sourceKind`.
 pub const AEGIS: &str = "http://aegis.gastown.local/ontology/";
 /// seeds' own vocabulary namespace.
 pub const SEEDS: &str = "https://seeds.local/ontology/";
+/// schema.org.
+pub const SCHEMA: &str = "https://schema.org/";
+/// Quechua, the governance vocabulary (`sourceKind`, `outcome`, `blockedOn`).
+pub const QUECHUA: &str = "https://scbrown.github.io/quechua/ns#";
+/// W3C RDF Calendar (`ical:due`).
+pub const ICAL: &str = "http://www.w3.org/2002/12/cal/ical#";
+/// Dublin Core terms (`dcterms:relation`).
+pub const DCTERMS: &str = "http://purl.org/dc/terms/";
+/// W3C PROV-O (`prov:wasDerivedFrom`).
+pub const PROV: &str = "http://www.w3.org/ns/prov#";
 /// Where seed, comment and principal IRIs live.
 pub const SEEDS_BASE: &str = "https://seeds.local/";
 
 /// `rdf:type`.
 pub const RDF_TYPE: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
-/// `rdfs:label`: a seed's title.
+/// `rdfs:label`: a seed's title, written beside `schema:name` with the same
+/// value (quipu's label floor and `/search` read it; the shapes hold the two
+/// equal).
 pub const RDFS_LABEL: &str = "http://www.w3.org/2000/01/rdf-schema#label";
+/// `xsd:date`: a due or defer value written as a bare `YYYY-MM-DD`.
+pub const XSD_DATE: &str = "http://www.w3.org/2001/XMLSchema#date";
+/// `xsd:dateTime`: every instant a seed or comment carries.
+pub const XSD_DATE_TIME: &str = "http://www.w3.org/2001/XMLSchema#dateTime";
+/// `xsd:duration`: the time estimate, `PT<n>M`.
+pub const XSD_DURATION: &str = "http://www.w3.org/2001/XMLSchema#duration";
 
 /// The shapes every native write is validated against.
 pub const SHAPES_TURTLE: &str = include_str!("../shapes/seeds.shapes.ttl");
@@ -31,46 +51,70 @@ pub fn seeds(local: &str) -> String {
     format!("{SEEDS}{local}")
 }
 
+/// A term in schema.org.
+pub fn schema(local: &str) -> String {
+    format!("{SCHEMA}{local}")
+}
+
+/// A term in the Quechua governance namespace.
+pub fn quechua(local: &str) -> String {
+    format!("{QUECHUA}{local}")
+}
+
 /// Predicates and classes, by role. Kept as functions so the IRIs are built in
 /// one place.
 pub mod term {
-    use super::{aegis, seeds};
+    use super::{quechua, schema, seeds, DCTERMS, ICAL, PROV};
 
-    /// `aegis:WorkItem`, camayoc's class for a unit of intended work.
+    /// `schema:Action`, the class of a seed (a unit of intended work).
     pub fn work_item() -> String {
-        aegis("WorkItem")
+        schema("Action")
     }
-    /// `aegis:sourceKind`; seeds writes `declared` (an agent or person said so).
+    /// `quechua:sourceKind`; seeds writes `declared` (an agent or person said
+    /// so).
     pub fn source_kind() -> String {
-        aegis("sourceKind")
+        quechua("sourceKind")
     }
-    /// `aegis:identifier`: the seed id, e.g. `sd-a3f`.
+    /// `schema:identifier`: the seed id, e.g. `sd-a3f`.
     pub fn identifier() -> String {
-        aegis("identifier")
+        schema("identifier")
     }
-    /// `aegis:createdAt`.
+    /// `schema:name`: the title. Written with `rdfs:label` beside it, same
+    /// value.
+    pub fn name() -> String {
+        schema("name")
+    }
+    /// `schema:dateCreated`, an `xsd:dateTime` (on seeds and comments).
     pub fn created_at() -> String {
-        aegis("createdAt")
+        schema("dateCreated")
     }
-    /// `aegis:closedAt`.
+    /// `schema:endTime`: when the seed was closed, an `xsd:dateTime`.
     pub fn closed_at() -> String {
-        aegis("closedAt")
+        schema("endTime")
     }
-    /// `aegis:outcome`; `done` on close, absent while open.
+    /// `quechua:outcome`; `done` on close, absent while open. camayoc's
+    /// governed close classification, kept apart from the free-text
+    /// `schema:result`.
     pub fn outcome() -> String {
-        aegis("outcome")
+        quechua("outcome")
     }
-    /// `aegis:assignedTo`, pointing at a principal IRI.
+    /// `schema:agent`, pointing at a principal IRI: the assignee.
     pub fn assigned_to() -> String {
-        aegis("assignedTo")
+        schema("agent")
     }
-    /// `aegis:blockedOn`: the `blocks` dependency.
+    /// `quechua:blockedOn`: the `blocks` dependency.
     pub fn blocked_on() -> String {
-        aegis("blockedOn")
+        quechua("blockedOn")
     }
-    /// `seeds:status`.
+    /// `seeds:status`: the precise tracker status, one of seven. The field the
+    /// claim compare-and-set reads.
     pub fn status() -> String {
         seeds("status")
+    }
+    /// `schema:actionStatus`: the coarse public status, DERIVED from status
+    /// and outcome in the same write (see `crate::model::action_status`).
+    pub fn action_status() -> String {
+        schema("actionStatus")
     }
     /// `seeds:priority`, 0..=4.
     pub fn priority() -> String {
@@ -80,9 +124,9 @@ pub mod term {
     pub fn issue_type() -> String {
         seeds("issueType")
     }
-    /// `seeds:description`.
+    /// `schema:description`.
     pub fn description() -> String {
-        seeds("description")
+        schema("description")
     }
     /// `seeds:notes`.
     pub fn notes() -> String {
@@ -103,88 +147,92 @@ pub mod term {
         seeds("acceptanceCriteria")
     }
     /// `seeds:externalRef`: a reference to the same work elsewhere (br's
-    /// `external_ref`), a plain string.
+    /// `external_ref`), a plain string. Not `schema:sameAs`/`url`: some
+    /// values are not URLs.
     pub fn external_ref() -> String {
         seeds("externalRef")
     }
-    /// `seeds:dueAt`: when the work is due (br's `due_at`), a date or an
-    /// RFC 3339 instant.
+    /// `ical:due`: when the work is due (br's `due_at`), an `xsd:date` or an
+    /// `xsd:dateTime`.
     pub fn due_at() -> String {
-        seeds("dueAt")
+        format!("{ICAL}due")
     }
-    /// `seeds:estimatedMinutes`: a time estimate in minutes (br's
-    /// `estimated_minutes`), an integer.
+    /// `schema:timeRequired`: a time estimate (br's `estimated_minutes`),
+    /// written `"PT<n>M"^^xsd:duration`.
     pub fn estimated_minutes() -> String {
-        seeds("estimatedMinutes")
+        schema("timeRequired")
     }
 
-    /// `seeds:owner`: who owns the work (br's `owner`), a plain string.
+    /// `schema:accountablePerson`: who owns the work (br's `owner`), a
+    /// principal IRI.
     pub fn owner() -> String {
-        seeds("owner")
+        schema("accountablePerson")
     }
-    /// `seeds:label`, one fact per label.
+    /// `schema:keywords`, one fact per label.
     pub fn label() -> String {
-        seeds("label")
+        schema("keywords")
     }
-    /// `seeds:updatedAt`.
+    /// `schema:dateModified`, an `xsd:dateTime`.
     pub fn updated_at() -> String {
-        seeds("updatedAt")
+        schema("dateModified")
     }
-    /// `seeds:createdBy`.
+    /// `schema:creator`, a principal IRI.
     pub fn created_by() -> String {
-        seeds("createdBy")
+        schema("creator")
     }
-    /// `seeds:closeReason`.
+    /// `schema:result`: the free-text close reason.
     pub fn close_reason() -> String {
-        seeds("closeReason")
+        schema("result")
     }
-    /// `seeds:deferUntil`.
+    /// `schema:scheduledTime`: hidden from ready until then, an `xsd:date`
+    /// or an `xsd:dateTime`.
     pub fn defer_until() -> String {
-        seeds("deferUntil")
+        schema("scheduledTime")
     }
-    /// `seeds:revision`, the compare-and-set token.
+    /// `schema:version`, the compare-and-set token.
     pub fn revision() -> String {
-        seeds("revision")
+        schema("version")
     }
-    /// `seeds:relatedTo`: a `related` dependency.
+    /// `dcterms:relation`: a `related` dependency.
     pub fn related_to() -> String {
-        seeds("relatedTo")
+        format!("{DCTERMS}relation")
     }
-    /// `seeds:childOf`: a `parent-child` dependency (this seed is the child).
+    /// `schema:isPartOf`: a `parent-child` dependency (this seed is the
+    /// child).
     pub fn child_of() -> String {
-        seeds("childOf")
+        schema("isPartOf")
     }
-    /// `seeds:discoveredFrom`: a `discovered-from` dependency.
+    /// `prov:wasDerivedFrom`: a `discovered-from` dependency.
     pub fn discovered_from() -> String {
-        seeds("discoveredFrom")
+        format!("{PROV}wasDerivedFrom")
     }
     /// `seeds:workflowRun`: the shuttle run (`urn:shuttle:run:<id>`) that
     /// created or drives the seed. Neither camayoc nor shuttle has a term
-    /// linking a WorkItem to a WorkflowRun yet; this is seeds' stopgap and a
+    /// linking a work item to a WorkflowRun yet; this is seeds' stopgap and a
     /// proposal for camayoc, not a parallel vocabulary for runs themselves
-    /// (runs, definitions and transitions stay in shuttle's `aegis:` terms).
+    /// (runs, definitions and transitions stay in shuttle's terms).
     pub fn workflow_run() -> String {
         seeds("workflowRun")
     }
-    /// `seeds:Comment`.
+    /// `schema:Comment`.
     pub fn comment() -> String {
-        seeds("Comment")
+        schema("Comment")
     }
-    /// `seeds:commentOn`: the seed a comment belongs to.
+    /// `schema:parentItem`: the seed a comment belongs to.
     pub fn comment_on() -> String {
-        seeds("commentOn")
+        schema("parentItem")
     }
-    /// `seeds:commentIndex`: 1-based position among the seed's comments.
+    /// `schema:position`: 1-based position among the seed's comments.
     pub fn comment_index() -> String {
-        seeds("commentIndex")
+        schema("position")
     }
-    /// `seeds:author`.
+    /// `schema:author`, a principal IRI.
     pub fn author() -> String {
-        seeds("author")
+        schema("author")
     }
-    /// `seeds:text`.
+    /// `schema:text`.
     pub fn text() -> String {
-        seeds("text")
+        schema("text")
     }
 }
 
@@ -241,11 +289,12 @@ pub fn project_graph_iri(prefix: &str) -> String {
 /// verbatim and then applies the caller's filters and the defer date.
 pub fn ready_query(graph_iri: &str) -> String {
     format!(
-        "PREFIX aegis: <{AEGIS}>\n\
+        "PREFIX schema: <{SCHEMA}>\n\
+         PREFIX quechua: <{QUECHUA}>\n\
          PREFIX seeds: <{SEEDS}>\n\
          SELECT ?id WHERE {{ GRAPH <{graph_iri}> {{\n\
-         \x20 ?item a aegis:WorkItem ; aegis:identifier ?id ; seeds:status \"open\" .\n\
-         \x20 FILTER NOT EXISTS {{ ?item aegis:blockedOn ?blocker . ?blocker seeds:status ?bs . FILTER(?bs != \"closed\" && ?bs != \"tombstone\") }}\n\
+         \x20 ?item a schema:Action ; schema:identifier ?id ; seeds:status \"open\" .\n\
+         \x20 FILTER NOT EXISTS {{ ?item quechua:blockedOn ?blocker . ?blocker seeds:status ?bs . FILTER(?bs != \"closed\" && ?bs != \"tombstone\") }}\n\
          }} }}"
     )
 }

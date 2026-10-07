@@ -1,64 +1,112 @@
 # Shapes every seeds write is validated against (native builds; see
 # docs/book/src/storage.md).
 #
-# Two node shapes target the same class, aegis:WorkItem:
+# The seeds work-item profile over schema.org, as ruled in aegis-bqgdr3
+# (mapping table v1.1). Adapted from ian's draft profile for that ruling
+# (profile.shapes.ttl), which in turn carries forward the constraints of
+# camayoc's WorkItem shape (scbrown/camayoc shapes/core.shapes.ttl,
+# Apache-2.0, Copyright the camayoc authors) onto schema:Action.
 #
-# 1. CamayocWorkItemShape is reproduced from scbrown/camayoc
-#    shapes/core.shapes.ttl (Apache-2.0, Copyright the camayoc authors), so a
-#    seed is a WorkItem camayoc's own gate would accept. The namespace is
-#    camayoc's published vocabulary namespace, not a host.
-# 2. SeedsWorkItemShape adds what a tracker needs that camayoc does not model:
-#    status, priority, type and the compare-and-set revision.
+# This file is the WHOLE profile, not a subset: quipu's /update does not apply
+# shapes (aegis-1hfyk5), so on the shared board seeds' own client-side check
+# against this file is the only gate. Four node shapes:
+#
+# 1. quechua:ActionGovernanceShape: the governance terms camayoc's gate reads
+#    (sourceKind, outcome, blockedOn), on schema:Action.
+# 2. seeds:SeedShape: what a tracker needs. The compare-and-set fields
+#    (seeds:status, schema:version) are single-valued; schema:name equals
+#    rdfs:label; schema:actionStatus is derived from status and outcome, and
+#    the sh:xone below holds the two in agreement.
+# 3. seeds:CommentShape: a comment, ordered by position, append-only.
+# 4. seeds:CalendarAkaShape: a calendar to-do (ical:Vtodo) is a separate node
+#    linked to its seed by skos:exactMatch, never owl:sameAs. sd writes none
+#    today; the shape is here so a writer that does is held to it.
+#
+# The namespaces are vocabulary names, not hosts anyone contacts.
 
-@prefix aegis: <http://aegis.gastown.local/ontology/> .
-@prefix seeds: <https://seeds.local/ontology/> .
-@prefix sh:    <http://www.w3.org/ns/shacl#> .
-@prefix rdfs:  <http://www.w3.org/2000/01/rdf-schema#> .
-@prefix xsd:   <http://www.w3.org/2001/XMLSchema#> .
+@prefix schema:  <https://schema.org/> .
+@prefix quechua: <https://scbrown.github.io/quechua/ns#> .
+@prefix seeds:   <https://seeds.local/ontology/> .
+@prefix ical:    <http://www.w3.org/2002/12/cal/ical#> .
+@prefix prov:    <http://www.w3.org/ns/prov#> .
+@prefix dcterms: <http://purl.org/dc/terms/> .
+@prefix skos:    <http://www.w3.org/2004/02/skos/core#> .
+@prefix sh:      <http://www.w3.org/ns/shacl#> .
+@prefix rdfs:    <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix xsd:     <http://www.w3.org/2001/XMLSchema#> .
 
-aegis:CamayocWorkItemShape a sh:NodeShape ;
-    sh:targetClass aegis:WorkItem ;
+# ---- governance terms on a schema:Action --------------------------------
+
+quechua:ActionGovernanceShape a sh:NodeShape ;
+    sh:targetClass schema:Action ;
     sh:property [
-        sh:path aegis:sourceKind ;
+        sh:path quechua:sourceKind ;
         sh:minCount 1 ;
         sh:maxCount 1 ;
         sh:in ("observed" "declared" "inferred") ;
-        sh:message "camayoc: every WorkItem carries exactly one sourceKind of observed|declared|inferred" ;
+        sh:message "governance: every Action carries exactly one sourceKind of observed|declared|inferred" ;
     ] ;
     sh:property [
-        sh:path rdfs:label ;
-        sh:minCount 1 ;
-        sh:maxCount 1 ;
-        sh:datatype xsd:string ;
-        sh:message "camayoc: a WorkItem needs exactly one rdfs:label" ;
-    ] ;
-    sh:property [
-        sh:path aegis:outcome ;
+        sh:path quechua:outcome ;
         sh:maxCount 1 ;
         sh:in ("done" "abandoned" "superseded" "failed") ;
-        sh:message "camayoc: outcome, when set, is one of done|abandoned|superseded|failed" ;
+        sh:message "governance: outcome, when set, is one of done|abandoned|superseded|failed" ;
     ] ;
     sh:property [
-        sh:path aegis:blockedOn ;
-        sh:class aegis:WorkItem ;
-        sh:message "camayoc: blockedOn must point at a WorkItem the graph actually holds" ;
+        sh:path quechua:blockedOn ;
+        sh:class schema:Action ;
+        sh:message "governance: blockedOn must point at an Action the graph actually holds" ;
     ] .
 
-seeds:SeedsWorkItemShape a sh:NodeShape ;
-    sh:targetClass aegis:WorkItem ;
+# ---- what a tracker needs -------------------------------------------------
+
+seeds:SeedShape a sh:NodeShape ;
+    sh:targetClass schema:Action ;
     sh:property [
-        sh:path aegis:identifier ;
+        sh:path schema:identifier ;
         sh:minCount 1 ;
         sh:maxCount 1 ;
         sh:datatype xsd:string ;
         sh:message "seeds: a seed has exactly one identifier" ;
     ] ;
     sh:property [
+        sh:path schema:name ;
+        sh:minCount 1 ;
+        sh:maxCount 1 ;
+        sh:datatype xsd:string ;
+        sh:equals rdfs:label ;
+        sh:message "seeds: a seed has exactly one schema:name, equal to its rdfs:label" ;
+    ] ;
+    # quipu's label floor (shape invariant I2): every targetClass shape
+    # requires rdfs:label. seeds writes it beside schema:name, same value.
+    sh:property [
+        sh:path rdfs:label ;
+        sh:minCount 1 ;
+        sh:maxCount 1 ;
+        sh:datatype xsd:string ;
+        sh:message "seeds: a seed has exactly one rdfs:label" ;
+    ] ;
+    sh:property [
+        sh:path schema:description ;
+        sh:maxCount 1 ;
+        sh:datatype xsd:string ;
+        sh:message "seeds: a seed has at most one description" ;
+    ] ;
+    # The compare-and-set fields: single-valued, so the claim guard compares
+    # one value.
+    sh:property [
         sh:path seeds:status ;
         sh:minCount 1 ;
         sh:maxCount 1 ;
         sh:in ("open" "hooked" "in_progress" "blocked" "deferred" "closed" "tombstone") ;
         sh:message "seeds: status is exactly one of open|hooked|in_progress|blocked|deferred|closed|tombstone" ;
+    ] ;
+    sh:property [
+        sh:path schema:version ;
+        sh:minCount 1 ;
+        sh:maxCount 1 ;
+        sh:datatype xsd:integer ;
+        sh:message "seeds: a seed carries exactly one schema:version, the compare-and-set token" ;
     ] ;
     sh:property [
         sh:path seeds:priority ;
@@ -70,11 +118,97 @@ seeds:SeedsWorkItemShape a sh:NodeShape ;
         sh:message "seeds: priority is exactly one integer from 0 to 4" ;
     ] ;
     sh:property [
-        sh:path seeds:revision ;
+        sh:path seeds:issueType ;
         sh:minCount 1 ;
         sh:maxCount 1 ;
-        sh:datatype xsd:integer ;
-        sh:message "seeds: a seed carries exactly one revision, the compare-and-set token" ;
+        sh:datatype xsd:string ;
+        sh:message "seeds: a seed has exactly one type" ;
+    ] ;
+    sh:property [
+        sh:path schema:actionStatus ;
+        sh:maxCount 1 ;
+        sh:in (schema:PotentialActionStatus schema:ActiveActionStatus schema:CompletedActionStatus schema:FailedActionStatus) ;
+        sh:message "seeds: actionStatus, when set, is one of the four schema.org ActionStatusType values" ;
+    ] ;
+    sh:property [
+        sh:path schema:agent ;
+        sh:nodeKind sh:IRI ;
+        sh:message "seeds: an assignee is a principal IRI" ;
+    ] ;
+    sh:property [
+        sh:path schema:creator ;
+        sh:maxCount 1 ;
+        sh:nodeKind sh:IRI ;
+        sh:message "seeds: a seed has at most one creator, a principal IRI" ;
+    ] ;
+    sh:property [
+        sh:path schema:accountablePerson ;
+        sh:maxCount 1 ;
+        sh:nodeKind sh:IRI ;
+        sh:message "seeds: a seed has at most one owner, a principal IRI" ;
+    ] ;
+    sh:property [
+        sh:path schema:keywords ;
+        sh:datatype xsd:string ;
+        sh:message "seeds: a label is a string" ;
+    ] ;
+    sh:property [
+        sh:path schema:dateCreated ;
+        sh:minCount 1 ;
+        sh:maxCount 1 ;
+        sh:datatype xsd:dateTime ;
+        sh:message "seeds: a seed has exactly one dateCreated, an xsd:dateTime" ;
+    ] ;
+    sh:property [
+        sh:path schema:dateModified ;
+        sh:maxCount 1 ;
+        sh:datatype xsd:dateTime ;
+        sh:message "seeds: dateModified is at most one xsd:dateTime" ;
+    ] ;
+    sh:property [
+        sh:path schema:endTime ;
+        sh:maxCount 1 ;
+        sh:datatype xsd:dateTime ;
+        sh:message "seeds: endTime is at most one xsd:dateTime" ;
+    ] ;
+    sh:property [
+        sh:path schema:scheduledTime ;
+        sh:maxCount 1 ;
+        sh:or ( [ sh:datatype xsd:dateTime ] [ sh:datatype xsd:date ] ) ;
+        sh:message "seeds: scheduledTime (defer) is at most one xsd:date or xsd:dateTime" ;
+    ] ;
+    sh:property [
+        sh:path ical:due ;
+        sh:maxCount 1 ;
+        sh:or ( [ sh:datatype xsd:dateTime ] [ sh:datatype xsd:date ] ) ;
+        sh:message "seeds: due is at most one xsd:date or xsd:dateTime" ;
+    ] ;
+    sh:property [
+        sh:path schema:timeRequired ;
+        sh:maxCount 1 ;
+        sh:datatype xsd:duration ;
+        sh:message "seeds: timeRequired is at most one xsd:duration" ;
+    ] ;
+    sh:property [
+        sh:path schema:result ;
+        sh:maxCount 1 ;
+        sh:datatype xsd:string ;
+        sh:message "seeds: a seed has at most one close reason" ;
+    ] ;
+    sh:property [
+        sh:path schema:isPartOf ;
+        sh:nodeKind sh:IRI ;
+        sh:message "seeds: a parent is an item IRI" ;
+    ] ;
+    sh:property [
+        sh:path dcterms:relation ;
+        sh:nodeKind sh:IRI ;
+        sh:message "seeds: a related seed is an item IRI" ;
+    ] ;
+    sh:property [
+        sh:path prov:wasDerivedFrom ;
+        sh:nodeKind sh:IRI ;
+        sh:message "seeds: a discovered-from seed is an item IRI" ;
     ] ;
     sh:property [
         sh:path seeds:workflowRun ;
@@ -82,9 +216,71 @@ seeds:SeedsWorkItemShape a sh:NodeShape ;
         sh:nodeKind sh:IRI ;
         sh:message "seeds: a seed is driven by at most one workflow run, named by its IRI" ;
     ] ;
+    # status <-> actionStatus agreement (SHACL core): exactly one branch holds.
+    sh:xone (
+      [ sh:property [ sh:path seeds:status ; sh:in ("open" "hooked" "blocked" "deferred") ] ;
+        sh:property [ sh:path schema:actionStatus ; sh:minCount 1 ; sh:hasValue schema:PotentialActionStatus ] ]
+      [ sh:property [ sh:path seeds:status ; sh:hasValue "in_progress" ] ;
+        sh:property [ sh:path schema:actionStatus ; sh:minCount 1 ; sh:hasValue schema:ActiveActionStatus ] ]
+      [ sh:property [ sh:path seeds:status ; sh:hasValue "closed" ] ;
+        sh:property [ sh:path quechua:outcome ; sh:hasValue "done" ] ;
+        sh:property [ sh:path schema:actionStatus ; sh:minCount 1 ; sh:hasValue schema:CompletedActionStatus ] ]
+      [ sh:property [ sh:path seeds:status ; sh:hasValue "closed" ] ;
+        sh:property [ sh:path quechua:outcome ; sh:minCount 1 ; sh:in ("abandoned" "superseded" "failed") ] ;
+        sh:property [ sh:path schema:actionStatus ; sh:minCount 1 ; sh:hasValue schema:FailedActionStatus ] ]
+      [ sh:property [ sh:path seeds:status ; sh:hasValue "tombstone" ] ;
+        sh:property [ sh:path schema:actionStatus ; sh:maxCount 0 ] ]
+    ) ;
+    sh:message "seeds: status, outcome and schema:actionStatus disagree" .
+
+# ---- comments --------------------------------------------------------------
+
+seeds:CommentShape a sh:NodeShape ;
+    sh:targetClass schema:Comment ;
     sh:property [
-        sh:path seeds:issueType ;
+        sh:path schema:parentItem ;
         sh:minCount 1 ;
         sh:maxCount 1 ;
-        sh:message "seeds: a seed has exactly one type" ;
+        sh:class schema:Action ;
+        sh:message "seeds: a comment belongs to exactly one seed the graph holds" ;
+    ] ;
+    sh:property [
+        sh:path schema:position ;
+        sh:minCount 1 ;
+        sh:maxCount 1 ;
+        sh:datatype xsd:integer ;
+        sh:minInclusive 1 ;
+        sh:message "seeds: a comment has exactly one position, an integer from 1" ;
+    ] ;
+    sh:property [
+        sh:path schema:author ;
+        sh:minCount 1 ;
+        sh:maxCount 1 ;
+        sh:nodeKind sh:IRI ;
+        sh:message "seeds: a comment has exactly one author, a principal IRI" ;
+    ] ;
+    sh:property [
+        sh:path schema:text ;
+        sh:minCount 1 ;
+        sh:maxCount 1 ;
+        sh:datatype xsd:string ;
+        sh:message "seeds: a comment has exactly one text" ;
+    ] ;
+    sh:property [
+        sh:path schema:dateCreated ;
+        sh:maxCount 1 ;
+        sh:datatype xsd:dateTime ;
+        sh:message "seeds: a comment's dateCreated is at most one xsd:dateTime" ;
     ] .
+
+# ---- calendar aka (VTODO) ---------------------------------------------------
+
+seeds:CalendarAkaShape a sh:NodeShape ;
+    sh:targetClass ical:Vtodo ;
+    sh:property [ sh:path ical:uid ; sh:minCount 1 ; sh:maxCount 1 ; sh:datatype xsd:string ] ;
+    sh:property [ sh:path ical:summary ; sh:minCount 1 ; sh:maxCount 1 ] ;
+    sh:property [ sh:path ical:status ; sh:maxCount 1 ;
+        sh:in ("NEEDS-ACTION" "IN-PROCESS" "COMPLETED" "CANCELLED") ] ;
+    sh:property [ sh:path ical:priority ; sh:maxCount 1 ; sh:datatype xsd:integer ;
+        sh:minInclusive 0 ; sh:maxInclusive 9 ] ;
+    sh:property [ sh:path skos:exactMatch ; sh:minCount 1 ; sh:class schema:Action ] .

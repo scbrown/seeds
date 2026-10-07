@@ -23,8 +23,10 @@ field, including nested comment and dependency metadata. Nonzero differences
 exit 1. Object key order is immaterial; array order and absent versus null
 remain significant. Malformed records and duplicate IDs are refused.
 
-Each imported WorkItem carries its original JSON in a `seeds:beadsJson` fact.
-Normal seed fields are also projected to the existing WorkItem vocabulary.
+Each imported seed carries its original JSON in a `seeds:beadsJson` fact.
+Normal seed fields are also projected to the seeds vocabulary
+([The storage model](../storage.md)); a time that is not a valid
+`xsd:date`/`xsd:dateTime` refuses the import, naming each record and field.
 Export overlays edits to those modeled fields on the original JSON. Unknown
 fields, dependency types, timestamps, author names and nested metadata survive.
 The legacy `relates-to` dependency projects as `related`, retaining its original
