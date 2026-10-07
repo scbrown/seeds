@@ -1817,3 +1817,97 @@ fn a_canonical_time_round_trips_through_a_server_with_no_drift() {
     let after: Value = serde_json::from_str(&env.ok(&repo, &["show", &id, "--json"], &[])).unwrap();
     assert_eq!(after, local, "the local seed did not change");
 }
+
+/// Comments that cross in batches WITHOUT their seed are validated with the
+/// parent read from the TARGET store, so the comment shape's
+/// `schema:parentItem sh:class schema:Action` holds on the switched model
+/// under real SHACL. Both seed-less paths, at 4 guard clauses a request:
+///
+/// 1. a NEW seed with 12 comments: the comments past the limit follow the
+///    seed in later batches (seeds#95);
+/// 2. 12 comments added to a seed the remote already holds.
+#[test]
+fn comments_past_the_clause_limit_cross_in_batches_with_their_parent_from_the_remote() {
+    let mut env = Env::new("batched-comments");
+    let Some(url) = env.start_server() else {
+        eprintln!("SKIPPED: set SEEDS_TEST_QUIPU_SERVER to a quipu-server binary to run this");
+        return;
+    };
+    let repo = env.pendant_project("repo");
+    let sync_env = [
+        ("SEEDS_SYNC_REMOTE", url.as_str()),
+        ("SEEDS_MAX_WRITE_CLAUSES", "4"),
+    ];
+    let synced = |what: &str| {
+        let o = env.sd(&repo, &["sync"], &sync_env);
+        let err = String::from_utf8_lossy(&o.stderr).into_owned();
+        assert_eq!(o.status.code(), Some(0), "{what}: {err}");
+        assert!(
+            err.matches("remote batch").count() >= 3,
+            "{what}: 12 comments at 4 clauses a request cross in batches: {err}"
+        );
+    };
+    let fresh = env
+        .ok(&repo, &["create", "new with comments", "--silent"], &[])
+        .trim()
+        .to_string();
+    for i in 0..12 {
+        env.ok(
+            &repo,
+            &["comments", "add", &fresh, &format!("note {i}")],
+            &[],
+        );
+    }
+    let held = env
+        .ok(&repo, &["create", "comments later", "--silent"], &[])
+        .trim()
+        .to_string();
+    synced("a new seed past the limit");
+    for i in 0..12 {
+        env.ok(
+            &repo,
+            &["comments", "add", &held, &format!("note {i}")],
+            &[],
+        );
+    }
+    synced("comments on a seed the remote holds");
+
+    let pid = std::fs::read_to_string(repo.join(".seeds/project-id")).unwrap();
+    let graph = format!("https://seeds.local/project/sd-{}", pid.trim());
+    let remote = [
+        ("SEEDS_QUIPU_URL", url.as_str()),
+        ("SEEDS_GRAPH", graph.as_str()),
+    ];
+    let work = env.dir("work");
+    let texts = |seed: &str, cwd: &Path, e: &[(&str, &str)]| -> Vec<String> {
+        let v: Value = serde_json::from_str(&env.ok(cwd, &["show", seed, "--json"], e)).unwrap();
+        v[0]["comments"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|c| c["text"].as_str().unwrap().to_string())
+            .collect()
+    };
+    let want: Vec<String> = (0..12).map(|i| format!("note {i}")).collect();
+    let port: u16 = url.rsplit(':').next().unwrap().parse().unwrap();
+    for seed in [&fresh, &held] {
+        assert_eq!(texts(seed, &repo, &[]), want);
+        assert_eq!(
+            texts(seed, &work, &remote),
+            want,
+            "every comment on the remote"
+        );
+        // On the switched model: the remote holds them as schema:Comment.
+        let q = format!(
+            "{{\"query\":\"SELECT ?c WHERE {{ GRAPH <{graph}> {{ ?c a <https://schema.org/Comment> ; \
+             <https://schema.org/parentItem> <{}> }} }}\"}}",
+            seeds::vocab::item_iri(seed)
+        );
+        let body = http_post(port, "/query", "application/json", &q);
+        assert_eq!(body.matches("/comment/").count(), 12, "{seed}: {body}");
+    }
+    // Nothing left to push.
+    let o = env.sd(&repo, &["sync", "--json"], &sync_env);
+    let v: Value = serde_json::from_slice(&o.stdout).unwrap();
+    assert_eq!(v["remote"]["wrote"], false, "{v}");
+}
