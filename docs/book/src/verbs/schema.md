@@ -18,5 +18,5 @@ and `all` (the default).
   published schema cannot drift from what `sd` prints.
 - Objects are closed-world: every listed key is required (absent values are
   `null`), and no other key appears. Writes add a `tx` on top of the object
-  (see [the verbs](README.md)).
+  (see [the verbs](index.md)).
 - Needs no configuration and reads no ledger.

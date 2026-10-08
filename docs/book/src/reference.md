@@ -1,7 +1,7 @@
 # Reference
 
 The command is `sd` (crate `seeds-ai`). Each verb has its own page under
-[The verbs](verbs/README.md); this page is the summary.
+[The verbs](verbs/index.md); this page is the summary.
 
 ## Global options
 

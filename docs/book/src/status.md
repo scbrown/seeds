@@ -4,7 +4,7 @@
 
 - **Verbs**: `create`, `show`, `list`, `ready`, `count`, `update` (including
   an atomic `--claim`), `close`, `dep add|remove|list`, `comments add|list`,
-  each with `--json` in br's shape. See [the verbs](verbs/README.md).
+  each with `--json` in br's shape. See [the verbs](verbs/index.md).
 - **Storage**: work items as facts in a quipu named graph, typed as
   `schema:Action` (schema.org first, Quechua for governance) and validated
   against the seeds profile on every write. See [The storage model](storage.md).

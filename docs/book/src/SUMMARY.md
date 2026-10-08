@@ -12,7 +12,7 @@
   - [WebAssembly](wasm.md)
   - [Pinning: `--at <tx>`](pinning.md)
   - [Sharing a ledger as a qpack](qpack-sharing.md)
-- [The verbs](verbs/README.md)
+- [The verbs](verbs/index.md)
   - [Cutover JSONL exchange](verbs/cutover.md)
   - [init](verbs/init.md)
   - [create](verbs/create.md)
