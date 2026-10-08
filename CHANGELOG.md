@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.1.2] - 2026-10-08
+
+### Documentation
+
+- Install at seeds-ai-v0.1.1; prebuilt platforms; the shared-server mode is built (#101) ([2e7a0d3](https://github.com/scbrown/seeds/commit/2e7a0d30f14c017b31b1f6c5cd9d1b1eb0278339))
+
 ## [0.1.1] - 2026-10-07
 
 ### Perf
