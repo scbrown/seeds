@@ -1307,13 +1307,14 @@ fn toml_str(s: &str) -> String {
     toml::Value::String(s.to_string()).to_string()
 }
 
-/// `seeds-<host>-<user>`, from the kernel hostname and $USER.
+/// `seeds-<host>-<user>`, from the kernel hostname, $HOSTNAME, or hostname(1), and $USER.
 fn default_session() -> Result<String> {
     let host = std::fs::read_to_string("/proc/sys/kernel/hostname")
         .ok()
         .or_else(|| std::env::var("HOSTNAME").ok())
         .map(|h| h.trim().to_string())
-        .filter(|h| !h.is_empty());
+        .filter(|h| !h.is_empty())
+        .or_else(provenance::hostname);
     let user = std::env::var("USER").ok().filter(|u| !u.is_empty());
     match (host, user) {
         (Some(h), Some(u)) => Ok(format!("seeds-{h}-{u}")),
