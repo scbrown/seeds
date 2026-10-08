@@ -2,6 +2,16 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.1.4] - 2026-10-08
+
+### Documentation
+
+- Verify current install and rendered verb links (#105) ([8530757](https://github.com/scbrown/seeds/commit/853075725be6718afef5688043795d2228fcac1d))
+
+### Fixed
+
+- *(remote)* A Codex session sends its own session id as X-Quipu-Session (#107) ([981b91c](https://github.com/scbrown/seeds/commit/981b91cf8f142281b322160cf838b77208ada8be))
+
 ## [0.1.3] - 2026-10-08
 
 ### Added
