@@ -48,10 +48,11 @@ attached to each [GitHub release](https://github.com/scbrown/seeds/releases)
 (tags `seeds-ai-v<version>`), with a `SHA256SUMS.txt`.
 
 ```bash
-V=seeds-ai-v0.1.1 T=x86_64-unknown-linux-gnu   # or aarch64-unknown-linux-gnu, aarch64-apple-darwin, x86_64-apple-darwin
+V=seeds-ai-v0.1.3 T=x86_64-unknown-linux-gnu   # or aarch64-unknown-linux-gnu, aarch64-apple-darwin, x86_64-apple-darwin
 curl -fsSLO "https://github.com/scbrown/seeds/releases/download/$V/sd-$V-$T.tar.gz"
 curl -fsSLO "https://github.com/scbrown/seeds/releases/download/$V/SHA256SUMS.txt"
 sha256sum --ignore-missing -c SHA256SUMS.txt     # macOS: shasum -a 256 --ignore-missing -c SHA256SUMS.txt
+mkdir -p ~/.local/bin
 tar xzf "sd-$V-$T.tar.gz" && install "sd-$V-$T/sd" ~/.local/bin/
 ```
 
@@ -68,7 +69,7 @@ sd --version
 ```
 
 ```text
-sd 0.1.1 (seeds)
+sd 0.1.3 (seeds)
 ```
 
 **Already have `sd`?** [chmln/sd](https://github.com/chmln/sd), the popular
