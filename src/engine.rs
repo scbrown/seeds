@@ -796,6 +796,8 @@ pub struct ListReq {
     pub reverse: bool,
     /// Include deferred seeds (hidden by default, as br does).
     pub deferred: bool,
+    /// Require a defer-until field, without interpreting its timestamp.
+    pub defer_until_present: bool,
 }
 
 /// A page of seeds and whether it was cut short.
@@ -846,7 +848,7 @@ pub fn list(b: &dyn Backend, req: &ListReq, at: Option<u64>) -> Result<Page> {
                     && (req.all || s.status != "closed")
                     && (req.all || req.deferred || s.status != "deferred"))
         })
-        .filter(|s| f.matches(s))
+        .filter(|s| f.matches(s) && (!req.defer_until_present || s.defer_until.is_some()))
         .cloned()
         .collect();
     sort_seeds(&mut seeds, req.sort.as_deref())?;
@@ -869,6 +871,7 @@ pub fn list(b: &dyn Backend, req: &ListReq, at: Option<u64>) -> Result<Page> {
     Ok(page)
 }
 
+#[cfg(feature = "native")]
 pub(crate) fn listing_seed_query(req: &ListReq) -> Result<SeedQuery> {
     let f = req.filter.compile()?;
     let mut hidden = vec![model::TOMBSTONE];
@@ -881,6 +884,7 @@ pub(crate) fn listing_seed_query(req: &ListReq) -> Result<SeedQuery> {
     Ok(listing_query(&f, &hidden))
 }
 
+#[cfg(feature = "native")]
 pub(crate) fn list_matches_page(req: &ListReq, snap: &Snapshot) -> Result<Page> {
     let f = req.filter.compile()?;
     let mut seeds = snap
@@ -892,7 +896,7 @@ pub(crate) fn list_matches_page(req: &ListReq, snap: &Snapshot) -> Result<Page> 
                     && (req.all || s.status != "closed")
                     && (req.all || req.deferred || s.status != "deferred"))
         })
-        .filter(|s| f.matches(s))
+        .filter(|s| f.matches(s) && (!req.defer_until_present || s.defer_until.is_some()))
         .cloned()
         .collect::<Vec<_>>();
     sort_seeds(&mut seeds, req.sort.as_deref())?;
@@ -911,16 +915,30 @@ fn page(seeds: Vec<Seed>, limit: usize, snap: &Snapshot) -> Page {
     page_at(seeds, 0, limit, snap)
 }
 
-fn page_at(mut seeds: Vec<Seed>, offset: usize, limit: usize, snap: &Snapshot) -> Page {
+fn page_at(seeds: Vec<Seed>, offset: usize, limit: usize, snap: &Snapshot) -> Page {
+    page_at_counted(seeds, offset, limit, snap, true)
+}
+
+fn page_at_counted(
+    mut seeds: Vec<Seed>,
+    offset: usize,
+    limit: usize,
+    snap: &Snapshot,
+    counts: bool,
+) -> Page {
     let total = seeds.len();
     seeds.drain(..offset.min(seeds.len()));
     if limit > 0 && seeds.len() > limit {
         seeds.truncate(limit);
     }
-    let dependent_counts = seeds
-        .iter()
-        .map(|s| (s.id.clone(), snap.dependents(&s.id).len()))
-        .collect();
+    let dependent_counts = if counts {
+        seeds
+            .iter()
+            .map(|s| (s.id.clone(), snap.dependents(&s.id).len()))
+            .collect()
+    } else {
+        BTreeMap::new()
+    };
     Page {
         has_more: offset + seeds.len() < total,
         issues: seeds,
@@ -1006,11 +1024,12 @@ pub fn search(b: &dyn Backend, req: &SearchReq, at: Option<u64>) -> Result<Searc
         seeds.reverse();
     }
     Ok(SearchPage {
-        page: page_at(
+        page: page_at_counted(
             seeds,
             req.offset,
             req.limit.unwrap_or(DEFAULT_LIST_LIMIT),
             &snap,
+            req.full,
         ),
         hidden_closed,
         full: req.full,
@@ -1019,6 +1038,7 @@ pub fn search(b: &dyn Backend, req: &SearchReq, at: Option<u64>) -> Result<Searc
 
 /// Page seeds already selected by an indexed text search. The backend must
 /// include every matching seed; filters and ordering remain the core's.
+#[cfg(feature = "native")]
 pub(crate) fn search_matches_page(req: &SearchReq, snap: &Snapshot) -> Result<SearchPage> {
     let f = req.filter.compile()?;
     let show_closed = req.all || f.status.is_some();
@@ -1041,11 +1061,12 @@ pub(crate) fn search_matches_page(req: &SearchReq, snap: &Snapshot) -> Result<Se
         seeds.reverse();
     }
     Ok(SearchPage {
-        page: page_at(
+        page: page_at_counted(
             seeds,
             req.offset,
             req.limit.unwrap_or(DEFAULT_LIST_LIMIT),
             snap,
+            req.full,
         ),
         hidden_closed,
         full: req.full,

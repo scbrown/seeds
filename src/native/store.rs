@@ -65,6 +65,119 @@ pub(super) fn lock_full_search() -> Result<File> {
     }
 }
 
+/// Admission for every board search, shared across projects on this host.
+/// A full search takes both slots atomically; title searches each take one.
+/// File ownership releases the slots on normal exit, error or process death.
+pub(super) struct SearchAdmission {
+    _slots: Vec<File>,
+    _full: Option<File>,
+}
+
+pub(super) fn lock_search(full: bool) -> Result<SearchAdmission> {
+    use std::time::{Duration, Instant};
+    let home = std::env::var_os("HOME")
+        .ok_or_else(|| SdError::refused("board search needs HOME for its host-wide fence"))?;
+    let dir = PathBuf::from(home).join(".config/seeds");
+    fs::create_dir_all(&dir)
+        .map_err(|e| SdError::failed(format!("cannot create search fence: {e}")))?;
+    let open = |name: &str| -> Result<File> {
+        let mut options = OpenOptions::new();
+        options.create(true).truncate(false).read(true).write(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        options
+            .open(dir.join(name))
+            .map_err(|e| SdError::failed(format!("cannot open search fence: {e}")))
+    };
+    let full_lock = if full {
+        match lock_full_search() {
+            Ok(file) => Some(file),
+            Err(error) => {
+                if error.kind == crate::error::ErrorKind::Refused {
+                    search_event(&dir, "refuse", true);
+                }
+                return Err(error);
+            }
+        }
+    } else {
+        None
+    };
+    let broker = open("search-admission.lock")?;
+    let started = Instant::now();
+    let mut waiting = false;
+    loop {
+        match broker.try_lock() {
+            Ok(()) => {
+                let mut slots = Vec::new();
+                for slot in 0..2 {
+                    let file = open(&format!("search-slot-{slot}.lock"))?;
+                    match file.try_lock() {
+                        Ok(()) => slots.push(file),
+                        Err(std::fs::TryLockError::WouldBlock) => {}
+                        Err(std::fs::TryLockError::Error(e)) => {
+                            return Err(SdError::failed(format!("cannot lock search slot: {e}")))
+                        }
+                    }
+                    if !full && !slots.is_empty() {
+                        break;
+                    }
+                }
+                broker
+                    .unlock()
+                    .map_err(|e| SdError::failed(format!("cannot release search broker: {e}")))?;
+                if slots.len() == if full { 2 } else { 1 } {
+                    return Ok(SearchAdmission {
+                        _slots: slots,
+                        _full: full_lock,
+                    });
+                }
+                // Never hold half of a full-search reservation while waiting.
+                drop(slots);
+            }
+            Err(std::fs::TryLockError::WouldBlock) => {}
+            Err(std::fs::TryLockError::Error(e)) => {
+                return Err(SdError::failed(format!("cannot lock search broker: {e}")))
+            }
+        }
+        if !waiting {
+            eprintln!("board search waiting: two-slot host budget, up to 30s");
+            search_event(&dir, "wait", full);
+            waiting = true;
+        }
+        if started.elapsed() >= Duration::from_secs(30) {
+            search_event(&dir, "refuse", full);
+            return Err(SdError::refused(
+                "board search busy: waited 30s for the two-slot host budget; no search started",
+            ));
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
+fn search_event(dir: &Path, event: &str, full: bool) {
+    use std::io::Write;
+    let time = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs());
+    let record = format!("{{\"time\":{time},\"event\":\"{event}\",\"full\":{full}}}\n");
+    let mut options = OpenOptions::new();
+    options.create(true).append(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let result = options
+        .open(dir.join("search-admission.jsonl"))
+        .and_then(|mut file| file.write_all(record.as_bytes()));
+    if let Err(e) = result {
+        eprintln!("search admission telemetry unavailable: {e}");
+    }
+}
+
 /// Open (creating if needed) the store at `path` for writing, under the lock.
 pub fn open_for_write(path: &Path, graph: &str) -> Result<WriteHandle> {
     if let Some(dir) = path.parent().filter(|d| !d.as_os_str().is_empty()) {

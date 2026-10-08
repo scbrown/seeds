@@ -586,6 +586,9 @@ pub struct ListArgs {
     /// Include deferred seeds (hidden by default, as br does)
     #[arg(long)]
     pub deferred: bool,
+    /// Only seeds with a defer-until field (including past or malformed dates)
+    #[arg(long)]
+    pub defer_until_present: bool,
     /// With --format csv: the columns, comma-separated (default id,title,status,priority,issue_type,assignee,created_at,updated_at)
     #[arg(long)]
     pub fields: Option<String>,

@@ -317,6 +317,15 @@ fn real_output_conforms_to_the_published_schemas() {
     for row in st.json(&["list"])["issues"].as_array().unwrap() {
         check(row, "issue-with-counts");
     }
+    for row in st.json(&["search", "a"])["issues"].as_array().unwrap() {
+        check(row, "search-issue");
+    }
+    for row in st.json(&["search", "a", "--full"])["issues"]
+        .as_array()
+        .unwrap()
+    {
+        check(row, "issue-with-counts");
+    }
     for row in st.json(&["blocked"])["issues"].as_array().unwrap() {
         check(row, "blocked-issue");
     }

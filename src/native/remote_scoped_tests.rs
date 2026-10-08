@@ -363,7 +363,7 @@ fn reads(b: &dyn Backend, c: &Ctx, n: &[String], all_ids: &[String]) -> Vec<Stri
                 Ok(result) => format!(
                     "search {req:?} hidden={} {}",
                     result.hidden_closed,
-                    output::list_json(&result.page)
+                    output::search_json(&result)
                 ),
                 Err(e) => format!("search {req:?} {}", err(&e)),
             });
@@ -421,10 +421,11 @@ fn reads(b: &dyn Backend, c: &Ctx, n: &[String], all_ids: &[String]) -> Vec<Stri
         }),
     ];
     for filter in &filters {
-        for (all, deferred, limit, offset, sort, reverse) in [
-            (false, false, None, 0, None, false),
-            (true, false, Some(0), 0, Some("created"), false),
-            (false, true, Some(5), 3, Some("id"), true),
+        for (all, deferred, limit, offset, sort, reverse, defer_until_present) in [
+            (false, false, None, 0, None, false, false),
+            (true, false, Some(0), 0, Some("created"), false, false),
+            (false, true, Some(5), 3, Some("id"), true, false),
+            (true, true, Some(0), 0, Some("id"), false, true),
         ] {
             let req = ListReq {
                 filter: filter.clone(),
@@ -434,6 +435,7 @@ fn reads(b: &dyn Backend, c: &Ctx, n: &[String], all_ids: &[String]) -> Vec<Stri
                 offset,
                 reverse,
                 deferred,
+                defer_until_present,
             };
             out.push(match engine::list(b, &req, None) {
                 Ok(p) => format!(

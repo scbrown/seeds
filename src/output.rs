@@ -63,6 +63,17 @@ pub fn list_json(p: &Page) -> Json {
 pub fn search_json(r: &SearchPage) -> Json {
     let mut o = list_json(&r.page);
     o["hidden_closed_count"] = json!(r.hidden_closed);
+    if r.full {
+        return o;
+    }
+    for issue in o["issues"]
+        .as_array_mut()
+        .expect("list envelope has issues")
+    {
+        issue["dependency_count"] = Json::Null;
+        issue["dependent_count"] = Json::Null;
+    }
+    o["counts"] = json!("not_computed");
     o["search_scope"] = json!(search_scope(r));
     o["search_notice"] = json!(if r.full {
         format!("{} full-field matches", r.page.total)
@@ -88,6 +99,9 @@ pub fn search_text(r: &SearchPage, query: &str, layout: Layout) -> String {
     }
     out.push('\n');
     out.push_str(search_scope(r));
+    if !r.full {
+        out.push_str("\ndependency/dependent counts: not computed (--full for exact counts)");
+    }
     out
 }
 

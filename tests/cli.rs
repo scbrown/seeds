@@ -2447,6 +2447,12 @@ fn search_scope_is_explicit_for_hits_zeros_json_and_csv() {
         let json = sb.json(&["search", query]);
         assert!(json["search_scope"].as_str().unwrap().contains(scope));
         assert_eq!(json["total"], if query == "visible-title" { 1 } else { 0 });
+        assert_eq!(json["counts"], "not_computed");
+        for row in json["issues"].as_array().unwrap() {
+            assert!(row.get("dependency_count").is_some_and(Value::is_null));
+            assert!(row.get("dependent_count").is_some_and(Value::is_null));
+        }
+        assert!(text.contains("dependency/dependent counts: not computed"));
         let csv = sb.run(&["search", query, "--format", "csv", "--fields", "id"]);
         assert!(csv.status.success());
         assert!(String::from_utf8_lossy(&csv.stderr).contains(scope));
@@ -2454,10 +2460,10 @@ fn search_scope_is_explicit_for_hits_zeros_json_and_csv() {
     }
     let full = sb.json(&["search", "body-only-needle", "--full"]);
     assert_eq!(ids(&full), vec![id]);
-    assert!(full["search_scope"]
-        .as_str()
-        .unwrap()
-        .contains("descriptions and comments"));
+    assert!(full.get("counts").is_none());
+    assert!(full.get("search_scope").is_none());
+    assert!(full["issues"][0]["dependency_count"].is_number());
+    assert!(full["issues"][0]["dependent_count"].is_number());
 }
 
 #[test]
@@ -2495,4 +2501,223 @@ fn full_search_lock_spans_projects_but_does_not_block_titles() {
     assert!(!blocked.status.success());
     drop(lock);
     assert!(sb.run(&["search", "lock-title", "--full"]).status.success());
+}
+
+/// Slow provenance replies keep real CLI processes inside admission while a
+/// third tries to enter. No query reaches an external service or a real board.
+struct SlowSearchServer {
+    url: String,
+    health: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    stop: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    thread: Option<std::thread::JoinHandle<()>>,
+}
+
+impl SlowSearchServer {
+    fn new() -> Self {
+        use std::io::{Read, Write};
+        use std::sync::{
+            atomic::{AtomicBool, AtomicUsize, Ordering},
+            Arc,
+        };
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        listener.set_nonblocking(true).unwrap();
+        let health = Arc::new(AtomicUsize::new(0));
+        let stop = Arc::new(AtomicBool::new(false));
+        let (seen, halt) = (health.clone(), stop.clone());
+        let thread = std::thread::spawn(move || {
+            while !halt.load(Ordering::SeqCst) {
+                let (mut stream, _) = match listener.accept() {
+                    Ok(pair) => pair,
+                    Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                        std::thread::sleep(std::time::Duration::from_millis(5));
+                        continue;
+                    }
+                    Err(e) => panic!("mock search listener: {e}"),
+                };
+                let seen = seen.clone();
+                std::thread::spawn(move || {
+                    stream
+                        .set_read_timeout(Some(std::time::Duration::from_secs(5)))
+                        .unwrap();
+                    let mut bytes = Vec::new();
+                    let header_end = loop {
+                        let mut byte = [0];
+                        if stream.read(&mut byte).unwrap() == 0 {
+                            return;
+                        }
+                        bytes.push(byte[0]);
+                        if bytes.ends_with(b"\r\n\r\n") {
+                            break bytes.len();
+                        }
+                    };
+                    let header = String::from_utf8_lossy(&bytes);
+                    let size = header
+                        .lines()
+                        .find_map(|line| {
+                            let (key, value) = line.split_once(':')?;
+                            key.eq_ignore_ascii_case("content-length")
+                                .then(|| value.trim().parse::<usize>().unwrap())
+                        })
+                        .unwrap_or(0);
+                    let health_request = header.starts_with("GET /health ");
+                    bytes.resize(header_end + size, 0);
+                    stream.read_exact(&mut bytes[header_end..]).unwrap();
+                    let response = if health_request {
+                        seen.fetch_add(1, Ordering::SeqCst);
+                        serde_json::json!({"status":"ok"})
+                    } else {
+                        let request: Value = serde_json::from_slice(&bytes[header_end..]).unwrap();
+                        let query = request["query"].as_str().unwrap();
+                        if query.contains("https://seeds.local/ontology/revision") {
+                            // Two such reads per search: each is below the
+                            // transport timeout, together longer than admission.
+                            std::thread::sleep(std::time::Duration::from_secs(19));
+                        }
+                        if query.starts_with("ASK") {
+                            serde_json::json!({"boolean":false})
+                        } else if query.contains("COUNT") {
+                            serde_json::json!({"results":{"bindings":[{"n":{"type":"literal","datatype":"http://www.w3.org/2001/XMLSchema#integer","value":"0"}}]}})
+                        } else {
+                            serde_json::json!({"results":{"bindings":[]}})
+                        }
+                    };
+                    let body = response.to_string();
+                    let reply = format!("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",body.len());
+                    let _ = stream.write_all(reply.as_bytes());
+                });
+            }
+        });
+        Self {
+            url,
+            health,
+            stop,
+            thread: Some(thread),
+        }
+    }
+}
+
+impl Drop for SlowSearchServer {
+    fn drop(&mut self) {
+        self.stop.store(true, std::sync::atomic::Ordering::SeqCst);
+        self.thread.take().unwrap().join().unwrap();
+    }
+}
+
+#[test]
+fn search_fence_runs_two_titles_and_refuses_the_third_after_bounded_wait() {
+    use std::sync::atomic::Ordering;
+    use std::time::{Duration, Instant};
+    let sb = Sandbox::new("search-fence");
+    let server = SlowSearchServer::new();
+    let args = [
+        "--quipu",
+        server.url.as_str(),
+        "--graph",
+        "https://example.test/project/fence",
+        "search",
+        "needle",
+    ];
+    let spawn = || {
+        sb.cmd(&sb.work(), &args)
+            .env_remove("SEEDS_QUIPU_TOKEN")
+            .spawn()
+            .unwrap()
+    };
+    let mut one = spawn();
+    let mut two = spawn();
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while server.health.load(Ordering::SeqCst) < 2 {
+        assert!(
+            Instant::now() < deadline,
+            "two admitted searches did not reach the mock server"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let started = Instant::now();
+    let other = sb.root.join("other-project");
+    std::fs::create_dir_all(&other).unwrap();
+    let third = sb
+        .cmd(&other, &args)
+        .env_remove("SEEDS_QUIPU_TOKEN")
+        .output()
+        .unwrap();
+    assert!(
+        !third.status.success(),
+        "third search escaped the host fence"
+    );
+    assert!(String::from_utf8_lossy(&third.stderr).contains("board search busy"));
+    assert!(started.elapsed() >= Duration::from_secs(29));
+    assert!(started.elapsed() < Duration::from_secs(38));
+    assert_eq!(
+        server.health.load(Ordering::SeqCst),
+        2,
+        "third search touched the backend"
+    );
+    assert!(one.try_wait().unwrap().is_none() && two.try_wait().unwrap().is_none());
+    for child in [one, two] {
+        let out = child.wait_with_output().unwrap();
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+    let events =
+        std::fs::read_to_string(sb.root.join("home/.config/seeds/search-admission.jsonl")).unwrap();
+    assert_eq!(
+        events
+            .lines()
+            .filter(|line| line.contains("\"event\":\"refuse\""))
+            .count(),
+        1
+    );
+}
+
+#[test]
+fn full_search_uses_both_shared_host_slots() {
+    use std::sync::atomic::Ordering;
+    use std::time::{Duration, Instant};
+    let sb = Sandbox::new("full-shared-budget");
+    let server = SlowSearchServer::new();
+    let common = [
+        "--quipu",
+        server.url.as_str(),
+        "--graph",
+        "https://example.test/project/full-budget",
+        "search",
+        "needle",
+    ];
+    let mut full_args = common.to_vec();
+    full_args.push("--full");
+    let mut full = sb
+        .cmd(&sb.work(), &full_args)
+        .env_remove("SEEDS_QUIPU_TOKEN")
+        .spawn()
+        .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while server.health.load(Ordering::SeqCst) < 1 {
+        assert!(Instant::now() < deadline);
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let started = Instant::now();
+    let title = sb
+        .cmd(&sb.work(), &common)
+        .env_remove("SEEDS_QUIPU_TOKEN")
+        .output()
+        .unwrap();
+    assert!(
+        !title.status.success(),
+        "a title search overlapped a two-slot full search"
+    );
+    assert!(String::from_utf8_lossy(&title.stderr).contains("board search busy"));
+    assert!(started.elapsed() >= Duration::from_secs(29));
+    assert_eq!(server.health.load(Ordering::SeqCst), 1);
+    assert!(full.try_wait().unwrap().is_none());
+    let result = full.wait_with_output().unwrap();
+    assert!(
+        result.status.success(),
+        "{}",
+        String::from_utf8_lossy(&result.stderr)
+    );
 }

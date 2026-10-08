@@ -135,7 +135,11 @@ pub const TARGETS: &[(&str, &str)] = &[
     ),
     (
         "issue-with-counts",
-        "a list/search row: a seed plus dependent_count",
+        "a list/full-search row: a seed plus dependent_count",
+    ),
+    (
+        "search-issue",
+        "a search row, with nullable dependency/dependent counts in title mode",
     ),
     (
         "issue-details",
@@ -164,6 +168,10 @@ pub fn target(name: &str) -> Option<Json> {
     Some(match name {
         "issue" | "ready-issue" | "stale-issue" => seed_with(&[]),
         "issue-with-counts" => seed_with(&[dependent_count]),
+        "search-issue" => seed_with(&[
+            ("dependency_count", kind(Kind::OptInt)),
+            ("dependent_count", kind(Kind::OptInt)),
+        ]),
         "issue-details" => seed_with(&[
             (
                 "dependencies",
@@ -227,7 +235,7 @@ pub fn commands() -> Json {
         ("create", "object", "issue", "."),
         ("show", "array", "issue-details", ".[]"),
         ("list", "envelope", "issue-with-counts", ".issues[]"),
-        ("search", "envelope", "issue-with-counts", ".issues[]"),
+        ("search", "envelope", "search-issue", ".issues[]"),
         ("blocked", "envelope", "blocked-issue", ".issues[]"),
         ("ready", "array", "ready-issue", ".[]"),
         ("stale", "array", "stale-issue", ".[]"),

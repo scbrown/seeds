@@ -1115,6 +1115,12 @@ fn actor(cli: &Cli) -> String {
 /// - **sync** (`[sync] remote`): a local store (with or without a pendant)
 ///   that `sd sync` merges with a remote.
 pub fn run_with(cli: &Cli, cfg: &Resolved) -> Result<Outcome> {
+    // Admit before opening the backend: even connection/provenance reads
+    // must stay behind the host budget. Keep the guard through the command.
+    let _search_admission = match &cli.command {
+        Command::Search(args) => Some(store::lock_search(args.full)?),
+        _ => None,
+    };
     let ctx = Ctx {
         now: now(),
         actor: actor(cli),
@@ -2243,6 +2249,7 @@ fn dispatch(cli: &Cli, cfg: &Resolved, ctx: &Ctx, b: &mut dyn Backend) -> Result
                 offset: a.offset,
                 reverse: a.reverse,
                 deferred: a.deferred,
+                defer_until_present: a.defer_until_present,
             };
             let p = engine::list(b, &req, at)?;
             let mut warnings = vec![];
@@ -2299,7 +2306,6 @@ fn dispatch(cli: &Cli, cfg: &Resolved, ctx: &Ctx, b: &mut dyn Backend) -> Result
             ))
         }
         Command::Search(a) => {
-            let _full_search_lock = if a.full { Some(store::lock_full_search()?) } else { None };
             let req = engine::SearchReq {
                 query: a.query.clone(),
                 full: a.full,
@@ -2332,6 +2338,7 @@ fn dispatch(cli: &Cli, cfg: &Resolved, ctx: &Ctx, b: &mut dyn Backend) -> Result
             let text = match csv_of(cli, &r.page.issues, &a.fields)? {
                 Some(csv) => {
                     eprintln!("{}", output::search_scope(&r));
+                    if !r.full { eprintln!("dependency/dependent counts: not computed (--full for exact counts)"); }
                     csv
                 }
                 None => output::search_text(&r, &a.query, layout),

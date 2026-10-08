@@ -14,7 +14,11 @@ sd search "comment phrase" --full --all
 - `--full` also searches **ids, descriptions and comments** (notes are not
   searched). This administrative operation can read much more data. One full
   search at a time is permitted per user on a host, across all projects; a
-  concurrent full search is refused rather than queued.
+  concurrent full search is refused rather than queued. Title searches share a
+  two-slot host-user budget; `--full` takes both slots. If the budget remains
+  busy for 30 seconds, a search refuses with `board search busy`. Wait/refuse
+  events are appended to `$HOME/.config/seeds/search-admission.jsonl` for
+  observation; failed telemetry does not weaken admission.
 - Closed matches are **hidden and counted** unless `--all` or `--status`: the
   text says how many, and `--json` carries `hidden_closed_count`.
 - Takes the [list](list.md) filters (`-s`, `-t`, `--assignee`,
@@ -22,7 +26,10 @@ sd search "comment phrase" --full --all
   0 = all). A cut-short page says so.
 
 **`--json`**: br's envelope `{issues, hidden_closed_count, limit, offset,
-has_more}`, plus `total`, `search_scope` and `search_notice`. CSV results keep
+has_more}`, plus `total`. Title mode adds `search_scope`, `search_notice` and
+`counts: "not_computed"`; its `dependency_count` and `dependent_count` values
+are **null**, never a measured zero. Human output names this omission. `--full`
+keeps the original JSON envelope and exact counts. CSV results keep
 their tabular stdout and report the scope on stderr.
 
 **Filters** (also on [search](search.md)): `--title-contains`,

@@ -67,7 +67,7 @@ impl RemoteBackend {
             0
         };
         let (compact, has_ephemeral) =
-            self.metadata_snapshot(&subjects, &req.filter, req.sort.as_deref())?;
+            self.metadata_snapshot(&subjects, &req.filter, req.sort.as_deref(), false)?;
         let mut page = engine::search_matches_page(req, &compact)?;
         page.hidden_closed = hidden_closed;
         let ids = page
@@ -86,7 +86,11 @@ impl RemoteBackend {
                 })?
                 .clone();
         }
-        page.page.dependent_counts = self.incoming_counts_scoped(&ids, has_ephemeral)?;
+        page.page.dependent_counts = if req.full {
+            self.incoming_counts_scoped(&ids, has_ephemeral)?
+        } else {
+            BTreeMap::new()
+        };
         Ok(page)
     }
 
@@ -125,11 +129,15 @@ impl RemoteBackend {
         subjects: &BTreeSet<String>,
         filter: &Filter,
         sort: Option<&str>,
+        defer_until_present: bool,
     ) -> Result<(Snapshot, bool)> {
         let mut main = Facts::new();
         let mut eph = Facts::new();
         let mut has_ephemeral = false;
         let mut predicates = vec![vocab::RDF_TYPE.into(), term::identifier(), term::status()];
+        if defer_until_present {
+            predicates.push(term::defer_until());
+        }
         let sort = sort.unwrap_or("priority");
         if sort == "priority"
             || filter.priority.is_some()
@@ -209,8 +217,11 @@ impl RemoteBackend {
 
     pub(super) fn list_summary(&self, req: &engine::ListReq) -> Result<engine::Page> {
         let q = engine::listing_seed_query(req)?;
-        let pattern = vocab::seed_query_pattern(&q)
+        let mut pattern = vocab::seed_query_pattern(&q)
             .unwrap_or_else(|| format!("?s a <{}>", term::work_item()));
+        if req.defer_until_present {
+            pattern += &format!(" . ?s <{}> ?defer_candidate .", term::defer_until());
+        }
         let mut subjects = BTreeSet::new();
         if req.filter.ids.is_empty() {
             for graph in self.both_graphs() {
@@ -219,8 +230,12 @@ impl RemoteBackend {
         } else {
             subjects.extend(req.filter.ids.iter().map(|id| vocab::item_iri(id)));
         }
-        let (compact, has_ephemeral) =
-            self.metadata_snapshot(&subjects, &req.filter, req.sort.as_deref())?;
+        let (compact, has_ephemeral) = self.metadata_snapshot(
+            &subjects,
+            &req.filter,
+            req.sort.as_deref(),
+            req.defer_until_present,
+        )?;
         let mut page = engine::list_matches_page(req, &compact)?;
         let ids = page.issues.iter().map(|s| s.id.clone()).collect::<Vec<_>>();
         let snap = self.page_snapshot(&ids, has_ephemeral)?;
