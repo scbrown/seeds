@@ -9,7 +9,7 @@
 //! | `X-Quipu-Agent`   | `QUIPU_AGENT`; `SHANTY_AGENT` inside an agent session; `seeds`  |
 //! | `X-Quipu-Harness` | `QUIPU_HARNESS`; `claude` (`CLAUDECODE=1`); `codex` (`CODEX_HOME`); `cli` |
 //! | `X-Quipu-Model`   | `QUIPU_MODEL`; `SHANTY_MODEL`                                   |
-//! | `X-Quipu-Session` | `QUIPU_SESSION`; `CLAUDE_CODE_SESSION_ID`                       |
+//! | `X-Quipu-Session` | `QUIPU_SESSION`; the harness's own: `CODEX_SESSION_ID` then `CODEX_THREAD_ID` in a Codex session, else `CLAUDE_CODE_SESSION_ID` |
 //! | `X-Quipu-Host`    | `QUIPU_HOST`; the machine's hostname                            |
 //!
 //! An agent session is `CLAUDECODE=1` or a non-empty `CODEX_HOME`. Outside one,
@@ -82,7 +82,16 @@ pub fn headers_from(
             .or(session_harness)
             .or_else(|| Some(PRODUCER_HARNESS.to_string())),
         get("QUIPU_MODEL").or_else(|| get("SHANTY_MODEL")),
-        get("QUIPU_SESSION").or_else(|| get("CLAUDE_CODE_SESSION_ID")),
+        // The session id of the harness this IS. Codex exports its own to tool
+        // shells; reading only Claude's left every Codex write sessionless, and
+        // an inherited Claude id inside Codex would credit the wrong session.
+        get("QUIPU_SESSION").or_else(|| {
+            if codex && !claude {
+                get("CODEX_SESSION_ID").or_else(|| get("CODEX_THREAD_ID"))
+            } else {
+                get("CLAUDE_CODE_SESSION_ID")
+            }
+        }),
         get("QUIPU_HOST").or_else(|| hostname().filter(|h| !h.is_empty())),
     ];
     FIELDS
@@ -195,6 +204,31 @@ mod tests {
         let h = run(&[("CODEX_HOME", ""), ("SHANTY_AGENT", "x")], Some("box"));
         assert_eq!(h["X-Quipu-Agent"], "seeds");
         assert_eq!(h["X-Quipu-Harness"], "cli");
+    }
+
+    #[test]
+    fn a_codex_session_names_its_own_session() {
+        let h = run(
+            &[
+                ("CODEX_HOME", "/c"),
+                ("SHANTY_AGENT", "x"),
+                ("CODEX_SESSION_ID", "cs-1"),
+                ("CODEX_THREAD_ID", "ct-1"),
+                // Inherited from a Claude shell that launched Codex: not ours.
+                ("CLAUDE_CODE_SESSION_ID", "s-1"),
+            ],
+            Some("box"),
+        );
+        assert_eq!(h["X-Quipu-Session"], "cs-1");
+        // The thread id is the fallback when only it is exported.
+        let h = run(
+            &[("CODEX_HOME", "/c"), ("CODEX_THREAD_ID", "ct-1")],
+            Some("box"),
+        );
+        assert_eq!(h["X-Quipu-Session"], "ct-1");
+        // Outside a Codex session its ids are ignored, like SHANTY_AGENT.
+        let h = run(&[("CODEX_SESSION_ID", "cs-1")], Some("box"));
+        assert!(!h.contains_key("X-Quipu-Session"));
     }
 
     #[test]
