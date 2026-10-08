@@ -1,0 +1,51 @@
+# Minimal remote-store admission profile. It governs only the Action and
+# Write, Comment and AttributionClaim classes emitted by the producer; it does not replace the
+# complete client-side profile in seeds.shapes.ttl or migrate existing data.
+@prefix schema: <https://schema.org/> .
+@prefix seeds: <https://seeds.local/ontology/> .
+@prefix quechua: <https://scbrown.github.io/quechua/ns#> .
+@prefix sh: <http://www.w3.org/ns/shacl#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
+@prefix aegis: <http://aegis.gastown.local/ontology/> .
+
+seeds:RemoteActionShape a sh:NodeShape ;
+    sh:targetClass schema:Action ;
+    sh:property [ sh:path schema:identifier ; sh:minCount 1 ; sh:maxCount 1 ; sh:datatype xsd:string ] ;
+    sh:property [ sh:path schema:name ; sh:minCount 1 ; sh:maxCount 1 ; sh:datatype xsd:string ; sh:equals rdfs:label ] ;
+    sh:property [ sh:path rdfs:label ; sh:minCount 1 ; sh:maxCount 1 ; sh:datatype xsd:string ] ;
+    sh:property [ sh:path schema:version ; sh:minCount 1 ; sh:maxCount 1 ; sh:datatype xsd:integer ] ;
+    sh:property [ sh:path seeds:status ; sh:minCount 1 ; sh:maxCount 1 ; sh:in ("open" "hooked" "in_progress" "blocked" "deferred" "closed" "tombstone") ] ;
+    sh:property [ sh:path seeds:priority ; sh:minCount 1 ; sh:maxCount 1 ; sh:datatype xsd:integer ; sh:minInclusive 0 ; sh:maxInclusive 4 ] ;
+    sh:property [ sh:path seeds:issueType ; sh:minCount 1 ; sh:maxCount 1 ; sh:datatype xsd:string ] ;
+    sh:property [ sh:path schema:dateCreated ; sh:minCount 1 ; sh:maxCount 1 ; sh:datatype xsd:dateTime ] ;
+    sh:property [ sh:path quechua:sourceKind ; sh:minCount 1 ; sh:maxCount 1 ; sh:in ("observed" "declared" "inferred") ] .
+
+# Write records have no rdfs:label in the producer contract. Do not require
+# invented labels or type their string timestamp as a dateTime.
+seeds:RemoteWriteShape a sh:NodeShape ;
+    sh:targetClass seeds:Write ;
+    sh:property [ sh:path seeds:actor ; sh:minCount 1 ; sh:maxCount 1 ; sh:datatype xsd:string ] ;
+    sh:property [ sh:path seeds:source ; sh:minCount 1 ; sh:maxCount 1 ; sh:datatype xsd:string ] ;
+    sh:property [ sh:path seeds:at ; sh:minCount 1 ; sh:maxCount 1 ; sh:datatype xsd:string ] ;
+    sh:property [ sh:path seeds:wrote ; sh:nodeKind sh:IRI ] ;
+    sh:property [ sh:path seeds:version ; sh:datatype xsd:string ] ;
+    sh:property [ sh:path seeds:claimed ; sh:nodeKind sh:IRI ] .
+
+seeds:RemoteCommentShape a sh:NodeShape ;
+    sh:targetClass schema:Comment ;
+    sh:property [ sh:path schema:parentItem ; sh:minCount 1 ; sh:maxCount 1 ; sh:nodeKind sh:IRI ] ;
+    sh:property [ sh:path schema:position ; sh:minCount 1 ; sh:maxCount 1 ; sh:datatype xsd:integer ; sh:minInclusive 1 ] ;
+    sh:property [ sh:path schema:author ; sh:minCount 1 ; sh:maxCount 1 ; sh:nodeKind sh:IRI ] ;
+    sh:property [ sh:path schema:text ; sh:minCount 1 ; sh:maxCount 1 ; sh:datatype xsd:string ] ;
+    sh:property [ sh:path schema:dateCreated ; sh:maxCount 1 ; sh:datatype xsd:dateTime ] .
+
+# Attribution is self-declared. The producer retains the original governance
+# predicate on this record; loading a shape does not rename it.
+seeds:RemoteAttributionClaimShape a sh:NodeShape ;
+    sh:targetClass seeds:AttributionClaim ;
+    sh:property [ sh:path aegis:sourceKind ; sh:minCount 1 ; sh:maxCount 1 ; sh:hasValue "declared" ] ;
+    sh:property [ sh:path seeds:agentName ; sh:maxCount 1 ; sh:datatype xsd:string ] ;
+    sh:property [ sh:path seeds:harness ; sh:maxCount 1 ; sh:datatype xsd:string ] ;
+    sh:property [ sh:path seeds:model ; sh:maxCount 1 ; sh:datatype xsd:string ] ;
+    sh:property [ sh:path seeds:session ; sh:maxCount 1 ; sh:datatype xsd:string ] .
