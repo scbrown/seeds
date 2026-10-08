@@ -18,7 +18,7 @@ sd --version
 ```
 
 ```text
-sd 0.0.2
+sd 0.1.1 (seeds)
 ```
 
 ### If you already have chmln/sd
