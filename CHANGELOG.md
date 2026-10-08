@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.1.3] - 2026-10-08
+
+### Added
+
+- *(remote)* Send structured X-Quipu-* write provenance (#103) ([00c48b5](https://github.com/scbrown/seeds/commit/00c48b5f2a00f75f24124b778d3bb5cdedc48f9d))
+
 ## [0.1.2] - 2026-10-08
 
 ### Documentation
