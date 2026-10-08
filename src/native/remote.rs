@@ -137,6 +137,13 @@ pub struct RemoteBackend {
     subject_page: usize,
 }
 
+/// Every request seeds sends to quipu names its client and carries the
+/// process's structured write provenance (`X-Quipu-Agent`, `-Harness`,
+/// `-Model`, `-Session`, `-Host`; see [`super::provenance`]).
+fn quipu_request(req: ureq::Request) -> ureq::Request {
+    super::provenance::apply(req.set("X-Quipu-Client", "seeds"))
+}
+
 fn transport(url: &str, e: &ureq::Transport) -> SdError {
     SdError::new(
         ErrorKind::Unreachable,
@@ -240,7 +247,7 @@ impl RemoteBackend {
             max_write_clauses: super::config::DEFAULT_MAX_WRITE_CLAUSES,
             subject_page: SUBJECT_PAGE,
         };
-        match b.agent.get(&format!("{}/health", b.base)).call() {
+        match quipu_request(b.agent.get(&format!("{}/health", b.base))).call() {
             Ok(_) => Ok(b),
             Err(ureq::Error::Transport(t)) => Err(transport(&b.base, &t)),
             Err(ureq::Error::Status(code, r)) => Err(status_error(
@@ -288,12 +295,9 @@ impl RemoteBackend {
         auth: bool,
     ) -> std::result::Result<String, (bool, SdError)> {
         let url = format!("{}{path}", self.base);
-        let mut req = self
-            .agent
-            .post(&url)
+        let mut req = quipu_request(self.agent.post(&url))
             .set("Content-Type", content_type)
-            .set("Accept", "application/sparql-results+json")
-            .set("X-Quipu-Client", "seeds");
+            .set("Accept", "application/sparql-results+json");
         if auth {
             match &self.signer {
                 // A signed write carries the attestation and never the bearer.
@@ -789,11 +793,8 @@ impl RemoteBackend {
 
     /// POST with the bearer even when a signer is configured.
     fn send_bearer(&self, path: &str, content_type: &str, body: &str) -> Result<String> {
-        let mut req = self
-            .agent
-            .post(&format!("{}{path}", self.base))
-            .set("Content-Type", content_type)
-            .set("X-Quipu-Client", "seeds");
+        let mut req = quipu_request(self.agent.post(&format!("{}{path}", self.base)))
+            .set("Content-Type", content_type);
         if let Some(t) = &self.token {
             req = req.set("Authorization", &format!("Bearer {t}"));
         }
@@ -813,10 +814,7 @@ impl RemoteBackend {
     /// The server's registered graph IRIs, or `None` if it would not say (an
     /// older server, or any failure): then every graph is created, as before.
     fn graph_iris(&self) -> Option<std::collections::BTreeSet<String>> {
-        let text = self
-            .agent
-            .get(&format!("{}/graphs", self.base))
-            .set("X-Quipu-Client", "seeds")
+        let text = quipu_request(self.agent.get(&format!("{}/graphs", self.base)))
             .call()
             .ok()?
             .into_string()
@@ -1554,6 +1552,118 @@ mod tests {
             }
         });
         (base, queries)
+    }
+
+    /// Each request a [`recording_server`] saw: its first line and headers.
+    type Recorded = std::sync::Arc<std::sync::Mutex<Vec<(String, Vec<(String, String)>)>>>;
+
+    /// A one-thread HTTP server that answers 200 to everything and records
+    /// each request's first line and lowercased header names and values.
+    fn recording_server() -> (String, Recorded) {
+        use std::io::{BufRead, BufReader, Read, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let log = std::sync::Arc::clone(&seen);
+        std::thread::spawn(move || {
+            for stream in listener.incoming().flatten() {
+                let mut reader = BufReader::new(stream);
+                let mut first = String::new();
+                if reader.read_line(&mut first).is_err() {
+                    continue;
+                }
+                let mut headers = Vec::new();
+                let mut length = 0usize;
+                loop {
+                    let mut line = String::new();
+                    if reader.read_line(&mut line).unwrap_or(0) == 0 || line == "\r\n" {
+                        break;
+                    }
+                    if let Some((k, v)) = line.trim_end().split_once(':') {
+                        let k = k.trim().to_ascii_lowercase();
+                        if k == "content-length" {
+                            length = v.trim().parse().unwrap_or(0);
+                        }
+                        headers.push((k, v.trim().to_string()));
+                    }
+                }
+                let mut body = vec![0u8; length];
+                let _ = reader.read_exact(&mut body);
+                log.lock()
+                    .unwrap()
+                    .push((first.trim_end().to_string(), headers));
+                let reply = r#"{"graphs":[]}"#;
+                let mut stream = reader.into_inner();
+                let _ = write!(
+                    stream,
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{reply}",
+                    reply.len()
+                );
+            }
+        });
+        (base, seen)
+    }
+
+    // aegis-1jh5en: every request seeds sends to quipu (the health check,
+    // the graph listing, a signed-or-bearer POST and a bearer-only POST)
+    // carries the client label and this process's write provenance.
+    #[test]
+    fn every_quipu_request_carries_the_provenance_headers() {
+        let (base, seen) = recording_server();
+        let remote = RemoteBackend::connect(&base, "urn:g", None, None, &[]).unwrap();
+        remote.graph_iris().expect("graph listing");
+        remote
+            .post(
+                "/update",
+                "application/sparql-update",
+                "INSERT DATA {}",
+                true,
+            )
+            .unwrap();
+        remote
+            .send_bearer("/graph/create", "application/json", "{}")
+            .unwrap();
+
+        let expected = super::super::provenance::headers();
+        let names: Vec<&str> = expected.iter().map(|(n, _)| *n).collect();
+        // The producer always names an agent and a harness.
+        assert!(names.contains(&"X-Quipu-Agent"), "{expected:?}");
+        assert!(names.contains(&"X-Quipu-Harness"), "{expected:?}");
+
+        let requests = seen.lock().unwrap().clone();
+        let lines: Vec<&str> = requests.iter().map(|(l, _)| l.as_str()).collect();
+        assert_eq!(requests.len(), 4, "{lines:?}");
+        for path in [
+            "GET /health",
+            "GET /graphs",
+            "POST /update",
+            "POST /graph/create",
+        ] {
+            assert!(
+                lines.iter().any(|l| l.starts_with(path)),
+                "{path} not sent: {lines:?}"
+            );
+        }
+        for (line, headers) in &requests {
+            let get = |name: &str| {
+                let name = name.to_ascii_lowercase();
+                headers
+                    .iter()
+                    .filter(|(k, _)| *k == name)
+                    .map(|(_, v)| v.as_str())
+                    .collect::<Vec<_>>()
+            };
+            assert_eq!(get("X-Quipu-Client"), ["seeds"], "{line}");
+            for (name, value) in expected {
+                assert_eq!(get(name), [value.as_str()], "{line}: {name}");
+            }
+            // Nothing beyond the computed set is sent as provenance.
+            for (field, header) in super::super::provenance::FIELDS {
+                if !names.contains(&header) {
+                    assert!(get(header).is_empty(), "{line}: {field} sent unfilled");
+                }
+            }
+        }
     }
 
     #[test]

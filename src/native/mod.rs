@@ -11,6 +11,7 @@ pub mod attest;
 pub mod cli;
 pub mod config;
 mod cutover;
+pub mod provenance;
 pub mod remote;
 pub mod store;
 

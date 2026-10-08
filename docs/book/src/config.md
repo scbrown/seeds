@@ -72,6 +72,25 @@ everything.
 `Authorization: Bearer <token>` when a token is configured (`SEEDS_QUIPU_TOKEN`
 or `[quipu] token_file`); reads send none.
 
+### Write provenance
+
+Every request to the server carries `X-Quipu-Client: seeds` and up to five
+provenance headers, filled from the environment, never typed:
+
+| header            | first of                                                                  |
+|-------------------|---------------------------------------------------------------------------|
+| `X-Quipu-Agent`   | `QUIPU_AGENT`; `SHANTY_AGENT` inside an agent session; `seeds`            |
+| `X-Quipu-Harness` | `QUIPU_HARNESS`; `claude` (`CLAUDECODE=1`); `codex` (`CODEX_HOME`); `cli` |
+| `X-Quipu-Model`   | `QUIPU_MODEL`; `SHANTY_MODEL`                                             |
+| `X-Quipu-Session` | `QUIPU_SESSION`; `CLAUDE_CODE_SESSION_ID`                                 |
+| `X-Quipu-Host`    | `QUIPU_HOST`; the machine's hostname                                      |
+
+An agent session is `CLAUDECODE=1` or a set `CODEX_HOME`; outside one,
+`SHANTY_AGENT` is ignored. A cron or service running `sd` names itself with
+the `QUIPU_*` overrides, e.g. `QUIPU_AGENT=nightly-sync QUIPU_HARNESS=cron`.
+A field that cannot be filled is omitted. Values keep only printable ASCII,
+at most 128 characters, so no header can be injected.
+
 A configured URL that cannot be reached is **exit 7**, "cannot reach quipu at
 …". seeds **never** falls back to a local store when a configured server is
 down, because the two would then hold different ledgers.
