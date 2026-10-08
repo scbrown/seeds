@@ -1016,12 +1016,18 @@ impl Backend for RemoteBackend {
         self.search_summary(req).map(Some)
     }
 
-    fn ledger_counts(&self) -> Result<(usize, usize, u64)> {
+    fn ledger_issue_count(&self) -> Result<(usize, u64)> {
         let graphs = self.both_graphs();
         let seeds = self.aggregate_number(&format!(
             "SELECT (COUNT(DISTINCT ?id) AS ?n) WHERE {{ {{ GRAPH <{}> {{ ?s a <{}> ; <{}> ?id }} }} UNION {{ GRAPH <{}> {{ ?s a <{}> ; <{}> ?id }} }} }}",
             graphs[0], term::work_item(), term::identifier(), graphs[1], term::work_item(), term::identifier()
         ))?;
+        Ok((seeds, 0))
+    }
+
+    fn ledger_counts(&self) -> Result<(usize, usize, u64)> {
+        let (seeds, tx) = self.ledger_issue_count()?;
+        let graphs = self.both_graphs();
         let mut comments = 0;
         for graph in graphs {
             comments += self.aggregate_number(&format!(
@@ -1029,7 +1035,7 @@ impl Backend for RemoteBackend {
                 term::comment(), term::comment_index(), term::comment_on(), vocab::SEEDS_BASE
             ))?;
         }
-        Ok((seeds, comments, 0))
+        Ok((seeds, comments, tx))
     }
 
     fn snapshot(&self, at: Option<u64>) -> Result<Snapshot> {
@@ -1130,6 +1136,42 @@ impl Backend for RemoteBackend {
     }
 
     fn ready_ids_where(&self, query: &crate::backend::SeedQuery) -> Result<Option<Vec<String>>> {
+        if let Some(owner) = &query.assignee {
+            // Candidate owner index first, then readiness with a bound source.
+            // Joining owner UNION to the open Action class materializes the
+            // unrelated class before applying the owner restriction.
+            let owners = format!(
+                "{{ ?s <{}> <{}> }} UNION {{ ?s <{}> \"{}\" }}",
+                term::assigned_to(),
+                vocab::principal_iri(owner),
+                term::assigned_to(),
+                escape_literal(owner)
+            );
+            let subjects = self.subjects_where(&self.graph, &owners, None)?;
+            let subjects = subjects.into_iter().collect::<Vec<_>>();
+            let mut ids = BTreeSet::new();
+            for chunk in subjects.chunks(10) {
+                let branches = chunk.iter().map(|s| format!(
+                    "{{ GRAPH <{}> {{ <{s}> <{}> \"open\" ; a <{}> ; <{}> ?id . FILTER NOT EXISTS {{ <{s}> <{}> ?blocker . ?blocker <{}> ?bs . <{s}> a <{}> . FILTER(?bs != \"closed\" && ?bs != \"tombstone\") }} }} }}",
+                    self.graph, term::status(), term::work_item(), term::identifier(),
+                    term::blocked_on(), term::status(), term::work_item()
+                )).collect::<Vec<_>>().join(" UNION ");
+                let (rows, truncated) = self.select_marked(
+                    &format!("SELECT ?id WHERE {{ {branches} }} LIMIT {ROW_CAP}"),
+                    None,
+                )?;
+                if truncated || rows.len() >= ROW_CAP {
+                    return Err(SdError::failed("quipu truncated owner readiness"));
+                }
+                for mut row in rows {
+                    if let Some(Obj::Str(id)) = row.remove("id") {
+                        ids.insert(id);
+                    }
+                }
+            }
+            // Engine::ready validates all remaining filters after hydration.
+            return Ok(Some(ids.into_iter().collect()));
+        }
         let Some(pattern) = vocab::seed_query_pattern_var(query, "?item") else {
             return Ok(None);
         };

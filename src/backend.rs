@@ -247,6 +247,12 @@ pub trait Backend {
         Ok(None)
     }
 
+    /// Exact item count without requesting the expensive comment count.
+    fn ledger_issue_count(&self) -> Result<(usize, u64)> {
+        let snap = self.snapshot(None)?;
+        Ok((snap.seeds.len(), snap.tx))
+    }
+
     /// Ledger sizes without requiring a materialized ledger on indexed backends.
     fn ledger_counts(&self) -> Result<(usize, usize, u64)> {
         let snap = self.snapshot(None)?;

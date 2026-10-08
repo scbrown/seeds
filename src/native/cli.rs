@@ -315,6 +315,10 @@ pub struct VersionArgs {
 /// `sd info`.
 #[derive(Debug, Args)]
 pub struct InfoArgs {
+    /// ADMIN: compute the exact comment count (takes both shared read slots).
+    /// Measured cold cost exceeds 400 MB on a 30k-item board; not for automation.
+    #[arg(long, conflicts_with_all = ["whats_new", "thanks"])]
+    pub exact_comments: bool,
     /// Include the schema: the shapes' digest and target classes, and the
     /// vocabularies (sd schema prints the --json schemas). br's --schema
     #[arg(long)]

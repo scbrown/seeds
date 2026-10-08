@@ -242,6 +242,23 @@ fn value_types_are_stable() {
 /// A small JSON Schema check: type (incl. unions), enum, required,
 /// additionalProperties false, items. Enough for sd's closed-world schemas.
 fn conforms(v: &Value, schema: &Value, path: &str) -> Result<(), String> {
+    if let Some(expected) = schema.get("const") {
+        if v != expected {
+            return Err(format!("{path}: differs from const"));
+        }
+    }
+    if let Some(parts) = schema["allOf"].as_array() {
+        for part in parts {
+            conforms(v, part, path)?;
+        }
+    }
+    if let Some(condition) = schema.get("if") {
+        if conforms(v, condition, path).is_ok() {
+            if let Some(then) = schema.get("then") {
+                conforms(v, then, path)?;
+            }
+        }
+    }
     let ty = |t: &str| match t {
         "string" => v.is_string(),
         "integer" => v.is_i64() || v.is_u64(),
@@ -343,6 +360,12 @@ fn real_output_conforms_to_the_published_schemas() {
     let err: Value =
         serde_json::from_slice(&st.run(&["show", "sd-nope", "--json"]).stdout).unwrap();
     check(&err, "error");
+    let info = st.json(&["info"]);
+    check(&info, "info");
+    check(&st.json(&["info", "--exact-comments"]), "info");
+    let mut fake_zero = info;
+    fake_zero["comment_count"] = serde_json::json!(0);
+    assert!(conforms(&fake_zero, &schema("info"), "fake-zero").is_err());
     // CONTROL: the validator can fail. A seed with an extra key must not pass.
     let mut bad = st.json(&["show", &a])[0].clone();
     bad["surprise"] = Value::Bool(true);

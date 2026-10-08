@@ -2499,7 +2499,10 @@ fn full_search_lock_spans_projects_but_does_not_block_titles() {
         .output()
         .unwrap();
     assert!(!blocked.status.success());
+    let blocked_info = sb.run(&["info", "--exact-comments"]);
+    assert!(!blocked_info.status.success());
     drop(lock);
+    assert!(sb.run(&["info", "--exact-comments"]).status.success());
     assert!(sb.run(&["search", "lock-title", "--full"]).status.success());
 }
 
@@ -2720,4 +2723,100 @@ fn full_search_uses_both_shared_host_slots() {
         "{}",
         String::from_utf8_lossy(&result.stderr)
     );
+}
+
+#[test]
+fn info_omits_comment_counts_explicitly_and_exact_admin_counts_positive_comments() {
+    let sb = Sandbox::new("info-null-contract");
+    let id = sb.json(&["create", "with comments"])["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    sb.json(&["comments", "add", &id, "positive comment control"]);
+    let routine = sb.json(&["info"]);
+    assert_eq!(routine["issue_count"], 1);
+    assert!(routine.get("comment_count").is_some_and(Value::is_null));
+    assert_eq!(routine["comment_count_status"], "not_computed");
+    assert!(sb.ok(&["info"]).contains("not computed (--exact-comments"));
+    let exact = sb.json(&["info", "--exact-comments"]);
+    assert_eq!(exact["issue_count"], 1);
+    assert_eq!(exact["comment_count"], 1);
+    assert_eq!(exact["comment_count_status"], "exact");
+    let output = sb.run(&["info", "--exact-comments"]);
+    assert!(String::from_utf8_lossy(&output.stderr).contains("measured cold memory exceeds 400 MB"));
+    assert_eq!(
+        code(&sb.run(&["info", "--exact-comments", "--whats-new"])),
+        2
+    );
+}
+
+#[test]
+fn exact_info_excludes_title_and_full_peers_and_releases_slots_after_failure() {
+    use std::sync::atomic::Ordering;
+    use std::time::{Duration, Instant};
+    let sb = Sandbox::new("exact-info-budget");
+    let server = SlowSearchServer::new();
+    let connection = [
+        "--quipu",
+        server.url.as_str(),
+        "--graph",
+        "https://example.test/project/admin-budget",
+    ];
+    let mut admin_args = connection.to_vec();
+    admin_args.extend(["info", "--exact-comments"]);
+    let mut admin = sb
+        .cmd(&sb.work(), &admin_args)
+        .env_remove("SEEDS_QUIPU_TOKEN")
+        .spawn()
+        .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while server.health.load(Ordering::SeqCst) < 1 {
+        assert!(Instant::now() < deadline);
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let mut title_args = connection.to_vec();
+    title_args.extend(["search", "needle"]);
+    let title = sb
+        .cmd(&sb.work(), &title_args)
+        .env_remove("SEEDS_QUIPU_TOKEN")
+        .spawn()
+        .unwrap();
+    let mut full_args = title_args.clone();
+    full_args.push("--full");
+    let full = sb
+        .cmd(&sb.work(), &full_args)
+        .env_remove("SEEDS_QUIPU_TOKEN")
+        .output()
+        .unwrap();
+    assert!(
+        !full.status.success(),
+        "full search escaped exact-info admission"
+    );
+    let result = title.wait_with_output().unwrap();
+    assert!(
+        !result.status.success(),
+        "title search escaped exact-info admission"
+    );
+    assert!(String::from_utf8_lossy(&result.stderr).contains("board search busy"));
+    assert_eq!(server.health.load(Ordering::SeqCst), 1);
+    assert!(admin.try_wait().unwrap().is_none());
+    assert!(admin.wait_with_output().unwrap().status.success());
+    // Backend connection failure happens after admission: all files must release.
+    assert!(!sb
+        .run(&["--quipu", "http://127.0.0.1:1", "info", "--exact-comments"])
+        .status
+        .success());
+    let dir = sb.root.join("home/.config/seeds");
+    for file in [
+        "search-slot-0.lock",
+        "search-slot-1.lock",
+        "full-search.lock",
+    ] {
+        let lock = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(dir.join(file))
+            .unwrap();
+        lock.try_lock().unwrap();
+    }
 }

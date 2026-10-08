@@ -217,11 +217,14 @@ impl RemoteBackend {
 
     pub(super) fn list_summary(&self, req: &engine::ListReq) -> Result<engine::Page> {
         let q = engine::listing_seed_query(req)?;
-        let mut pattern = vocab::seed_query_pattern(&q)
-            .unwrap_or_else(|| format!("?s a <{}>", term::work_item()));
-        if req.defer_until_present {
-            pattern += &format!(" . ?s <{}> ?defer_candidate .", term::defer_until());
-        }
+        // Start from the selective field index alone. Status/default UNION
+        // joins can materialize the whole Action class before this restriction.
+        // Metadata decoding and list_matches_page validate type and all filters.
+        let pattern = if req.defer_until_present {
+            format!("?s <{}> ?defer_candidate .", term::defer_until())
+        } else {
+            vocab::seed_query_pattern(&q).unwrap_or_else(|| format!("?s a <{}>", term::work_item()))
+        };
         let mut subjects = BTreeSet::new();
         if req.filter.ids.is_empty() {
             for graph in self.both_graphs() {
