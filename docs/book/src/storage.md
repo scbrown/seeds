@@ -211,3 +211,14 @@ and reaches a server only when configured to
 
 The store file is an ordinary quipu store, and a project's ledger travels as a
 pendant, quipu's own share format.
+
+### Remote admission profile
+
+`shapes/quipu-gate.shapes.ttl` is a separate, minimal server admission
+profile for `schema:Action`, `schema:Comment`, `seeds:Write` and
+`seeds:AttributionClaim`. It checks fields the item and
+write-record producers always emit. It does not replace the complete
+client-side profile, migrate data, or change stored class and predicate names. A server enabling vocabulary enforcement must probe every supported
+write operation against its complete loaded shape set before deployment.
+Write timestamps remain strings because that is the provenance producer's
+contract; item creation times remain typed `xsd:dateTime`.
