@@ -736,3 +736,87 @@ fn ready_refuses_a_seed_stored_under_a_non_canonical_iri() {
         );
     }
 }
+
+#[test]
+fn search_shadowing_and_identifier_counts_match_effective_snapshot() {
+    let Some(server) = quipu_server() else {
+        eprintln!("SKIPPED: set SEEDS_TEST_QUIPU_SERVER");
+        return;
+    };
+    let graph = "https://seeds.local/project/shadow-controls";
+    let eph = vocab::ephemeral_graph(graph);
+    let mut remote = RemoteBackend::connect(&server.base, graph, None, None, &[]).unwrap();
+    let item = |id: &str| vocab::item_iri(id);
+    let a = term::work_item();
+    let id = term::identifier();
+    let name = term::name();
+    let desc = term::description();
+    let status = term::status();
+    let update = |r: &RemoteBackend, q: String| {
+        r.post(
+            "/update",
+            "application/x-www-form-urlencoded",
+            &format!("update={}", super::form_encode(&q)),
+            true,
+        )
+        .unwrap();
+    };
+    update(&remote, format!("INSERT DATA {{ GRAPH <{graph}> {{
+        <{}> a <{a}> ; <{id}> \"control\" ; <{name}> \"positive needle\" ; <{status}> \"open\" .
+        <{}> a <{a}> ; <{id}> \"shadow\" ; <{name}> \"obsolete needle\" ; <{desc}> \"old needle description\" ; <{status}> \"open\" .
+        <https://example.org/alias> a <{a}> ; <{id}> \"control\" ; <{name}> \"positive needle\" .
+        <{}> a <{a}> ; <{id}> 42 ; <{name}> \"numeric needle\" .
+        <{}> a <{a}> ; <{id}> \"bad-language\"@en ; <{name}> \"language needle\" .
+        <{}> a <{a}> ; <{id}> <https://example.org/id> ; <{name}> \"IRI needle\" .
+        <{}> <{id}> \"untyped\" ; <{name}> \"untyped needle\" .
+        }} }}", item("control"),item("shadow"),item("bad-number"),item("bad-language"),item("bad-iri"),item("untyped")));
+    assert_eq!(remote.ledger_issue_count().unwrap().0, 2);
+    assert_eq!(
+        remote.snapshot(None).unwrap().seeds.len(),
+        2,
+        "nonempty decoder control"
+    );
+    let compare = |r: &mut RemoteBackend,
+                   query: &str,
+                   full: bool,
+                   all: bool,
+                   expected: usize,
+                   hidden: usize| {
+        let req = engine::SearchReq {
+            query: query.into(),
+            full,
+            all,
+            limit: Some(0),
+            ..Default::default()
+        };
+        let actual = engine::search(r, &req, None).unwrap();
+        let old = engine::search(&Whole(r), &req, None).unwrap();
+        assert_eq!(output::search_json(&actual), output::search_json(&old));
+        assert_eq!(actual.page.total, expected);
+        assert_eq!(actual.hidden_closed, hidden);
+    };
+    compare(&mut remote, "needle", false, true, 2, 0);
+    update(&remote, format!("INSERT DATA {{ GRAPH <{eph}> {{ <{}> a <{a}> ; <{id}> \"shadow\" ; <{name}> \"replacement unrelated\" ; <{desc}> \"replacement unrelated\" ; <{status}> \"open\" . }} }}",item("shadow")));
+    compare(&mut remote, "needle", false, true, 1, 0);
+    compare(&mut remote, "needle", true, true, 1, 0);
+    update(
+        &remote,
+        format!(
+            "DELETE WHERE {{ GRAPH <{eph}> {{ <{}> ?p ?o }} }}",
+            item("shadow")
+        ),
+    );
+    update(&remote, format!("INSERT DATA {{ GRAPH <{eph}> {{ <{}> a <{a}> ; <{id}> \"shadow\" ; <{name}> \"fresh needle\" ; <{desc}> \"fresh needle\" ; <{status}> \"closed\" . }} }}",item("shadow")));
+    compare(&mut remote, "needle", false, false, 1, 1);
+    compare(&mut remote, "needle", true, false, 1, 1);
+    update(&remote, format!("DELETE DATA {{ GRAPH <{eph}> {{ <{}> <{name}> \"fresh needle\" ; <{desc}> \"fresh needle\" . }} }}; INSERT DATA {{ GRAPH <{eph}> {{ <{}> <{name}> \"unrelated\" ; <{desc}> \"unrelated\" . }} }}",item("shadow"),item("shadow")));
+    update(&remote, format!("INSERT DATA {{ GRAPH <{graph}> {{ <https://example.org/comment-main> a <{}> ; <{}> <{}> ; <{}> 0 ; <{}> \"needle retained project comment\" . }} GRAPH <{eph}> {{ <https://example.org/comment-eph> a <{}> ; <{}> <{}> ; <{}> 1 ; <{}> \"ephemeral phrase\" . }} }}",term::comment(),term::comment_on(),item("shadow"),term::comment_index(),term::text(),term::comment(),term::comment_on(),item("control"),term::comment_index(),term::text()));
+    compare(&mut remote, "needle", false, true, 1, 0);
+    compare(&mut remote, "needle", true, false, 1, 1);
+    compare(&mut remote, "needle", true, true, 2, 0);
+    compare(&mut remote, "ephemeral phrase", true, true, 1, 0);
+    assert_eq!(
+        remote.ledger_issue_count().unwrap().0,
+        remote.snapshot(None).unwrap().seeds.len()
+    );
+}

@@ -45,7 +45,7 @@ impl RemoteBackend {
         let mut subjects = BTreeSet::new();
         for graph in self.both_graphs() {
             let pattern = self
-                .search_branches(&needle, &visible, false, req.full)
+                .search_branches(&needle, &visible, false, req.full, &graph)
                 .join(" UNION ");
             subjects.extend(self.subjects_where(&graph, &pattern, None)?);
         }
@@ -55,11 +55,14 @@ impl RemoteBackend {
             } else {
                 self.filter_fields(&req.filter)?
             };
-            let branches = self
-                .search_branches(&needle, &fields, true, req.full)
-                .join(" UNION ");
             let eph = vocab::ephemeral_graph(&self.graph);
-            let pattern = format!("{{ GRAPH <{}> {{ {branches} }} FILTER NOT EXISTS {{ GRAPH <{eph}> {{ ?shadow a <{}> ; <{}> ?id }} }} }} UNION {{ GRAPH <{eph}> {{ {branches} }} }}",self.graph,term::work_item(),term::identifier());
+            let main_branches = self
+                .search_branches(&needle, &fields, true, req.full, &self.graph)
+                .join(" UNION ");
+            let eph_branches = self
+                .search_branches(&needle, &fields, true, req.full, &eph)
+                .join(" UNION ");
+            let pattern = format!("{{ GRAPH <{}> {{ {main_branches} }} }} UNION {{ GRAPH <{eph}> {{ {eph_branches} }} }}",self.graph);
             self.aggregate_number(&format!(
                 "SELECT (COUNT(DISTINCT ?id) AS ?n) WHERE {{ {pattern} }}"
             ))?
@@ -94,11 +97,28 @@ impl RemoteBackend {
         Ok(page)
     }
 
-    fn search_branches(&self, needle: &str, guard: &str, closed: bool, full: bool) -> Vec<String> {
+    fn search_branches(
+        &self,
+        needle: &str,
+        guard: &str,
+        closed: bool,
+        full: bool,
+        source_graph: &str,
+    ) -> Vec<String> {
         let fields = if closed {
+            format!("?s <{}> \"closed\" .", term::status())
+        } else {
+            String::new()
+        };
+        let valid_id = format!(
+            "?s <{}> ?id . FILTER(isLiteral(?id) && sameTerm(?id, STR(?id)))",
+            term::identifier()
+        );
+        let eph = vocab::ephemeral_graph(&self.graph);
+        let shadow = if source_graph == self.graph {
             format!(
-                "?s <{}> \"closed\" ; <{}> ?id .",
-                term::status(),
+                "FILTER NOT EXISTS {{ GRAPH <{eph}> {{ ?shadow a <{}> ; <{}> ?id }} }}",
+                term::work_item(),
                 term::identifier()
             )
         } else {
@@ -116,11 +136,16 @@ impl RemoteBackend {
         };
         let mut branches = predicates.into_iter().map(|p| {
             let fallback = if p == vocab::RDFS_LABEL { format!("FILTER NOT EXISTS {{ ?s <{}> ?name FILTER(isLiteral(?name) && sameTerm(?name, STR(?name))) }}",term::name()) } else { String::new() };
-            format!("{{ {{ ?s <{p}> ?text ; a <{}> . {fields} FILTER(isLiteral(?text) && sameTerm(?text, STR(?text)) && CONTAINS(LCASE(STR(?text)), {needle})) }} {guard} {fallback} }}",term::work_item())
+            format!("{{ {{ ?s <{p}> ?text ; a <{}> . {fields} {valid_id} FILTER(isLiteral(?text) && sameTerm(?text, STR(?text)) && CONTAINS(LCASE(STR(?text)), {needle})) }} {guard} {fallback} {shadow} }}",term::work_item())
         }).collect::<Vec<_>>();
         if full {
-            branches.push(format!("{{ ?comment a <{}> ; <{}> ?text ; <{}> ?s . ?s a <{}> . {fields} FILTER(isLiteral(?text) && sameTerm(?text, STR(?text)) && CONTAINS(LCASE(STR(?text)), {needle})) {guard} }}",term::comment(),term::text(),term::comment_on(),term::work_item()));
+            // Snapshot retains project comments when an ephemeral seed replaces
+            // its fields, and also accepts ephemeral comments on project seeds.
+            let parent = format!("?s a <{}> . {valid_id} {fields} {guard}", term::work_item());
+            let effective_parent = format!("{{ GRAPH <{}> {{ {parent} }} FILTER NOT EXISTS {{ GRAPH <{eph}> {{ ?shadow a <{}> ; <{}> ?id }} }} }} UNION {{ GRAPH <{eph}> {{ {parent} }} }}",self.graph,term::work_item(),term::identifier());
+            branches.push(format!("{{ ?comment a <{}> ; <{}> ?text ; <{}> ?s ; <{}> ?index . FILTER(isIRI(?s) && STRSTARTS(STR(?s), {}) && isNumeric(?index) && ?index >= 0 && isLiteral(?text) && sameTerm(?text, STR(?text)) && CONTAINS(LCASE(STR(?text)), {needle})) {{ {effective_parent} }} }}",term::comment(),term::text(),term::comment_on(),term::comment_index(),literal(&format!("{}item/",vocab::SEEDS_BASE))));
         }
+
         branches
     }
 

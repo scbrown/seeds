@@ -1019,7 +1019,7 @@ impl Backend for RemoteBackend {
     fn ledger_issue_count(&self) -> Result<(usize, u64)> {
         let graphs = self.both_graphs();
         let seeds = self.aggregate_number(&format!(
-            "SELECT (COUNT(DISTINCT ?id) AS ?n) WHERE {{ {{ GRAPH <{}> {{ ?s a <{}> ; <{}> ?id }} }} UNION {{ GRAPH <{}> {{ ?s a <{}> ; <{}> ?id }} }} }}",
+            "SELECT (COUNT(DISTINCT ?id) AS ?n) WHERE {{ {{ GRAPH <{}> {{ ?s a <{}> ; <{}> ?id . FILTER(isLiteral(?id) && sameTerm(?id, STR(?id))) }} }} UNION {{ GRAPH <{}> {{ ?s a <{}> ; <{}> ?id . FILTER(isLiteral(?id) && sameTerm(?id, STR(?id))) }} }} }}",
             graphs[0], term::work_item(), term::identifier(), graphs[1], term::work_item(), term::identifier()
         ))?;
         Ok((seeds, 0))
