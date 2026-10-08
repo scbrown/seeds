@@ -121,7 +121,7 @@ pub fn apply(mut req: ureq::Request) -> ureq::Request {
 }
 
 /// The machine's hostname: the kernel's on Linux, else `hostname(1)`.
-fn hostname() -> Option<String> {
+pub(super) fn hostname() -> Option<String> {
     let read = |p: &str| std::fs::read_to_string(p).ok();
     read("/proc/sys/kernel/hostname")
         .or_else(|| {

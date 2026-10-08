@@ -9,6 +9,10 @@ sd key init --introducer wu --session seeds-ci --agent urn:ci:seeds
 sd key show
 ```
 
+The default session uses the kernel hostname or `$HOSTNAME`, falling back to
+`hostname(1)` on systems such as macOS, plus `$USER`. If either identity is
+unavailable, pass `--session` explicitly.
+
 `sd key init`:
 
 - writes a new Ed25519 key to `~/.config/seeds/keys/<session>.key`, readable

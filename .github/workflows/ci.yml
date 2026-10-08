@@ -11,6 +11,16 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  macos-key:
+    name: macOS key initialization
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Default identity and explicit-session controls
+        run: cargo test --test cli key_init_ -- --nocapture
+
   test:
     runs-on: ubuntu-latest
     steps:
