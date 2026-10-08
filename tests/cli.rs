@@ -97,6 +97,74 @@ fn code(o: &Output) -> i32 {
 }
 
 #[test]
+fn key_init_derives_a_session_without_hostname_env() {
+    let s = Sandbox::new("key-default-session");
+    let o = s
+        .cmd(
+            &s.work(),
+            &["key", "init", "--introducer", "reviewer", "--json"],
+        )
+        .env_remove("HOSTNAME")
+        .env("USER", "tester")
+        .output()
+        .unwrap();
+    assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+    let value: Value = serde_json::from_slice(&o.stdout).unwrap();
+    let session = value["session"].as_str().unwrap();
+    assert!(session.starts_with("seeds-") && session.ends_with("-tester"));
+    assert!(seeds::native::attest::session_ok(session));
+    let key = Path::new(value["key_file"].as_str().unwrap());
+    assert!(key.starts_with(s.root.join("home/.config")));
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        assert_eq!(
+            std::fs::metadata(key).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+    }
+}
+
+#[test]
+fn key_init_explicit_session_does_not_need_host_or_user() {
+    let s = Sandbox::new("key-explicit-session");
+    let o = s
+        .cmd(
+            &s.work(),
+            &[
+                "key",
+                "init",
+                "--session",
+                "explicit-session",
+                "--introducer",
+                "reviewer",
+                "--json",
+            ],
+        )
+        .env_remove("HOSTNAME")
+        .env_remove("USER")
+        .env("PATH", "")
+        .output()
+        .unwrap();
+    assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+    let value: Value = serde_json::from_slice(&o.stdout).unwrap();
+    assert_eq!(value["session"], "explicit-session");
+}
+
+#[test]
+fn key_init_without_user_names_the_session_workaround() {
+    let s = Sandbox::new("key-missing-user");
+    let o = s
+        .cmd(&s.work(), &["key", "init", "--introducer", "reviewer"])
+        .env_remove("USER")
+        .output()
+        .unwrap();
+    assert_eq!(code(&o), 2);
+    assert!(String::from_utf8_lossy(&o.stderr).contains("pass --session"));
+    assert!(!s.root.join("home/.config/seeds/keys").exists());
+}
+
+#[test]
 fn works_out_of_the_box_with_no_config_at_all() {
     let sb = Sandbox::new("oob");
     // Before anything is written: an empty answer that SAYS why it is empty.
