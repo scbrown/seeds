@@ -83,10 +83,14 @@ fn corpus() -> (Snapshot, Vec<String>) {
             issue_type: Some(types[n % types.len()].into()),
             priority: Some((n % 5).to_string()),
             assignee: (n % 4 != 0).then(|| people[n % 3].to_string()),
-            labels: match n % 3 {
-                0 => vec!["infra".into()],
-                1 => vec!["infra".into(), "cutover".into()],
-                _ => vec![],
+            labels: if n == 1 {
+                vec!["infra".into(), "cutover".into(), "{ ?s".into(), "?s".into()]
+            } else {
+                match n % 3 {
+                    0 => vec!["infra".into()],
+                    1 => vec!["infra".into(), "cutover".into()],
+                    _ => vec![],
+                }
             },
             ..CreateReq::default()
         };
@@ -208,6 +212,18 @@ fn corpus() -> (Snapshot, Vec<String>) {
     all.push(epic);
     all.push(e1);
     let mut snap = b.snapshot(None).unwrap();
+    // Nonzero lead times cross a century leap day and month boundary. This
+    // checks the remote mean against the core's independent calendar model.
+    for (index, created, closed) in [
+        (0, "1999-12-31T23:00:00Z", "2000-03-01T00:00:01.999Z"),
+        (6, "1900-02-28T23:00:00Z", "1900-03-01T01:00:00Z"),
+        (12, "1999-12-31T23:00:00-03:00", "2000-01-01T00:00:00+03:00"),
+        (24, "2026-10-07T01:00:00", "2026-10-07T02:10:00"),
+    ] {
+        let seed = snap.seeds.get_mut(&all[index]).unwrap();
+        seed.created_at = created.into();
+        seed.closed_at = Some(closed.into());
+    }
     // a dangling edge: a dependency on a seed that is not in the ledger
     if let Some(s) = snap.seeds.get_mut(&all[26]) {
         s.blocked_on.insert("ghost-1".into());
@@ -300,6 +316,59 @@ fn load(base: &str, graph: &str, snap: &Snapshot) -> RemoteBackend {
 /// Everything a read command prints, both ways.
 fn reads(b: &dyn Backend, c: &Ctx, n: &[String], all_ids: &[String]) -> Vec<String> {
     let mut out = Vec::new();
+    out.push(format!("ledger counts {:?}", b.ledger_counts()));
+    for req in [
+        engine::StatsReq::default(),
+        engine::StatsReq {
+            by_type: true,
+            by_priority: true,
+            by_assignee: true,
+            by_label: true,
+            activity_hours: Some(48),
+        },
+    ] {
+        let stats = engine::stats(b, c, req, None).map(|mut stats| {
+            // Decimal AVG and f64 summation may differ at the last bit.
+            // Compare the mean to one nanohour; all other fields stay exact.
+            stats.average_lead_time_hours = (stats.average_lead_time_hours * 1e9).round() / 1e9;
+            stats
+        });
+        out.push(format!("stats {req:?} {stats:?}"));
+    }
+    for term in [
+        "seed",
+        "note",
+        "ephemeral",
+        "irregular",
+        "no such matching text",
+        "SEED 1",
+    ] {
+        for (full, all, offset, reverse, sort) in [
+            (false, false, 0, false, "priority"),
+            (false, true, 3, true, "title"),
+            (true, false, 0, false, "priority"),
+            (true, true, 3, true, "title"),
+        ] {
+            let req = engine::SearchReq {
+                query: term.into(),
+                full,
+                all,
+                offset,
+                reverse,
+                sort: Some(sort.into()),
+                limit: Some(5),
+                ..Default::default()
+            };
+            out.push(match engine::search(b, &req, None) {
+                Ok(result) => format!(
+                    "search {req:?} hidden={} {}",
+                    result.hidden_closed,
+                    output::list_json(&result.page)
+                ),
+                Err(e) => format!("search {req:?} {}", err(&e)),
+            });
+        }
+    }
     let mut shows: Vec<Vec<String>> = all_ids.iter().map(|id| vec![id.clone()]).collect();
     shows.push(ids(&[n[3].as_str(), n[1].as_str(), n[EPH].as_str()]));
     shows.push(ids(&[n[0].as_str(), "nope"]));
@@ -330,6 +399,10 @@ fn reads(b: &dyn Backend, c: &Ctx, n: &[String], all_ids: &[String]) -> Vec<Stri
         f(&|f: &mut Filter| f.status = Some("in_progress".into())),
         f(&|f: &mut Filter| f.status = Some("tombstone".into())),
         f(&|f: &mut Filter| f.assignee = Some("ian".into())),
+        f(&|f: &mut Filter| {
+            f.assignee = Some("ellie".into());
+            f.labels = vec!["{ ?s".into(), "?s".into()];
+        }),
         f(&|f: &mut Filter| f.unassigned = true),
         f(&|f: &mut Filter| f.labels = vec!["infra".into()]),
         f(&|f: &mut Filter| f.labels = vec!["infra".into(), "cutover".into()]),

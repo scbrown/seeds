@@ -233,6 +233,43 @@ pub trait Backend {
     /// `None`).
     fn snapshot(&self, at: Option<u64>) -> Result<Snapshot>;
 
+    /// An indexed search page. The backend selects and counts matches before
+    /// retrieving the full facts of just the requested page.
+    fn search_page(
+        &self,
+        _req: &crate::engine::SearchReq,
+    ) -> Result<Option<crate::engine::SearchPage>> {
+        Ok(None)
+    }
+
+    /// An indexed listing, selecting a page before fetching full seed bodies.
+    fn list_page(&self, _req: &crate::engine::ListReq) -> Result<Option<crate::engine::Page>> {
+        Ok(None)
+    }
+
+    /// Ledger sizes without requiring a materialized ledger on indexed backends.
+    fn ledger_counts(&self) -> Result<(usize, usize, u64)> {
+        let snap = self.snapshot(None)?;
+        Ok((snap.seeds.len(), snap.comments.len(), snap.tx))
+    }
+
+    /// An indexed aggregate, when available. `None` retains the local model.
+    fn aggregate_count(
+        &self,
+        _req: &crate::engine::CountReq,
+    ) -> Result<Option<crate::engine::Count>> {
+        Ok(None)
+    }
+
+    /// Summary statistics without reading seed bodies or comment facts.
+    fn aggregate_stats(
+        &self,
+        _ctx: &Ctx,
+        _req: crate::engine::StatsReq,
+    ) -> Result<Option<crate::engine::Stats>> {
+        Ok(None)
+    }
+
     /// Current named items and their comments, for edits that need no graph-wide
     /// context. Backends without an indexed read retain the full-snapshot path.
     /// Graph-aware edits must load their complete validation context separately;
@@ -276,6 +313,14 @@ pub trait Backend {
         self.snapshot(None)
     }
 
+    /// Counts of incoming typed edges without hydrating their source bodies.
+    fn dependent_counts(
+        &self,
+        _ids: &[String],
+    ) -> Result<Option<std::collections::BTreeMap<String, usize>>> {
+        Ok(None)
+    }
+
     /// The subjects, in the project graph or its ephemeral graph, whose
     /// `schema:identifier` is `id`: how a scoped read that missed a seed at
     /// its canonical IRI ([`crate::vocab::item_iri`]) says where it is
@@ -288,6 +333,11 @@ pub trait Backend {
     /// The ids the ready definition ([`crate::vocab::ready_query`]) selects, as
     /// of `at`. Filters and the defer date are applied by the caller.
     fn ready_ids(&self, at: Option<u64>) -> Result<Vec<String>>;
+
+    /// Optional indexed readiness narrowed to a superset of this filter's matches.
+    fn ready_ids_where(&self, _query: &SeedQuery) -> Result<Option<Vec<String>>> {
+        Ok(None)
+    }
 
     /// Apply a batch atomically, checking every [`SeedWrite::expected_revision`]
     /// first. Returns the transaction id, or the current head when the batch

@@ -81,7 +81,7 @@ pub enum Command {
     Show(ShowArgs),
     /// List seeds (open ones by default; 50 at a time, --limit 0 for all)
     List(ListArgs),
-    /// Find seeds whose id, title, description or comments contain the text
+    /// Find titles containing the text (--full also searches ids, descriptions and comments)
     /// (closed ones are hidden and counted unless --all)
     Search(SearchArgs),
     /// List open seeds with no open blockers. Never truncated unless you pass
@@ -605,6 +605,9 @@ pub struct ListArgs {
 pub struct SearchArgs {
     /// Text to find (case-insensitive)
     pub query: String,
+    /// Search ids, descriptions and comments too (single-flight admin read)
+    #[arg(long)]
+    pub full: bool,
     /// Only this status (includes closed when you ask for closed)
     #[arg(short, long)]
     pub status: Option<String>,

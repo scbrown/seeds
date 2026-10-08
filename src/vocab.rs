@@ -290,10 +290,10 @@ pub fn project_graph_iri(prefix: &str) -> String {
 ///
 /// Shaped for quipu's evaluator, which runs patterns in the order written
 /// (measured on a 28k-seed board, aegis-aane52 S2): the bound status pattern
-/// comes first (622 rows, not 28k), and the blocker check is a `MINUS` on
-/// `?item`, the same answer as `FILTER NOT EXISTS` here (`?item` is the only
-/// variable the two sides share and it is always bound) in 0.15 s instead
-/// of 8.8 s.
+/// comes first. The blocker check is correlated to each bound source item,
+/// so it does not materialize every blocked edge elsewhere in the graph.
+/// The right side repeats the source's Action type: redundant for the answer,
+/// but it keeps a multi-pattern blocker join off Quipu's whole-graph read model.
 pub fn ready_query(graph_iri: &str) -> String {
     format!(
         "PREFIX schema: <{SCHEMA}>\n\
@@ -302,7 +302,7 @@ pub fn ready_query(graph_iri: &str) -> String {
          SELECT ?id WHERE {{ GRAPH <{graph_iri}> {{\n\
          \x20 ?item seeds:status \"open\" .\n\
          \x20 ?item a schema:Action ; schema:identifier ?id .\n\
-         \x20 MINUS {{ ?item quechua:blockedOn ?blocker . ?blocker seeds:status ?bs . FILTER(?bs != \"closed\" && ?bs != \"tombstone\") }}\n\
+         \x20 FILTER NOT EXISTS {{ ?item quechua:blockedOn ?blocker . ?blocker seeds:status ?bs . ?item a schema:Action . FILTER(?bs != \"closed\" && ?bs != \"tombstone\") }}\n\
          }} }}"
     )
 }
@@ -318,9 +318,49 @@ pub fn ready_query(graph_iri: &str) -> String {
 /// So a graph some other writer filled is still answered exactly; the caller
 /// filters the seeds it gets back again.
 pub fn seed_query_pattern(q: &crate::backend::SeedQuery) -> Option<String> {
+    seed_query_pattern_var(q, "?s")
+}
+
+pub(crate) fn seed_query_pattern_var(
+    q: &crate::backend::SeedQuery,
+    subject: &str,
+) -> Option<String> {
+    use crate::validate::escape_literal;
+    if let Some(owner) = &q.assignee {
+        let mut rest = q.clone();
+        rest.assignee = None;
+        let owners = [
+            format!("<{}>", principal_iri(owner)),
+            format!("\"{}\"", escape_literal(owner)),
+        ];
+        let branches = owners
+            .into_iter()
+            .map(|value| {
+                let scope = format!(
+                    "{subject} <{}> {value} ; a <{}> . ",
+                    term::assigned_to(),
+                    term::work_item()
+                );
+                format!(
+                    "{{ {} }}",
+                    seed_query_pattern_scoped(&rest, &scope, subject)
+                        .expect("owner scope is nonempty")
+                )
+            })
+            .collect::<Vec<_>>();
+        return Some(branches.join(" UNION "));
+    }
+    seed_query_pattern_scoped(q, "", subject)
+}
+
+fn seed_query_pattern_scoped(
+    q: &crate::backend::SeedQuery,
+    scope: &str,
+    subject: &str,
+) -> Option<String> {
     use crate::validate::escape_literal;
     if q.is_unconstrained() {
-        return None;
+        return (!scope.is_empty()).then(|| format!("{{ {scope} }}"));
     }
     const XSD_INTEGER: &str = "http://www.w3.org/2001/XMLSchema#integer";
     let lit = |v: &str| format!("\"{}\"", escape_literal(v));
@@ -329,23 +369,48 @@ pub fn seed_query_pattern(q: &crate::backend::SeedQuery) -> Option<String> {
         n += 1;
         format!("?sd_v{n}")
     };
-    // A value read as absent: no fact, or none of the kind from_facts reads.
+    // Scope EACH leaf BGP. An outer Join would evaluate its other side
+    // independently, still scanning other owners' statuses. Build variables
+    // and literals separately so labels such as "{ ?s" are never rewritten.
     let missing = |p: &str, v: String, regular: String| {
-        format!(
-            "{{ ?s a <{action}> FILTER NOT EXISTS {{ ?s <{p}> {v} FILTER({regular}) }} }}",
-            action = term::work_item(),
-        )
+        format!("{{ {scope}{subject} a <{}> FILTER NOT EXISTS {{ {subject} <{p}> {v} FILTER({regular}) }} }}",term::work_item())
     };
-    // A plain string, the only kind `Seed::from_facts` reads for these
-    // fields (quipu has no DATATYPE(); a plain literal is the one that is the
-    // same term as its own STR()).
     let plain = |v: &str| format!("isLiteral({v}) && sameTerm({v}, STR({v}))");
     let mut groups: Vec<String> = Vec::new();
+    if let Some(t) = &q.issue_type {
+        let p = term::issue_type();
+        let mut alts = vec![format!("{{ {scope}{subject} <{p}> {} }}", lit(t))];
+        if t == "task" {
+            let v = var();
+            alts.push(missing(&p, v.clone(), plain(&v)));
+        }
+        groups.push(alts.join(" UNION "));
+    }
+    for l in &q.labels {
+        groups.push(format!(
+            "{{ {scope}{subject} <{}> {} }}",
+            term::label(),
+            lit(l)
+        ));
+    }
+    if let Some(prio) = q.priority.filter(|p| *p != crate::model::DEFAULT_PRIORITY) {
+        groups.push(format!(
+            "{{ {scope}{subject} <{}> \"{prio}\"^^<{XSD_INTEGER}> }}",
+            term::priority()
+        ));
+    }
+    if let Some(parent) = &q.parent {
+        groups.push(format!(
+            "{{ {scope}{subject} <{}> <{}> }}",
+            term::child_of(),
+            item_iri(parent)
+        ));
+    }
     if let Some(want) = &q.statuses {
         let p = term::status();
         let mut alts: Vec<String> = want
             .iter()
-            .map(|w| format!("{{ ?s <{p}> {} }}", lit(w)))
+            .map(|w| format!("{{ {scope}{subject} <{p}> {} }}", lit(w)))
             .collect();
         if want.contains("open") {
             let v = var();
@@ -355,50 +420,14 @@ pub fn seed_query_pattern(q: &crate::backend::SeedQuery) -> Option<String> {
             let v = var();
             let known: Vec<String> = crate::model::STATUSES.iter().map(|s| lit(s)).collect();
             alts.push(format!(
-                "{{ ?s <{p}> {v} FILTER(isLiteral({v}) && STR({v}) NOT IN ({})) }}",
+                "{{ {scope}{subject} <{p}> {v} FILTER(isLiteral({v}) && STR({v}) NOT IN ({})) }}",
                 known.join(", ")
             ));
         }
         groups.push(alts.join(" UNION "));
     }
-    if let Some(t) = &q.issue_type {
-        let p = term::issue_type();
-        let mut alts = vec![format!("{{ ?s <{p}> {} }}", lit(t))];
-        if t == "task" {
-            let v = var();
-            alts.push(missing(&p, v.clone(), plain(&v)));
-        }
-        groups.push(alts.join(" UNION "));
-    }
-    if let Some(a) = &q.assignee {
-        let p = term::assigned_to();
-        groups.push(format!(
-            "{{ ?s <{p}> <{}> }} UNION {{ ?s <{p}> {} }}",
-            principal_iri(a),
-            lit(a)
-        ));
-    }
-    for l in &q.labels {
-        groups.push(format!("{{ ?s <{}> {} }}", term::label(), lit(l)));
-    }
-    // The default priority is also what a missing or unreadable one reads
-    // as, which no bound pattern can find; that constraint stays with the
-    // caller's filter.
-    if let Some(prio) = q.priority.filter(|p| *p != crate::model::DEFAULT_PRIORITY) {
-        groups.push(format!(
-            "{{ ?s <{}> \"{prio}\"^^<{XSD_INTEGER}> }}",
-            term::priority()
-        ));
-    }
-    if let Some(parent) = &q.parent {
-        groups.push(format!(
-            "{{ ?s <{}> <{}> }}",
-            term::child_of(),
-            item_iri(parent)
-        ));
-    }
     if groups.is_empty() {
-        return None;
+        return (!scope.is_empty()).then(|| format!("{{ {scope} }}"));
     }
     Some(
         groups

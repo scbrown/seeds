@@ -1308,6 +1308,7 @@ fn found(b: &QuipuBackend, q: &str, all: bool) -> (usize, usize) {
         b,
         &engine::SearchReq {
             query: q.into(),
+            full: true,
             all,
             ..engine::SearchReq::default()
         },

@@ -43,11 +43,17 @@ use crate::model::{Fact, Obj, Snapshot};
 use crate::validate::{self, escape_literal};
 use crate::vocab::{self, term};
 
+mod summary;
+
 /// Subjects per targeted read, one `UNION` branch each. A seed carries a few
 /// dozen facts, so a chunk stays well under quipu's 10,000-row result cap (a
 /// truncated answer is split anyway), and the branch count stays far below
 /// the nesting that aborts quipu-server (2,000 branches, aegis-rq1afp).
 const SUBJECTS_PER_READ: usize = 100;
+
+// Full seed bodies may be large. Keep each facts response smaller than the
+// id-only discovery queries, which can still use 100 bound branches.
+const FACT_SUBJECTS_PER_READ: usize = 10;
 
 /// Subjects per page of a subject listing: under quipu's 10,000-row cap, so a
 /// full page is never also a truncated one.
@@ -404,6 +410,23 @@ impl RemoteBackend {
         }
     }
 
+    /// A scalar aggregate must be one nonnegative integer, never a missing
+    /// row silently interpreted as an empty ledger.
+    fn aggregate_number(&self, query: &str) -> Result<usize> {
+        let (rows, truncated) = self.select_marked(query, None)?;
+        if truncated || rows.len() != 1 {
+            return Err(SdError::failed("quipu returned an incomplete aggregate"));
+        }
+        match rows[0].get("n") {
+            Some(Obj::Int(n)) => usize::try_from(*n)
+                .map_err(|_| SdError::failed("quipu returned a negative aggregate")),
+            Some(Obj::Str(n)) => n
+                .parse()
+                .map_err(|_| SdError::failed("quipu returned a nonnumeric aggregate")),
+            _ => Err(SdError::failed("quipu returned no aggregate value")),
+        }
+    }
+
     /// The project graph's facts, grouped by subject.
     fn facts(&self, at: Option<u64>) -> Result<BTreeMap<String, Vec<Fact>>> {
         self.graph_facts(&self.graph, at)
@@ -422,12 +445,19 @@ impl RemoteBackend {
     fn subjects_facts(&self, subjects: &BTreeSet<String>) -> Result<(Facts, Facts)> {
         let mut main = Facts::new();
         let mut eph = Facts::new();
+        if subjects.is_empty() {
+            return Ok((main, eph));
+        }
         let eph_graph = crate::vocab::ephemeral_graph(&self.graph);
-        for (graph, out) in [
-            (self.graph.as_str(), &mut main),
-            (eph_graph.as_str(), &mut eph),
-        ] {
-            self.read_all(graph, subjects, None, out)?;
+        self.read_all(&self.graph, subjects, None, &mut main)?;
+        // An empty ephemeral graph needs one bounded existence check instead
+        // of an empty fact read for every hydration batch. No result is cached
+        // across snapshots, so a later read can observe new ephemeral work.
+        let body =
+            json!({"query": format!("ASK {{ GRAPH <{eph_graph}> {{ ?s ?p ?o }} }}")}).to_string();
+        let answer = self.post("/query", "application/json", &body, false)?;
+        if ask_answer(&eph_graph, &answer)? {
+            self.read_all(&eph_graph, subjects, None, &mut eph)?;
         }
         Ok((main, eph))
     }
@@ -522,7 +552,7 @@ impl RemoteBackend {
         out: &mut Facts,
     ) -> Result<()> {
         let all: Vec<&String> = subjects.iter().collect();
-        for chunk in all.chunks(SUBJECTS_PER_READ) {
+        for chunk in all.chunks(FACT_SUBJECTS_PER_READ) {
             self.read_subjects(graph, chunk, at, out)?;
         }
         Ok(())
@@ -959,6 +989,49 @@ fn sparql_obj(o: &Obj) -> String {
 }
 
 impl Backend for RemoteBackend {
+    fn list_page(&self, req: &crate::engine::ListReq) -> Result<Option<crate::engine::Page>> {
+        self.list_summary(req).map(Some)
+    }
+    fn dependent_counts(&self, ids: &[String]) -> Result<Option<BTreeMap<String, usize>>> {
+        self.incoming_counts(ids).map(Some)
+    }
+    fn aggregate_count(
+        &self,
+        req: &crate::engine::CountReq,
+    ) -> Result<Option<crate::engine::Count>> {
+        self.count_summary(req).map(Some)
+    }
+
+    fn aggregate_stats(
+        &self,
+        ctx: &Ctx,
+        req: crate::engine::StatsReq,
+    ) -> Result<Option<crate::engine::Stats>> {
+        self.stats_summary(ctx, req).map(Some)
+    }
+    fn search_page(
+        &self,
+        req: &crate::engine::SearchReq,
+    ) -> Result<Option<crate::engine::SearchPage>> {
+        self.search_summary(req).map(Some)
+    }
+
+    fn ledger_counts(&self) -> Result<(usize, usize, u64)> {
+        let graphs = self.both_graphs();
+        let seeds = self.aggregate_number(&format!(
+            "SELECT (COUNT(DISTINCT ?id) AS ?n) WHERE {{ {{ GRAPH <{}> {{ ?s a <{}> ; <{}> ?id }} }} UNION {{ GRAPH <{}> {{ ?s a <{}> ; <{}> ?id }} }} }}",
+            graphs[0], term::work_item(), term::identifier(), graphs[1], term::work_item(), term::identifier()
+        ))?;
+        let mut comments = 0;
+        for graph in graphs {
+            comments += self.aggregate_number(&format!(
+                "SELECT (COUNT(DISTINCT ?s) AS ?n) WHERE {{ GRAPH <{graph}> {{ ?s a <{}> ; <{}> ?parent ; <{}> ?index . FILTER(isIRI(?parent) && STRSTARTS(STR(?parent), \"{}item/\") && isNumeric(?index) && ?index >= 0) }} }}",
+                term::comment(), term::comment_on(), term::comment_index(), vocab::SEEDS_BASE
+            ))?;
+        }
+        Ok((seeds, comments, 0))
+    }
+
     fn snapshot(&self, at: Option<u64>) -> Result<Snapshot> {
         let mut snap = Snapshot::from_graphs(&self.facts(at)?, &self.ephemeral_facts(at)?);
         snap.tx = at.unwrap_or(0);
@@ -1035,7 +1108,15 @@ impl Backend for RemoteBackend {
     }
 
     fn ready_ids(&self, at: Option<u64>) -> Result<Vec<String>> {
-        let rows = self.select(&vocab::ready_query(&self.graph), at)?;
+        let (rows, truncated) = self.select_marked(
+            &format!("{} LIMIT {ROW_CAP}", vocab::ready_query(&self.graph)),
+            at,
+        )?;
+        if truncated || rows.len() >= ROW_CAP {
+            return Err(SdError::failed(
+                "quipu readiness reached its bounded row ceiling; refusing a partial ready set",
+            ));
+        }
         let mut ids: Vec<String> = rows
             .into_iter()
             .filter_map(|mut r| match r.remove("id") {
@@ -1046,6 +1127,30 @@ impl Backend for RemoteBackend {
         ids.sort();
         ids.dedup();
         Ok(ids)
+    }
+
+    fn ready_ids_where(&self, query: &crate::backend::SeedQuery) -> Result<Option<Vec<String>>> {
+        let Some(pattern) = vocab::seed_query_pattern_var(query, "?item") else {
+            return Ok(None);
+        };
+        let query = vocab::ready_query(&self.graph).replace(
+            "  ?item seeds:status",
+            &format!("  {pattern} \n  ?item seeds:status"),
+        );
+        let (rows, truncated) = self.select_marked(&format!("{query} LIMIT {ROW_CAP}"), None)?;
+        if truncated || rows.len() >= ROW_CAP {
+            return Err(SdError::failed("quipu truncated filtered readiness"));
+        }
+        let mut ids = rows
+            .into_iter()
+            .filter_map(|mut r| match r.remove("id") {
+                Some(Obj::Str(s)) => Some(s),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        ids.sort();
+        ids.dedup();
+        Ok(Some(ids))
     }
 
     fn claims_of(&self, id: &str) -> Result<Vec<(u64, crate::backend::Claims)>> {

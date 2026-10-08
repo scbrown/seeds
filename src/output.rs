@@ -63,12 +63,22 @@ pub fn list_json(p: &Page) -> Json {
 pub fn search_json(r: &SearchPage) -> Json {
     let mut o = list_json(&r.page);
     o["hidden_closed_count"] = json!(r.hidden_closed);
+    o["search_scope"] = json!(search_scope(r));
+    o["search_notice"] = json!(if r.full {
+        format!("{} full-field matches", r.page.total)
+    } else {
+        format!("{} title matches", r.page.total)
+    });
     o
 }
 
 /// `search` as text: the hits, then how many closed ones were hidden.
 pub fn search_text(r: &SearchPage, query: &str, layout: Layout) -> String {
-    let mut out = page_text_layout(&r.page, "matching", layout);
+    let mut out = if !r.full && r.page.total == 0 {
+        "0 title matches".into()
+    } else {
+        page_text_layout(&r.page, "matching", layout)
+    };
     if r.hidden_closed > 0 {
         out.push_str(&format!(
             "\n({} closed seed{} also match {query:?}; --all shows them)",
@@ -76,7 +86,19 @@ pub fn search_text(r: &SearchPage, query: &str, layout: Layout) -> String {
             if r.hidden_closed == 1 { "" } else { "s" }
         ));
     }
+    out.push('\n');
+    out.push_str(search_scope(r));
     out
+}
+
+/// Scope travels with every result, so a title-only zero cannot claim absence
+/// from the descriptions or comments that were not queried.
+pub fn search_scope(r: &SearchPage) -> &'static str {
+    if r.full {
+        "searched: IDs, titles, descriptions and comments (--full)"
+    } else {
+        "searched: titles only (IDs/descriptions/comments NOT searched by the query; full: sd search --full)"
+    }
 }
 
 /// Stamp a write's transaction on its `--json` output: on an object, or on each

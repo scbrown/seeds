@@ -2029,7 +2029,7 @@ fn ephemeral_seeds_are_read_everywhere_never_ready_never_shared() {
     assert_eq!(sb.json(&["show", &n])[0]["ephemeral"], false);
     let listed = ids_of(&sb.json(&["list"]));
     assert!(listed.contains(&e) && listed.contains(&n), "{listed:?}");
-    let found = ids_of(&sb.json(&["search", "zebra"]));
+    let found = ids_of(&sb.json(&["search", "zebra", "--full"]));
     assert!(found.contains(&e) && found.contains(&n), "{found:?}");
     assert_eq!(sb.json(&["count"])["count"], 2);
 
@@ -2419,4 +2419,80 @@ fn cutover_comment_ids_survive_processes_and_dry_run_never_reserves() {
         .status
         .success());
     assert!(!sb.work().join("refused.jsonl").exists());
+}
+
+#[test]
+fn search_scope_is_explicit_for_hits_zeros_json_and_csv() {
+    let sb = Sandbox::new("search-scope");
+    sb.ok(&["init", "--prefix", "scope"]);
+    let seed = sb.json(&[
+        "create",
+        "visible-title",
+        "--description",
+        "body-only-needle",
+    ]);
+    let id = seed["id"].as_str().unwrap();
+    let scope = "searched: titles only";
+    for query in ["visible-title", "body-only-needle", "absent-needle"] {
+        let text = sb.ok(&["search", query]);
+        assert!(text.contains(scope), "scope footer missing: {text}");
+        assert!(
+            text.contains("descriptions/comments NOT searched"),
+            "{text}"
+        );
+        if query != "visible-title" {
+            assert!(text.contains("0 title matches"), "{text}");
+            assert!(!text.contains("No issues found"), "{text}");
+        }
+        let json = sb.json(&["search", query]);
+        assert!(json["search_scope"].as_str().unwrap().contains(scope));
+        assert_eq!(json["total"], if query == "visible-title" { 1 } else { 0 });
+        let csv = sb.run(&["search", query, "--format", "csv", "--fields", "id"]);
+        assert!(csv.status.success());
+        assert!(String::from_utf8_lossy(&csv.stderr).contains(scope));
+        assert!(String::from_utf8_lossy(&csv.stdout).starts_with("id\n"));
+    }
+    let full = sb.json(&["search", "body-only-needle", "--full"]);
+    assert_eq!(ids(&full), vec![id]);
+    assert!(full["search_scope"]
+        .as_str()
+        .unwrap()
+        .contains("descriptions and comments"));
+}
+
+#[test]
+fn full_search_lock_spans_projects_but_does_not_block_titles() {
+    let sb = Sandbox::new("search-lock");
+    sb.ok(&["init", "--prefix", "lock"]);
+    sb.ok(&["create", "lock-title"]);
+    let path = sb.root.join("home/.config/seeds/full-search.lock");
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    let lock = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .read(true)
+        .write(true)
+        .open(&path)
+        .unwrap();
+    lock.lock().unwrap();
+    let blocked = sb.run(&["search", "lock-title", "--full"]);
+    assert!(!blocked.status.success());
+    assert!(String::from_utf8_lossy(&blocked.stderr).contains("already running on this host"));
+    assert!(sb.run(&["search", "lock-title"]).status.success());
+    // Another project uses the same HOME and must meet the same host lock.
+    let other = sb.root.join("other");
+    std::fs::create_dir_all(&other).unwrap();
+    assert!(sb
+        .cmd(&other, &["init", "--prefix", "other"])
+        .output()
+        .unwrap()
+        .status
+        .success());
+    let blocked = sb
+        .cmd(&other, &["search", "lock-title", "--full"])
+        .output()
+        .unwrap();
+    assert!(!blocked.status.success());
+    drop(lock);
+    assert!(sb.run(&["search", "lock-title", "--full"]).status.success());
 }

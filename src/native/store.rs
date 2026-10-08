@@ -39,6 +39,32 @@ fn lock_path(store: &Path) -> PathBuf {
     store.with_file_name(name)
 }
 
+/// Full-text board reads share one user-wide lock across projects and graphs.
+/// Keep the inode after release: unlinking a locked file would let two readers
+/// acquire locks on different inodes at the same path.
+pub(super) fn lock_full_search() -> Result<File> {
+    let home = std::env::var_os("HOME")
+        .ok_or_else(|| SdError::refused("full search needs HOME for its host-wide lock"))?;
+    let dir = PathBuf::from(home).join(".config/seeds");
+    fs::create_dir_all(&dir)
+        .map_err(|e| SdError::failed(format!("cannot create full-search lock directory: {e}")))?;
+    let mut options = OpenOptions::new();
+    options.create(true).truncate(false).read(true).write(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let file = options
+        .open(dir.join("full-search.lock"))
+        .map_err(|e| SdError::failed(format!("cannot open full-search lock: {e}")))?;
+    match file.try_lock() {
+        Ok(()) => Ok(file),
+        Err(std::fs::TryLockError::WouldBlock) => Err(SdError::refused("full search is already running on this host; retry later or search titles without --full")),
+        Err(std::fs::TryLockError::Error(e)) => Err(SdError::failed(format!("cannot lock full search: {e}"))),
+    }
+}
+
 /// Open (creating if needed) the store at `path` for writing, under the lock.
 pub fn open_for_write(path: &Path, graph: &str) -> Result<WriteHandle> {
     if let Some(dir) = path.parent().filter(|d| !d.as_os_str().is_empty()) {

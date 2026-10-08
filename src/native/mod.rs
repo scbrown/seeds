@@ -793,7 +793,7 @@ fn schema_info() -> serde_json::Value {
 
 /// `sd info`: `where`, plus what the ledger holds.
 fn info_outcome(json: bool, cfg: &Resolved, b: &dyn Backend, with_schema: bool) -> Result<Outcome> {
-    let snap = b.snapshot(None)?;
+    let (issues, comments, tx) = b.ledger_counts()?;
     let (store, url, mode) = location_parts(cfg);
     let size = store
         .as_ref()
@@ -802,7 +802,7 @@ fn info_outcome(json: bool, cfg: &Resolved, b: &dyn Backend, with_schema: bool) 
     let value = serde_json::json!({
         "database_path": store, "beads_dir": cfg.project_id_file.parent().map(|p| p.display().to_string()),
         "mode": mode, "quipu_url": url, "graph": cfg.graph,
-        "issue_count": snap.seeds.len(), "comment_count": snap.comments.len(), "tx": snap.tx,
+        "issue_count": issues, "comment_count": comments, "tx": tx,
         "config": {"issue_prefix": cfg.prefix}, "db_size": size, "jsonl_path": null,
     });
     let mut value = value;
@@ -811,9 +811,9 @@ fn info_outcome(json: bool, cfg: &Resolved, b: &dyn Backend, with_schema: bool) 
     }
     let mut text = format!(
         "{} seeds, {} comments at tx {} ({mode}: {})",
-        snap.seeds.len(),
-        snap.comments.len(),
-        snap.tx,
+        issues,
+        comments,
+        tx,
         store.or(url).unwrap_or_default()
     );
     if with_schema {
@@ -2299,8 +2299,10 @@ fn dispatch(cli: &Cli, cfg: &Resolved, ctx: &Ctx, b: &mut dyn Backend) -> Result
             ))
         }
         Command::Search(a) => {
+            let _full_search_lock = if a.full { Some(store::lock_full_search()?) } else { None };
             let req = engine::SearchReq {
                 query: a.query.clone(),
+                full: a.full,
                 filter: Filter {
                     status: a.status.clone(),
                     issue_type: a.issue_type.clone(),
@@ -2328,7 +2330,10 @@ fn dispatch(cli: &Cli, cfg: &Resolved, ctx: &Ctx, b: &mut dyn Backend) -> Result
             let r = engine::search(b, &req, at)?;
             let layout = layout_of(cli, a.long, a.pretty, a.tree)?;
             let text = match csv_of(cli, &r.page.issues, &a.fields)? {
-                Some(csv) => csv,
+                Some(csv) => {
+                    eprintln!("{}", output::search_scope(&r));
+                    csv
+                }
                 None => output::search_text(&r, &a.query, layout),
             };
             Ok(ok(json, output::search_json(&r), text, vec![]))
