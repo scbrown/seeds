@@ -1031,6 +1031,12 @@ fn completions(a: &cli::CompletionsArgs) -> Result<Outcome> {
 
 /// `sd init`: in the current directory, never a parent project's.
 fn init(cli: &Cli, a: &cli::InitArgs) -> Result<Outcome> {
+    if cli.store.is_some() || cli.quipu.is_some() || cli.graph.is_some() {
+        return Err(SdError::usage(
+            "init creates project configuration in the current directory; \
+             --store, --quipu and --graph are not supported with init",
+        ));
+    }
     let cwd = std::env::current_dir()
         .map_err(|e| SdError::failed(format!("cannot read the current directory: {e}")))?;
     // The default prefix follows the usual layers (env, user config); a parent
