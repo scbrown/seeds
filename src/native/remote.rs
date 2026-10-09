@@ -1013,6 +1013,11 @@ impl Backend for RemoteBackend {
         &self,
         req: &crate::engine::SearchReq,
     ) -> Result<Option<crate::engine::SearchPage>> {
+        // Explicit full-field search keeps the legacy snapshot semantics and cost.
+        // CLI admission reserves both host-wide slots before reaching here.
+        if req.full {
+            return Ok(None);
+        }
         self.search_summary(req).map(Some)
     }
 
