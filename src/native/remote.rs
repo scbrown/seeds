@@ -1032,7 +1032,7 @@ impl Backend for RemoteBackend {
         for graph in graphs {
             comments += self.aggregate_number(&format!(
                 "SELECT (COUNT(DISTINCT ?s) AS ?n) WHERE {{ GRAPH <{graph}> {{ ?s a <{}> . FILTER EXISTS {{ ?s <{}> ?index FILTER({}) }} FILTER EXISTS {{ ?s <{}> ?parent FILTER(isIRI(?parent) && STRSTARTS(STR(?parent), \"{}item/\")) }} }} }}",
-                term::comment(), term::comment_index(), summary::comment_index_guard("?index"), term::comment_on(), vocab::SEEDS_BASE
+                term::comment(), term::comment_index(), summary::nonnegative_integer_guard("?index"), term::comment_on(), vocab::SEEDS_BASE
             ))?;
         }
         Ok((seeds, comments, tx))

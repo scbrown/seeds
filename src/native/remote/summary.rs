@@ -9,8 +9,16 @@ fn literal(s: &str) -> String {
 // Self-subtraction must be the integer term zero (not decimal/double zero),
 // and adding integer zero must preserve term identity (not promote a typed
 // integer subtype). Checked i64 arithmetic retains MAX without f64 rounding.
-pub(super) fn comment_index_guard(variable: &str) -> String {
+pub(super) fn nonnegative_integer_guard(variable: &str) -> String {
     format!("sameTerm({variable} - {variable}, 0) && sameTerm({variable}, {variable} + 0) && {variable} >= 0")
+}
+
+fn principal_guard(variable: &str) -> String {
+    format!("(isIRI({variable}) && STRSTARTS(STR({variable}), {})) || (isLiteral({variable}) && sameTerm({variable}, STR({variable})))", literal(&format!("{}principal/", vocab::SEEDS_BASE)))
+}
+
+fn title_field(field: &str) -> String {
+    format!("OPTIONAL {{ ?s <{}> ?raw_{field}_name . FILTER(isLiteral(?raw_{field}_name) && sameTerm(?raw_{field}_name, STR(?raw_{field}_name))) }} OPTIONAL {{ ?s <{}> ?raw_{field}_label . FILTER(isLiteral(?raw_{field}_label) && sameTerm(?raw_{field}_label, STR(?raw_{field}_label))) }} BIND(COALESCE(?raw_{field}_name, ?raw_{field}_label, \"\") AS ?{field})", term::name(), vocab::RDFS_LABEL)
 }
 
 fn string_field(predicate: &str, field: &str, default: &str) -> String {
@@ -150,7 +158,7 @@ impl RemoteBackend {
             // its fields, and also accepts ephemeral comments on project seeds.
             let parent = format!("?s a <{}> . {valid_id} {fields} {guard}", term::work_item());
             let effective_parent = format!("{{ GRAPH <{}> {{ {parent} }} FILTER NOT EXISTS {{ GRAPH <{eph}> {{ ?shadow a <{}> ; <{}> ?id }} }} }} UNION {{ GRAPH <{eph}> {{ {parent} }} }}",self.graph,term::work_item(),term::identifier());
-            branches.push(format!("{{ ?comment a <{}> ; <{}> ?text ; <{}> ?s ; <{}> ?index . FILTER(isIRI(?s) && STRSTARTS(STR(?s), {}) && {} && isLiteral(?text) && sameTerm(?text, STR(?text)) && CONTAINS(LCASE(STR(?text)), {needle})) {{ {effective_parent} }} }}",term::comment(),term::text(),term::comment_on(),term::comment_index(),literal(&format!("{}item/",vocab::SEEDS_BASE)), comment_index_guard("?index")));
+            branches.push(format!("{{ ?comment a <{}> ; <{}> ?text ; <{}> ?s ; <{}> ?index . FILTER(isIRI(?s) && STRSTARTS(STR(?s), {}) && {} && isLiteral(?text) && sameTerm(?text, STR(?text)) && CONTAINS(LCASE(STR(?text)), {needle})) {{ {effective_parent} }} }}",term::comment(),term::text(),term::comment_on(),term::comment_index(),literal(&format!("{}item/",vocab::SEEDS_BASE)), nonnegative_integer_guard("?index")));
         }
 
         branches
@@ -454,7 +462,11 @@ impl RemoteBackend {
             );
         }
         if f.assignee.is_some() || f.unassigned {
-            fields += &format!(" OPTIONAL {{ ?s <{}> ?assignee }}", term::assigned_to());
+            fields += &format!(
+                " OPTIONAL {{ ?s <{}> ?assignee . FILTER({}) }}",
+                term::assigned_to(),
+                principal_guard("?assignee")
+            );
             if let Some(person) = &f.assignee {
                 fields += &format!(
                     " FILTER(?assignee = <{}> || ?assignee = {})",
@@ -487,7 +499,7 @@ impl RemoteBackend {
             );
         }
         if f.priority.is_some() || f.priority_min.is_some() || f.priority_max.is_some() {
-            fields += &format!(" OPTIONAL {{ ?s <{}> ?raw_priority . FILTER(isNumeric(?raw_priority) && ?raw_priority >= 0 && ?raw_priority <= 255) }} BIND(COALESCE(?raw_priority, 2) AS ?priority)", term::priority());
+            fields += &format!(" OPTIONAL {{ ?s <{}> ?raw_priority . FILTER({} && ?raw_priority <= 255) }} BIND(COALESCE(?raw_priority, 2) AS ?priority)", term::priority(), nonnegative_integer_guard("?raw_priority"));
             for (value, operator) in [
                 (&f.priority, "="),
                 (&f.priority_min, ">="),
@@ -520,8 +532,15 @@ impl RemoteBackend {
             (&f.notes_contains, term::notes(), "notes"),
         ] {
             if let Some(text) = text {
+                if key == "title" {
+                    fields += &title_field(key);
+                } else {
+                    // Optional text is absent unless the decoder sees a plain
+                    // string, including when an empty substring was requested.
+                    fields += &format!(" ?s <{predicate}> ?{key} . FILTER(isLiteral(?{key}) && sameTerm(?{key}, STR(?{key})))");
+                }
                 fields += &format!(
-                    " ?s <{predicate}> ?{key} . FILTER(CONTAINS(LCASE(STR(?{key})), {}))",
+                    " FILTER(CONTAINS(LCASE(STR(?{key})), {}))",
                     literal(&text.to_lowercase())
                 );
             }
@@ -536,8 +555,8 @@ impl RemoteBackend {
         Ok(match by {
             "status" => String::new(),
             "type" => string_field(&term::issue_type(), "key", "task"),
-            "priority" => format!("OPTIONAL {{ ?s <{}> ?raw_key . FILTER(isNumeric(?raw_key) && ?raw_key >= 0 && ?raw_key <= 255) }} BIND(CONCAT(\"P\", STR(COALESCE(?raw_key, 2))) AS ?key)", term::priority()),
-            "assignee" => format!("OPTIONAL {{ ?s <{}> ?raw_key }} BIND(COALESCE(?raw_key, \"(unassigned)\") AS ?key)", term::assigned_to()),
+            "priority" => format!("OPTIONAL {{ ?s <{}> ?raw_key . FILTER({} && ?raw_key <= 255) }} BIND(CONCAT(\"P\", STR(COALESCE(?raw_key, 2))) AS ?key)", term::priority(), nonnegative_integer_guard("?raw_key")),
+            "assignee" => format!("OPTIONAL {{ ?s <{}> ?raw_key . FILTER({}) }} BIND(COALESCE(?raw_key, \"(unassigned)\") AS ?key)", term::assigned_to(), principal_guard("?raw_key")),
             "label" => string_field(&term::label(), "key", "(no labels)"),
             _ => return Err(SdError::usage("unknown --by; expected status, priority, type, assignee or label")),
         })
