@@ -1660,11 +1660,15 @@ fn run_sync(
             )))
         }
     };
+    let p = if a.push_only {
+        sync::plan_push(&base, &h.backend, &remote)?
+    } else {
+        sync::plan_sync(&base, &h.backend, &remote)?
+    };
     if a.dry_run || a.status {
         // Read-only: plan from the same merge a sync uses, then stop. Like
         // every command in mode 1, the pendant was reconciled above; nothing
         // else is written (no commit on either side, no sync base, no export).
-        let p = sync::plan_sync(&base, &h.backend, &remote)?;
         let o = if a.status {
             sync_status(cli.json, &url, base_existed, &p, a.allow_remote_deletes)
         } else {
@@ -1687,8 +1691,8 @@ fn run_sync(
         return Ok(with_notes(o, notes));
     }
     let quiet = cli.quiet;
-    let (_, local_r, remote_r) = sync::sync_with_progress(
-        &base,
+    let (_, local_r, remote_r) = sync::apply_sync_plan(
+        p,
         &mut h.backend,
         &mut remote,
         ctx,
@@ -1702,7 +1706,9 @@ fn run_sync(
             }
         },
     )?;
-    // The new base is what both sides now hold.
+    // Full sync: both sides now hold this ledger. Push-only: the touched
+    // items now agree, and untouched local items still equal the old base;
+    // unread remote-only changes remain differences for the next full sync.
     let merged = pendant::export(&h.backend)?;
     store::write_sync_base(
         &base_path,
