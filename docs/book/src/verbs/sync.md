@@ -40,6 +40,7 @@ sides, so no reader holding the store's old revision can write over it.
 ```bash
 sd sync                              # with [sync] remote
 sd sync --remote https://quipu.example.org
+sd sync --push-only                  # only items changed locally since the last sync
 sd sync --dry-run                    # what a sync would do; writes nothing
 sd sync --status                     # in-sync, local-ahead, remote-ahead, diverged or conflicted
 ```
@@ -49,6 +50,16 @@ last sync with that remote, written to both sides; conflicts are listed and
 nothing is written. Removals (a seed the base had that one side lacks) are
 refused with exit 5 unless `--allow-remote-deletes`.
 See [Mode 3](../storage-modes.md#mode-3-sync).
+
+**`--push-only`** reads only the remote seeds and comments for items changed
+locally since the last successful sync with this remote. It keeps the same
+field-level merge, conflict, revision and removal guards for those items.
+Remote-only changes on untouched items are not pulled or acknowledged; use a
+normal two-way sync to discover them. The first push considers every local
+item, never deletes unrelated remote items, and a replay with no local changes
+reads no remote items. Both `--dry-run` and `--status` can preview this scoped
+plan; `in-sync` with `--push-only` means no local changes need pushing, not
+that the entire remote agrees. The base advances only after all writes succeed.
 
 **`--json`**: `{status, local: {…}, remote: {…}}`, each side shaped like
 import's; `wrote` says whether that side was written (a quipu server reports no

@@ -805,6 +805,62 @@ pub fn plan_sync(base: &Snapshot, local: &dyn Backend, remote: &dyn Backend) -> 
     })
 }
 
+/// Plan only changes made locally since `base`. Remote-only changes outside
+/// these items are neither read nor pulled; a later two-way sync still sees
+/// them against the unchanged part of the common base. Touched items retain
+/// the same field-level merge, conflict and removal checks as a full sync.
+pub fn plan_push(base: &Snapshot, local: &dyn Backend, remote: &dyn Backend) -> Result<SyncPlan> {
+    let l = local.snapshot(None)?.shared();
+    let (delta, _) = plan(base, &l, "seeds:sync");
+    let ids: BTreeSet<String> = delta
+        .seeds
+        .iter()
+        .map(|w| w.seed.id.clone())
+        .chain(delta.delete_seeds.iter().map(|(id, _)| id.clone()))
+        .chain(delta.comments.iter().map(|c| c.seed.clone()))
+        .chain(delta.delete_comments.iter().map(|(id, _)| id.clone()))
+        .collect();
+    let only = |s: &Snapshot| Snapshot {
+        seeds: ids
+            .iter()
+            .filter_map(|id| s.seeds.get(id).map(|seed| (id.clone(), seed.clone())))
+            .collect(),
+        comments: s
+            .comments
+            .iter()
+            .filter(|c| ids.contains(&c.seed))
+            .cloned()
+            .collect(),
+        tx: s.tx,
+    };
+    let r = if ids.is_empty() {
+        Snapshot::default()
+    } else {
+        only(
+            &remote
+                .snapshot_items(&ids.iter().cloned().collect::<Vec<_>>())?
+                .shared(),
+        )
+    };
+    let touched_local = only(&l);
+    let m = merge3(&only(base), &touched_local, &r);
+    let remote_plan = plan(&r, &m.merged, "seeds:sync");
+    let local_plan = plan(&touched_local, &m.merged, "seeds:sync");
+    // The witnessed base after success is the local ledger with the touched
+    // merge applied, not a claimed snapshot of the unread remote ledger.
+    let mut merged = l;
+    merged.seeds.retain(|id, _| !ids.contains(id));
+    merged.comments.retain(|c| !ids.contains(&c.seed));
+    merged.seeds.extend(m.merged.seeds);
+    merged.comments.extend(m.merged.comments);
+    Ok(SyncPlan {
+        merged,
+        conflicts: m.conflicts,
+        local: local_plan,
+        remote: remote_plan,
+    })
+}
+
 /// Sync two stores through a three-way merge: plan both sides from one merge,
 /// then write the remote first and the local second, each with a
 /// compare-and-set on the revisions it read. Nothing is written when there
@@ -840,6 +896,19 @@ pub fn sync_with_progress(
     on_batch: &mut dyn FnMut(crate::sync_batch::BatchDone),
 ) -> Result<(Snapshot, Report, Report)> {
     let p = plan_sync(base, &*local, &*remote)?;
+    apply_sync_plan(p, local, remote, ctx, allow_deletes, on_batch)
+}
+
+/// Apply an already prepared sync or push plan with the same revision guards
+/// and split-write behavior. A conflict or refused removal commits nothing.
+pub fn apply_sync_plan(
+    p: SyncPlan,
+    local: &mut dyn Backend,
+    remote: &mut dyn Backend,
+    ctx: &Ctx,
+    allow_deletes: bool,
+    on_batch: &mut dyn FnMut(crate::sync_batch::BatchDone),
+) -> Result<(Snapshot, Report, Report)> {
     if let Some(refused) = p.refusal(allow_deletes) {
         return Err(refused);
     }

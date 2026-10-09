@@ -3331,3 +3331,233 @@ fn a_seed_with_more_comments_than_the_clause_limit_still_syncs() {
     assert_eq!(remote.seen.iter().sum::<usize>(), 32, "{:?}", remote.seen);
     assert_same(&local, &store);
 }
+
+// A push must never obtain the complete remote snapshot. It must also filter
+// a backend's permitted superset of named items before planning deletions.
+struct PushRemote {
+    inner: QuipuBackend,
+    reads: std::cell::RefCell<Vec<Vec<String>>>,
+}
+impl Backend for PushRemote {
+    fn snapshot(&self, _: Option<u64>) -> seeds::error::Result<seeds::model::Snapshot> {
+        panic!("push read the entire remote")
+    }
+    fn snapshot_items(&self, ids: &[String]) -> seeds::error::Result<seeds::model::Snapshot> {
+        self.reads.borrow_mut().push(ids.to_vec());
+        self.inner.snapshot(None) // deliberately a superset
+    }
+    fn ready_ids(&self, at: Option<u64>) -> seeds::error::Result<Vec<String>> {
+        self.inner.ready_ids(at)
+    }
+    fn claims_of(&self, id: &str) -> seeds::error::Result<Vec<(u64, seeds::backend::Claims)>> {
+        self.inner.claims_of(id)
+    }
+    fn commit(&mut self, batch: &WriteBatch, ctx: &Ctx) -> seeds::error::Result<u64> {
+        self.inner.commit(batch, ctx)
+    }
+}
+
+#[test]
+fn push_only_reads_changed_items_and_leaves_unseen_remote_changes_for_two_way_sync() {
+    use seeds::sync;
+    let mut local = backend();
+    let a = mk(&mut local, "touched", 1);
+    let b = mk(&mut local, "untouched", 2);
+    let mut remote = PushRemote {
+        inner: backend(),
+        reads: Default::default(),
+    };
+    sync::import(
+        &mut remote.inner,
+        &ctx(3),
+        &local.snapshot(None).unwrap(),
+        None,
+        true,
+    )
+    .unwrap();
+    let base = local.snapshot(None).unwrap();
+    engine::close(
+        &mut remote.inner,
+        &ctx(4),
+        std::slice::from_ref(&b),
+        Some("remote"),
+        false,
+    )
+    .unwrap();
+    let remote_only = mk(&mut remote.inner, "remote only", 5);
+    engine::update(
+        &mut local,
+        &ctx(6),
+        std::slice::from_ref(&a),
+        &UpdateReq {
+            priority: Some(0.to_string()),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let p = sync::plan_push(&base, &local, &remote).unwrap();
+    assert_eq!(*remote.reads.borrow(), vec![vec![a.clone()]]);
+    assert!(p.remote.1.removed.is_empty());
+    let (new_base, _, rr) =
+        sync::apply_sync_plan(p, &mut local, &mut remote, &ctx(7), false, &mut |_| {}).unwrap();
+    assert!(rr.wrote);
+    assert_eq!(
+        local.snapshot(None).unwrap().get(&b).unwrap().status,
+        "open"
+    );
+    assert!(!new_base.seeds.contains_key(&remote_only));
+    // No local delta: zero remote reads, even though the remote is ahead.
+    remote.reads.borrow_mut().clear();
+    let p = sync::plan_push(&new_base, &local, &remote).unwrap();
+    assert!(p.remote.0.is_empty() && p.local.0.is_empty());
+    assert!(remote.reads.borrow().is_empty());
+    sync::sync(&new_base, &mut local, &mut remote.inner, &ctx(8), false).unwrap();
+    assert_same(&local, &remote.inner);
+    assert_eq!(
+        local.snapshot(None).unwrap().get(&b).unwrap().status,
+        "closed"
+    );
+}
+
+#[test]
+fn push_only_preserves_touched_field_conflicts_and_revision_races() {
+    use seeds::sync;
+    let mut local = backend();
+    let a = mk(&mut local, "touched", 1);
+    let mut remote = PushRemote {
+        inner: backend(),
+        reads: Default::default(),
+    };
+    sync::import(
+        &mut remote.inner,
+        &ctx(2),
+        &local.snapshot(None).unwrap(),
+        None,
+        true,
+    )
+    .unwrap();
+    let base = local.snapshot(None).unwrap();
+    for (b, priority) in [(&mut local, 0), (&mut remote.inner, 3)] {
+        engine::update(
+            b,
+            &ctx(3),
+            std::slice::from_ref(&a),
+            &UpdateReq {
+                priority: Some(priority.to_string()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    }
+    let p = sync::plan_push(&base, &local, &remote).unwrap();
+    assert_eq!(p.refusal(false).unwrap().kind, ErrorKind::Conflict);
+    assert_eq!(
+        sync::apply_sync_plan(p, &mut local, &mut remote, &ctx(4), false, &mut |_| {})
+            .unwrap_err()
+            .kind,
+        ErrorKind::Conflict
+    );
+    engine::update(
+        &mut remote.inner,
+        &ctx(5),
+        std::slice::from_ref(&a),
+        &UpdateReq {
+            priority: Some(2.to_string()),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let p = sync::plan_push(&base, &local, &remote).unwrap();
+    assert!(p.conflicts.is_empty());
+    engine::update(
+        &mut remote.inner,
+        &ctx(6),
+        std::slice::from_ref(&a),
+        &UpdateReq {
+            priority: Some(1.to_string()),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let before = local.snapshot(None).unwrap();
+    assert_eq!(
+        sync::apply_sync_plan(p, &mut local, &mut remote, &ctx(7), false, &mut |_| {})
+            .unwrap_err()
+            .kind,
+        ErrorKind::Conflict
+    );
+    assert_eq!(local.snapshot(None).unwrap().seeds, before.seeds);
+}
+
+#[test]
+fn push_only_merges_comment_only_changes_and_retains_removal_guard() {
+    use seeds::sync;
+    let mut local = backend();
+    let a = mk(&mut local, "comments", 1);
+    let mut remote = PushRemote {
+        inner: backend(),
+        reads: Default::default(),
+    };
+    sync::import(
+        &mut remote.inner,
+        &ctx(2),
+        &local.snapshot(None).unwrap(),
+        None,
+        true,
+    )
+    .unwrap();
+    let base = local.snapshot(None).unwrap();
+    engine::comment_add(&mut local, &ctx(3), &a, "local", None).unwrap();
+    engine::comment_add(&mut remote.inner, &ctx(4), &a, "remote", None).unwrap();
+    let p = sync::plan_push(&base, &local, &remote).unwrap();
+    assert!(p.conflicts.is_empty());
+    let (base, _, _) =
+        sync::apply_sync_plan(p, &mut local, &mut remote, &ctx(5), false, &mut |_| {}).unwrap();
+    assert_eq!(local.snapshot(None).unwrap().comments.len(), 2);
+    assert_same(&local, &remote.inner);
+    local
+        .commit(
+            &WriteBatch {
+                delete_seeds: vec![(a.clone(), base.get(&a).unwrap().revision)],
+                ..Default::default()
+            },
+            &ctx(6),
+        )
+        .unwrap();
+    let p = sync::plan_push(&base, &local, &remote).unwrap();
+    assert_eq!(p.refusal(false).unwrap().kind, ErrorKind::Refused);
+    assert_eq!(p.remote.1.removed, vec![a]);
+    sync::apply_sync_plan(p, &mut local, &mut remote, &ctx(7), true, &mut |_| {}).unwrap();
+    assert_same(&local, &remote.inner);
+}
+
+#[test]
+fn push_only_resumes_a_partial_split_without_rewriting_landed_items() {
+    use seeds::sync;
+    let mut local = backend();
+    chain(&mut local, 12);
+    let base = seeds::model::Snapshot::default();
+    let mut target = backend();
+    let batch = sync::plan_push(&base, &local, &target).unwrap().remote.0;
+    let limit = seeds::sync_batch::estimate_bytes(&batch) / 4;
+    let mut remote = Capped {
+        inner: &mut target,
+        advertised: limit,
+        limit,
+        fail_at: Some(2),
+        attempts: 0,
+        landed: vec![],
+    };
+    let p = sync::plan_push(&base, &local, &remote).unwrap();
+    let err =
+        sync::apply_sync_plan(p, &mut local, &mut remote, &ctx(9), false, &mut |_| {}).unwrap_err();
+    assert!(err.message.contains("1 landed"), "{}", err.message);
+    let landed = remote.inner.snapshot(None).unwrap().seeds.len();
+    assert!(landed > 0 && landed < 12);
+    remote.fail_at = None;
+    let p = sync::plan_push(&base, &local, &remote).unwrap();
+    assert_eq!(p.remote.1.created.len(), 12 - landed);
+    assert!(p.remote.1.updated.is_empty());
+    sync::apply_sync_plan(p, &mut local, &mut remote, &ctx(10), false, &mut |_| {}).unwrap();
+    assert_same(&local, remote.inner);
+}

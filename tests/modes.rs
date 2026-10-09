@@ -2235,3 +2235,51 @@ fn the_old_vocabulary_check_refuses_when_its_count_cannot_be_read() {
         assert_eq!(o.status.code(), Some(1), "{what}: doctor fails");
     }
 }
+
+#[test]
+fn push_only_preview_and_replay_keep_remote_only_changes_for_full_sync() {
+    let mut env = Env::new("push-only");
+    let Some(url) = env.start_server() else {
+        eprintln!("SKIPPED: set SEEDS_TEST_QUIPU_SERVER to run push-only against a real server");
+        return;
+    };
+    let repo = env.pendant_project("repo");
+    let (a, g) = board(&env, &repo);
+    let sync_env = [("SEEDS_SYNC_REMOTE", url.as_str())];
+    let preview: Value = serde_json::from_str(&env.ok(
+        &repo,
+        &["sync", "--push-only", "--dry-run", "--json"],
+        &sync_env,
+    ))
+    .unwrap();
+    assert_eq!(preview["remote"]["created"].as_array().unwrap().len(), 2);
+    assert!(!repo.join(".seeds/seeds.db.sync").exists());
+    env.ok(&repo, &["sync", "--push-only"], &sync_env);
+    let id = std::fs::read_to_string(repo.join(".seeds/project-id")).unwrap();
+    let graph = format!("https://seeds.local/project/sd-{}", id.trim());
+    let remote = [
+        ("SEEDS_QUIPU_URL", url.as_str()),
+        ("SEEDS_GRAPH", graph.as_str()),
+    ];
+    let work = env.dir("peer");
+    env.ok(&work, &["close", &g, "--reason", "remote only"], &remote);
+    env.ok(&repo, &["update", &a, "--priority", "0"], &[]);
+    env.ok(&repo, &["sync", "--push-only"], &sync_env);
+    let untouched: Value =
+        serde_json::from_str(&env.ok(&repo, &["show", &g, "--json"], &[])).unwrap();
+    assert_eq!(untouched[0]["status"], "open");
+    let replay: Value =
+        serde_json::from_str(&env.ok(&repo, &["sync", "--push-only", "--json"], &sync_env))
+            .unwrap();
+    assert_eq!(replay["local"]["wrote"], false);
+    assert_eq!(replay["remote"]["wrote"], false);
+    // The old base for the unread item survives both pushes. Full sync must
+    // still pull it, instead of falsely considering the remote edit acknowledged.
+    env.ok(&repo, &["sync"], &sync_env);
+    let pulled: Value = serde_json::from_str(&env.ok(&repo, &["show", &g, "--json"], &[])).unwrap();
+    assert_eq!(pulled[0]["status"], "closed");
+    env.ok(&work, &["update", &a, "--priority", "1"], &remote);
+    env.ok(&repo, &["update", &a, "--priority", "3"], &[]);
+    let refused = env.sd(&repo, &["sync", "--push-only"], &sync_env);
+    assert_eq!(refused.status.code(), Some(4));
+}

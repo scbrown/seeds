@@ -400,6 +400,10 @@ pub struct DoctorArgs {
 /// `sd sync`.
 #[derive(Debug, Args)]
 pub struct SyncArgs {
+    /// Push only items changed locally since the last successful sync. Read
+    /// those remote items for conflicts, without pulling remote-only changes.
+    #[arg(long)]
+    pub push_only: bool,
     /// The remote to sync with (default: [sync] remote)
     #[arg(long, value_name = "URL")]
     pub remote: Option<String>,
