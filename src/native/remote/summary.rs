@@ -260,8 +260,24 @@ impl RemoteBackend {
         // Start from the selective field index alone. Status/default UNION
         // joins can materialize the whole Action class before this restriction.
         // Metadata decoding and list_matches_page validate type and all filters.
+        let text_filter = req
+            .filter
+            .desc_contains
+            .as_ref()
+            .map(|text| (term::description(), text))
+            .or_else(|| {
+                req.filter
+                    .notes_contains
+                    .as_ref()
+                    .map(|text| (term::notes(), text))
+            });
         let pattern = if req.defer_until_present {
             format!("?s <{}> ?defer_candidate .", term::defer_until())
+        } else if let Some((predicate, text)) = text_filter {
+            // A field may match while another filter rejects its seed. This
+            // is only a candidate superset: the existing decoder and metadata
+            // filter still decide membership, defaults, ordering and totals.
+            format!("?s <{predicate}> ?text_candidate . FILTER(isLiteral(?text_candidate) && sameTerm(?text_candidate, STR(?text_candidate)) && CONTAINS(LCASE(STR(?text_candidate)), {}))", literal(&text.to_lowercase()))
         } else {
             vocab::seed_query_pattern(&q).unwrap_or_else(|| format!("?s a <{}>", term::work_item()))
         };
