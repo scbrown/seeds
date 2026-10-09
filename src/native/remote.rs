@@ -1031,8 +1031,8 @@ impl Backend for RemoteBackend {
         let mut comments = 0;
         for graph in graphs {
             comments += self.aggregate_number(&format!(
-                "SELECT (COUNT(DISTINCT ?s) AS ?n) WHERE {{ GRAPH <{graph}> {{ ?s a <{}> . FILTER EXISTS {{ ?s <{}> ?index FILTER(isNumeric(?index) && ?index >= 0) }} FILTER EXISTS {{ ?s <{}> ?parent FILTER(isIRI(?parent) && STRSTARTS(STR(?parent), \"{}item/\")) }} }} }}",
-                term::comment(), term::comment_index(), term::comment_on(), vocab::SEEDS_BASE
+                "SELECT (COUNT(DISTINCT ?s) AS ?n) WHERE {{ GRAPH <{graph}> {{ ?s a <{}> . FILTER EXISTS {{ ?s <{}> ?index FILTER({}) }} FILTER EXISTS {{ ?s <{}> ?parent FILTER(isIRI(?parent) && STRSTARTS(STR(?parent), \"{}item/\")) }} }} }}",
+                term::comment(), term::comment_index(), summary::comment_index_guard("?index"), term::comment_on(), vocab::SEEDS_BASE
             ))?;
         }
         Ok((seeds, comments, tx))

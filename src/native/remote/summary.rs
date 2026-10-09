@@ -6,6 +6,13 @@ fn literal(s: &str) -> String {
     format!("\"{}\"", escape_literal(s))
 }
 
+// Self-subtraction must be the integer term zero (not decimal/double zero),
+// and adding integer zero must preserve term identity (not promote a typed
+// integer subtype). Checked i64 arithmetic retains MAX without f64 rounding.
+pub(super) fn comment_index_guard(variable: &str) -> String {
+    format!("sameTerm({variable} - {variable}, 0) && sameTerm({variable}, {variable} + 0) && {variable} >= 0")
+}
+
 fn string_field(predicate: &str, field: &str, default: &str) -> String {
     format!("OPTIONAL {{ ?s <{predicate}> ?raw_{field} . FILTER(isLiteral(?raw_{field}) && sameTerm(?raw_{field}, STR(?raw_{field}))) }} BIND(COALESCE(?raw_{field}, {}) AS ?{field})", literal(default))
 }
@@ -143,7 +150,7 @@ impl RemoteBackend {
             // its fields, and also accepts ephemeral comments on project seeds.
             let parent = format!("?s a <{}> . {valid_id} {fields} {guard}", term::work_item());
             let effective_parent = format!("{{ GRAPH <{}> {{ {parent} }} FILTER NOT EXISTS {{ GRAPH <{eph}> {{ ?shadow a <{}> ; <{}> ?id }} }} }} UNION {{ GRAPH <{eph}> {{ {parent} }} }}",self.graph,term::work_item(),term::identifier());
-            branches.push(format!("{{ ?comment a <{}> ; <{}> ?text ; <{}> ?s ; <{}> ?index . FILTER(isIRI(?s) && STRSTARTS(STR(?s), {}) && isNumeric(?index) && ?index >= 0 && isLiteral(?text) && sameTerm(?text, STR(?text)) && CONTAINS(LCASE(STR(?text)), {needle})) {{ {effective_parent} }} }}",term::comment(),term::text(),term::comment_on(),term::comment_index(),literal(&format!("{}item/",vocab::SEEDS_BASE))));
+            branches.push(format!("{{ ?comment a <{}> ; <{}> ?text ; <{}> ?s ; <{}> ?index . FILTER(isIRI(?s) && STRSTARTS(STR(?s), {}) && {} && isLiteral(?text) && sameTerm(?text, STR(?text)) && CONTAINS(LCASE(STR(?text)), {needle})) {{ {effective_parent} }} }}",term::comment(),term::text(),term::comment_on(),term::comment_index(),literal(&format!("{}item/",vocab::SEEDS_BASE)), comment_index_guard("?index")));
         }
 
         branches

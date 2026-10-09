@@ -815,6 +815,69 @@ fn search_shadowing_and_identifier_counts_match_effective_snapshot() {
     compare(&mut remote, "needle", true, false, 1, 1);
     compare(&mut remote, "needle", true, true, 2, 0);
     compare(&mut remote, "ephemeral phrase", true, true, 1, 0);
+    update(&remote, format!("INSERT DATA {{ GRAPH <{graph}> {{ <https://example.org/comment-max> a <{}> ; <{}> <{}> ; <{}> 9223372036854775807 ; <{}> \"max range positive\" . }} }}", term::comment(),term::comment_on(),item("control"),term::comment_index(),term::text()));
+    compare(&mut remote, "max range positive", true, true, 1, 0);
+    assert_eq!(
+        remote.snapshot(None).unwrap().comments.len(),
+        3,
+        "valid integer comment control"
+    );
+    for (number, position) in [
+        "0.5",
+        "-1",
+        "\"0\"^^<http://www.w3.org/2001/XMLSchema#decimal>",
+        "\"1\"^^<http://www.w3.org/2001/XMLSchema#long>",
+        "\"9223372036854775808\"^^<http://www.w3.org/2001/XMLSchema#integer>",
+        "\"18446744073709551616\"^^<http://www.w3.org/2001/XMLSchema#integer>",
+        "\"1.5\"^^<http://www.w3.org/2001/XMLSchema#integer>",
+        "\"0\"@en",
+        "\"0\"",
+        "<https://example.org/index>",
+    ]
+    .iter()
+    .enumerate()
+    {
+        let payload = format!("INSERT DATA {{ GRAPH <{graph}> {{ <https://example.org/invalid-comment-{number}> a <{}> ; <{}> <{}> ; <{}> {position} ; <{}> \"invalid-index-marker-{number}\" . }} }}",term::comment(),term::comment_on(),item("control"),term::comment_index(),term::text());
+        let result = remote.post(
+            "/update",
+            "application/x-www-form-urlencoded",
+            &format!("update={}", super::form_encode(&payload)),
+            true,
+        );
+        if (4..=6).contains(&number) {
+            // Some parser versions refuse oversized/invalid integer lexical
+            // forms before storage. That is a proven write rejection, not an
+            // empty decode result; the nonempty valid count remains controlled.
+            if let Err(error) = &result {
+                assert!(error.message.contains("integer"), "{error:?}");
+            }
+        } else {
+            result.unwrap();
+        }
+    }
+    // The served parser canonicalizes xsd:long into an integer term, which
+    // the snapshot decoder accepts. Preserve that positive case as well.
+    let decoded = remote.snapshot(None).unwrap();
+    assert_eq!(decoded.comments.len(), 4);
+    assert!(decoded
+        .comments
+        .iter()
+        .any(|c| c.text == "invalid-index-marker-3" && c.index == 1));
+    assert_eq!(
+        remote.ledger_counts().unwrap().1,
+        decoded.comments.len(),
+        "exact count differs from the snapshot decoder"
+    );
+    for number in 0..10 {
+        compare(
+            &mut remote,
+            &format!("invalid-index-marker-{number}"),
+            true,
+            true,
+            usize::from(number == 3),
+            0,
+        );
+    }
     assert_eq!(
         remote.ledger_issue_count().unwrap().0,
         remote.snapshot(None).unwrap().seeds.len()
