@@ -1,150 +1,180 @@
-<https://seeds.local/item/sd-ksr> <http://aegis.gastown.local/ontology/blockedOn> <https://seeds.local/item/sd-mlc> .
-<https://seeds.local/item/sd-ksr> <http://aegis.gastown.local/ontology/blockedOn> <https://seeds.local/item/sd-p75> .
-<https://seeds.local/item/sd-ksr> <http://aegis.gastown.local/ontology/closedAt> "2026-09-30T15:50:08Z" .
-<https://seeds.local/item/sd-ksr> <http://aegis.gastown.local/ontology/createdAt> "2026-09-30T15:49:34Z" .
-<https://seeds.local/item/sd-ksr> <http://aegis.gastown.local/ontology/identifier> "sd-ksr" .
-<https://seeds.local/item/sd-ksr> <http://aegis.gastown.local/ontology/outcome> "done" .
-<https://seeds.local/item/sd-ksr> <http://aegis.gastown.local/ontology/sourceKind> "declared" .
-<https://seeds.local/item/sd-ksr> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://aegis.gastown.local/ontology/WorkItem> .
+<https://seeds.local/item/sd-ksr> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <https://schema.org/Action> .
 <https://seeds.local/item/sd-ksr> <http://www.w3.org/2000/01/rdf-schema#label> "dep on non-blocked" .
-<https://seeds.local/item/sd-ksr> <https://seeds.local/ontology/closeReason> "probe for sd-non.1, not real work" .
-<https://seeds.local/item/sd-ksr> <https://seeds.local/ontology/createdBy> "wu" .
+<https://seeds.local/item/sd-ksr> <https://scbrown.github.io/quechua/ns#blockedOn> <https://seeds.local/item/sd-mlc> .
+<https://seeds.local/item/sd-ksr> <https://scbrown.github.io/quechua/ns#blockedOn> <https://seeds.local/item/sd-p75> .
+<https://seeds.local/item/sd-ksr> <https://scbrown.github.io/quechua/ns#outcome> "done" .
+<https://seeds.local/item/sd-ksr> <https://scbrown.github.io/quechua/ns#sourceKind> "declared" .
+<https://seeds.local/item/sd-ksr> <https://schema.org/actionStatus> <https://schema.org/CompletedActionStatus> .
+<https://seeds.local/item/sd-ksr> <https://schema.org/creator> <https://seeds.local/principal/wu> .
+<https://seeds.local/item/sd-ksr> <https://schema.org/dateCreated> "2026-09-30T15:49:34Z"^^<http://www.w3.org/2001/XMLSchema#dateTime> .
+<https://seeds.local/item/sd-ksr> <https://schema.org/dateModified> "2026-09-30T15:50:08Z"^^<http://www.w3.org/2001/XMLSchema#dateTime> .
+<https://seeds.local/item/sd-ksr> <https://schema.org/endTime> "2026-09-30T15:50:08Z"^^<http://www.w3.org/2001/XMLSchema#dateTime> .
+<https://seeds.local/item/sd-ksr> <https://schema.org/identifier> "sd-ksr" .
+<https://seeds.local/item/sd-ksr> <https://schema.org/name> "dep on non-blocked" .
+<https://seeds.local/item/sd-ksr> <https://schema.org/result> "probe for sd-non.1, not real work" .
+<https://seeds.local/item/sd-ksr> <https://schema.org/version> "3"^^<http://www.w3.org/2001/XMLSchema#integer> .
+<https://seeds.local/item/sd-ksr> <https://seeds.local/ontology/beadsJson> "{\"_seeds\":{\"facts\":[],\"format\":\"seeds-facts-v1\",\"revision\":3},\"assignee\":null,\"close_reason\":\"probe for sd-non.1, not real work\",\"closed_at\":\"2026-09-30T15:50:08Z\",\"comments\":[],\"created_at\":\"2026-09-30T15:49:34Z\",\"created_by\":\"wu\",\"defer_until\":null,\"dependencies\":[{\"depends_on_id\":\"sd-mlc\",\"issue_id\":\"sd-ksr\",\"type\":\"blocks\"},{\"depends_on_id\":\"sd-p75\",\"issue_id\":\"sd-ksr\",\"type\":\"blocks\"}],\"description\":null,\"id\":\"sd-ksr\",\"issue_type\":\"task\",\"labels\":[],\"notes\":null,\"outcome\":\"done\",\"owner\":null,\"parent\":null,\"priority\":2,\"revision\":3,\"status\":\"closed\",\"title\":\"dep on non-blocked\",\"updated_at\":\"2026-09-30T15:50:08Z\",\"workflow_run\":null}" .
 <https://seeds.local/item/sd-ksr> <https://seeds.local/ontology/issueType> "task" .
 <https://seeds.local/item/sd-ksr> <https://seeds.local/ontology/priority> "2"^^<http://www.w3.org/2001/XMLSchema#integer> .
-<https://seeds.local/item/sd-ksr> <https://seeds.local/ontology/revision> "3"^^<http://www.w3.org/2001/XMLSchema#integer> .
 <https://seeds.local/item/sd-ksr> <https://seeds.local/ontology/status> "closed" .
-<https://seeds.local/item/sd-ksr> <https://seeds.local/ontology/updatedAt> "2026-09-30T15:50:08Z" .
-<https://seeds.local/item/sd-mlc> <http://aegis.gastown.local/ontology/blockedOn> <https://seeds.local/item/sd-p75> .
-<https://seeds.local/item/sd-mlc> <http://aegis.gastown.local/ontology/createdAt> "2026-09-30T15:49:17Z" .
-<https://seeds.local/item/sd-mlc> <http://aegis.gastown.local/ontology/identifier> "sd-mlc" .
-<https://seeds.local/item/sd-mlc> <http://aegis.gastown.local/ontology/sourceKind> "declared" .
-<https://seeds.local/item/sd-mlc> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://aegis.gastown.local/ontology/WorkItem> .
+<https://seeds.local/item/sd-mlc> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <https://schema.org/Action> .
 <https://seeds.local/item/sd-mlc> <http://www.w3.org/2000/01/rdf-schema#label> "durable install: sd via caboodle or the release installer (Linux + macOS)" .
-<https://seeds.local/item/sd-mlc> <https://seeds.local/ontology/createdBy> "wu" .
-<https://seeds.local/item/sd-mlc> <https://seeds.local/ontology/description> "aegis-w3k75d.6 item 2. Depends on release artifacts." .
+<https://seeds.local/item/sd-mlc> <https://scbrown.github.io/quechua/ns#blockedOn> <https://seeds.local/item/sd-p75> .
+<https://seeds.local/item/sd-mlc> <https://scbrown.github.io/quechua/ns#sourceKind> "declared" .
+<https://seeds.local/item/sd-mlc> <https://schema.org/actionStatus> <https://schema.org/PotentialActionStatus> .
+<https://seeds.local/item/sd-mlc> <https://schema.org/creator> <https://seeds.local/principal/wu> .
+<https://seeds.local/item/sd-mlc> <https://schema.org/dateCreated> "2026-09-30T15:49:17Z"^^<http://www.w3.org/2001/XMLSchema#dateTime> .
+<https://seeds.local/item/sd-mlc> <https://schema.org/dateModified> "2026-09-30T15:50:28Z"^^<http://www.w3.org/2001/XMLSchema#dateTime> .
+<https://seeds.local/item/sd-mlc> <https://schema.org/description> "aegis-w3k75d.6 item 2. Depends on release artifacts." .
+<https://seeds.local/item/sd-mlc> <https://schema.org/identifier> "sd-mlc" .
+<https://seeds.local/item/sd-mlc> <https://schema.org/keywords> "install" .
+<https://seeds.local/item/sd-mlc> <https://schema.org/name> "durable install: sd via caboodle or the release installer (Linux + macOS)" .
+<https://seeds.local/item/sd-mlc> <https://schema.org/version> "2"^^<http://www.w3.org/2001/XMLSchema#integer> .
+<https://seeds.local/item/sd-mlc> <https://seeds.local/ontology/beadsJson> "{\"_seeds\":{\"facts\":[],\"format\":\"seeds-facts-v1\",\"revision\":2},\"assignee\":null,\"close_reason\":null,\"closed_at\":null,\"comments\":[],\"created_at\":\"2026-09-30T15:49:17Z\",\"created_by\":\"wu\",\"defer_until\":null,\"dependencies\":[{\"depends_on_id\":\"sd-p75\",\"issue_id\":\"sd-mlc\",\"type\":\"blocks\"}],\"description\":\"aegis-w3k75d.6 item 2. Depends on release artifacts.\",\"id\":\"sd-mlc\",\"issue_type\":\"feature\",\"labels\":[\"install\"],\"notes\":null,\"outcome\":null,\"owner\":null,\"parent\":null,\"priority\":1,\"revision\":2,\"status\":\"open\",\"title\":\"durable install: sd via caboodle or the release installer (Linux + macOS)\",\"updated_at\":\"2026-09-30T15:50:28Z\",\"workflow_run\":null}" .
 <https://seeds.local/item/sd-mlc> <https://seeds.local/ontology/issueType> "feature" .
-<https://seeds.local/item/sd-mlc> <https://seeds.local/ontology/label> "install" .
 <https://seeds.local/item/sd-mlc> <https://seeds.local/ontology/priority> "1"^^<http://www.w3.org/2001/XMLSchema#integer> .
-<https://seeds.local/item/sd-mlc> <https://seeds.local/ontology/revision> "2"^^<http://www.w3.org/2001/XMLSchema#integer> .
 <https://seeds.local/item/sd-mlc> <https://seeds.local/ontology/status> "open" .
-<https://seeds.local/item/sd-mlc> <https://seeds.local/ontology/updatedAt> "2026-09-30T15:50:28Z" .
-<https://seeds.local/item/sd-n7u> <http://aegis.gastown.local/ontology/blockedOn> <https://seeds.local/item/sd-mlc> .
-<https://seeds.local/item/sd-n7u> <http://aegis.gastown.local/ontology/createdAt> "2026-09-30T15:49:58Z" .
-<https://seeds.local/item/sd-n7u> <http://aegis.gastown.local/ontology/identifier> "sd-n7u" .
-<https://seeds.local/item/sd-n7u> <http://aegis.gastown.local/ontology/sourceKind> "declared" .
-<https://seeds.local/item/sd-n7u> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://aegis.gastown.local/ontology/WorkItem> .
+<https://seeds.local/item/sd-n7u> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <https://schema.org/Action> .
 <https://seeds.local/item/sd-n7u> <http://www.w3.org/2000/01/rdf-schema#label> "caboodle / stack integration: install and verify seeds in caboodle" .
-<https://seeds.local/item/sd-n7u> <https://seeds.local/ontology/createdBy> "wu" .
-<https://seeds.local/item/sd-n7u> <https://seeds.local/ontology/description> "aegis-w3k75d.10. Align the adapter shape with the aegis-1i5h1j adapters (skein, shuttle, quechua, chaski)." .
+<https://seeds.local/item/sd-n7u> <https://scbrown.github.io/quechua/ns#blockedOn> <https://seeds.local/item/sd-mlc> .
+<https://seeds.local/item/sd-n7u> <https://scbrown.github.io/quechua/ns#sourceKind> "declared" .
+<https://seeds.local/item/sd-n7u> <https://schema.org/actionStatus> <https://schema.org/PotentialActionStatus> .
+<https://seeds.local/item/sd-n7u> <https://schema.org/creator> <https://seeds.local/principal/wu> .
+<https://seeds.local/item/sd-n7u> <https://schema.org/dateCreated> "2026-09-30T15:49:58Z"^^<http://www.w3.org/2001/XMLSchema#dateTime> .
+<https://seeds.local/item/sd-n7u> <https://schema.org/dateModified> "2026-09-30T15:56:44Z"^^<http://www.w3.org/2001/XMLSchema#dateTime> .
+<https://seeds.local/item/sd-n7u> <https://schema.org/description> "aegis-w3k75d.10. Align the adapter shape with the aegis-1i5h1j adapters (skein, shuttle, quechua, chaski)." .
+<https://seeds.local/item/sd-n7u> <https://schema.org/identifier> "sd-n7u" .
+<https://seeds.local/item/sd-n7u> <https://schema.org/keywords> "stack" .
+<https://seeds.local/item/sd-n7u> <https://schema.org/name> "caboodle / stack integration: install and verify seeds in caboodle" .
+<https://seeds.local/item/sd-n7u> <https://schema.org/version> "4"^^<http://www.w3.org/2001/XMLSchema#integer> .
+<https://seeds.local/item/sd-n7u> <https://seeds.local/ontology/beadsJson> "{\"_seeds\":{\"facts\":[],\"format\":\"seeds-facts-v1\",\"revision\":4},\"assignee\":null,\"close_reason\":null,\"closed_at\":null,\"comments\":[],\"created_at\":\"2026-09-30T15:49:58Z\",\"created_by\":\"wu\",\"defer_until\":null,\"dependencies\":[{\"depends_on_id\":\"sd-mlc\",\"issue_id\":\"sd-n7u\",\"type\":\"blocks\"}],\"description\":\"aegis-w3k75d.10. Align the adapter shape with the aegis-1i5h1j adapters (skein, shuttle, quechua, chaski).\",\"id\":\"sd-n7u\",\"issue_type\":\"feature\",\"labels\":[\"stack\"],\"notes\":null,\"outcome\":null,\"owner\":null,\"parent\":null,\"priority\":2,\"revision\":4,\"status\":\"open\",\"title\":\"caboodle / stack integration: install and verify seeds in caboodle\",\"updated_at\":\"2026-09-30T15:56:44Z\",\"workflow_run\":null}" .
 <https://seeds.local/item/sd-n7u> <https://seeds.local/ontology/issueType> "feature" .
-<https://seeds.local/item/sd-n7u> <https://seeds.local/ontology/label> "stack" .
 <https://seeds.local/item/sd-n7u> <https://seeds.local/ontology/priority> "2"^^<http://www.w3.org/2001/XMLSchema#integer> .
-<https://seeds.local/item/sd-n7u> <https://seeds.local/ontology/revision> "4"^^<http://www.w3.org/2001/XMLSchema#integer> .
 <https://seeds.local/item/sd-n7u> <https://seeds.local/ontology/status> "open" .
-<https://seeds.local/item/sd-n7u> <https://seeds.local/ontology/updatedAt> "2026-09-30T15:56:44Z" .
-<https://seeds.local/item/sd-ng9> <http://aegis.gastown.local/ontology/createdAt> "2026-09-30T15:49:17Z" .
-<https://seeds.local/item/sd-ng9> <http://aegis.gastown.local/ontology/identifier> "sd-ng9" .
-<https://seeds.local/item/sd-ng9> <http://aegis.gastown.local/ontology/sourceKind> "declared" .
-<https://seeds.local/item/sd-ng9> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://aegis.gastown.local/ontology/WorkItem> .
+<https://seeds.local/item/sd-ng9> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <https://schema.org/Action> .
 <https://seeds.local/item/sd-ng9> <http://www.w3.org/2000/01/rdf-schema#label> "crates.io first publish of seeds-ai" .
-<https://seeds.local/item/sd-ng9> <https://seeds.local/ontology/createdBy> "wu" .
-<https://seeds.local/item/sd-ng9> <https://seeds.local/ontology/description> "The first publish is held by the maintainer." .
+<https://seeds.local/item/sd-ng9> <https://scbrown.github.io/quechua/ns#sourceKind> "declared" .
+<https://seeds.local/item/sd-ng9> <https://schema.org/actionStatus> <https://schema.org/PotentialActionStatus> .
+<https://seeds.local/item/sd-ng9> <https://schema.org/creator> <https://seeds.local/principal/wu> .
+<https://seeds.local/item/sd-ng9> <https://schema.org/dateCreated> "2026-09-30T15:49:17Z"^^<http://www.w3.org/2001/XMLSchema#dateTime> .
+<https://seeds.local/item/sd-ng9> <https://schema.org/dateModified> "2026-09-30T15:50:37Z"^^<http://www.w3.org/2001/XMLSchema#dateTime> .
+<https://seeds.local/item/sd-ng9> <https://schema.org/description> "The first publish is held by the maintainer." .
+<https://seeds.local/item/sd-ng9> <https://schema.org/identifier> "sd-ng9" .
+<https://seeds.local/item/sd-ng9> <https://schema.org/keywords> "release" .
+<https://seeds.local/item/sd-ng9> <https://schema.org/name> "crates.io first publish of seeds-ai" .
+<https://seeds.local/item/sd-ng9> <https://schema.org/version> "2"^^<http://www.w3.org/2001/XMLSchema#integer> .
+<https://seeds.local/item/sd-ng9> <https://seeds.local/ontology/beadsJson> "{\"_seeds\":{\"facts\":[],\"format\":\"seeds-facts-v1\",\"revision\":2},\"assignee\":null,\"close_reason\":null,\"closed_at\":null,\"comments\":[],\"created_at\":\"2026-09-30T15:49:17Z\",\"created_by\":\"wu\",\"defer_until\":null,\"dependencies\":[],\"description\":\"The first publish is held by the maintainer.\",\"id\":\"sd-ng9\",\"issue_type\":\"chore\",\"labels\":[\"release\"],\"notes\":null,\"outcome\":null,\"owner\":null,\"parent\":null,\"priority\":2,\"revision\":2,\"status\":\"open\",\"title\":\"crates.io first publish of seeds-ai\",\"updated_at\":\"2026-09-30T15:50:37Z\",\"workflow_run\":null}" .
 <https://seeds.local/item/sd-ng9> <https://seeds.local/ontology/issueType> "chore" .
-<https://seeds.local/item/sd-ng9> <https://seeds.local/ontology/label> "release" .
 <https://seeds.local/item/sd-ng9> <https://seeds.local/ontology/priority> "2"^^<http://www.w3.org/2001/XMLSchema#integer> .
-<https://seeds.local/item/sd-ng9> <https://seeds.local/ontology/revision> "2"^^<http://www.w3.org/2001/XMLSchema#integer> .
 <https://seeds.local/item/sd-ng9> <https://seeds.local/ontology/status> "open" .
-<https://seeds.local/item/sd-ng9> <https://seeds.local/ontology/updatedAt> "2026-09-30T15:50:37Z" .
-<https://seeds.local/item/sd-non.1> <http://aegis.gastown.local/ontology/closedAt> "2026-09-30T15:56:44Z" .
-<https://seeds.local/item/sd-non.1> <http://aegis.gastown.local/ontology/createdAt> "2026-09-30T15:49:58Z" .
-<https://seeds.local/item/sd-non.1> <http://aegis.gastown.local/ontology/identifier> "sd-non.1" .
-<https://seeds.local/item/sd-non.1> <http://aegis.gastown.local/ontology/outcome> "done" .
-<https://seeds.local/item/sd-non.1> <http://aegis.gastown.local/ontology/sourceKind> "declared" .
-<https://seeds.local/item/sd-non.1> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://aegis.gastown.local/ontology/WorkItem> .
+<https://seeds.local/item/sd-non.1> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <https://schema.org/Action> .
 <https://seeds.local/item/sd-non.1> <http://www.w3.org/2000/01/rdf-schema#label> "a write that adds a blocker X is refused when X has its own blocker (create --deps AND dep add)" .
-<https://seeds.local/item/sd-non.1> <https://seeds.local/ontology/childOf> <https://seeds.local/item/sd-non> .
-<https://seeds.local/item/sd-non.1> <https://seeds.local/ontology/closeReason> "fixed in #6 (44bef05): validate_batch drops a target's edges to seeds that are not loaded; regression test a_blocker_that_has_its_own_blocker_can_be_added" .
-<https://seeds.local/item/sd-non.1> <https://seeds.local/ontology/createdBy> "wu" .
-<https://seeds.local/item/sd-non.1> <https://seeds.local/ontology/description> "Repro (2026-09-30, repo-local pendant): create A; create B --deps A; then 'create C --deps B' OR 'create C; dep add C B' -> rc=5 'B blockedOn: camayoc: blockedOn must point at a WorkItem the graph actually holds'. --dry-run passes. It succeeds only if C ALREADY depends on A (then A is in the validated subgraph). INFERRED: the write validates C plus its direct targets, whose blockedOn edges point at seeds outside that subgraph. Blocks any dependency chain deeper than 2." .
+<https://seeds.local/item/sd-non.1> <https://scbrown.github.io/quechua/ns#outcome> "done" .
+<https://seeds.local/item/sd-non.1> <https://scbrown.github.io/quechua/ns#sourceKind> "declared" .
+<https://seeds.local/item/sd-non.1> <https://schema.org/actionStatus> <https://schema.org/CompletedActionStatus> .
+<https://seeds.local/item/sd-non.1> <https://schema.org/creator> <https://seeds.local/principal/wu> .
+<https://seeds.local/item/sd-non.1> <https://schema.org/dateCreated> "2026-09-30T15:49:58Z"^^<http://www.w3.org/2001/XMLSchema#dateTime> .
+<https://seeds.local/item/sd-non.1> <https://schema.org/dateModified> "2026-09-30T15:56:44Z"^^<http://www.w3.org/2001/XMLSchema#dateTime> .
+<https://seeds.local/item/sd-non.1> <https://schema.org/description> "Repro (2026-09-30, repo-local pendant): create A; create B --deps A; then 'create C --deps B' OR 'create C; dep add C B' -> rc=5 'B blockedOn: camayoc: blockedOn must point at a WorkItem the graph actually holds'. --dry-run passes. It succeeds only if C ALREADY depends on A (then A is in the validated subgraph). INFERRED: the write validates C plus its direct targets, whose blockedOn edges point at seeds outside that subgraph. Blocks any dependency chain deeper than 2." .
+<https://seeds.local/item/sd-non.1> <https://schema.org/endTime> "2026-09-30T15:56:44Z"^^<http://www.w3.org/2001/XMLSchema#dateTime> .
+<https://seeds.local/item/sd-non.1> <https://schema.org/identifier> "sd-non.1" .
+<https://seeds.local/item/sd-non.1> <https://schema.org/isPartOf> <https://seeds.local/item/sd-non> .
+<https://seeds.local/item/sd-non.1> <https://schema.org/keywords> "dogfood" .
+<https://seeds.local/item/sd-non.1> <https://schema.org/name> "a write that adds a blocker X is refused when X has its own blocker (create --deps AND dep add)" .
+<https://seeds.local/item/sd-non.1> <https://schema.org/result> "fixed in #6 (44bef05): validate_batch drops a target's edges to seeds that are not loaded; regression test a_blocker_that_has_its_own_blocker_can_be_added" .
+<https://seeds.local/item/sd-non.1> <https://schema.org/version> "3"^^<http://www.w3.org/2001/XMLSchema#integer> .
+<https://seeds.local/item/sd-non.1> <https://seeds.local/ontology/beadsJson> "{\"_seeds\":{\"facts\":[],\"format\":\"seeds-facts-v1\",\"revision\":3},\"assignee\":null,\"close_reason\":\"fixed in #6 (44bef05): validate_batch drops a target's edges to seeds that are not loaded; regression test a_blocker_that_has_its_own_blocker_can_be_added\",\"closed_at\":\"2026-09-30T15:56:44Z\",\"comments\":[],\"created_at\":\"2026-09-30T15:49:58Z\",\"created_by\":\"wu\",\"defer_until\":null,\"dependencies\":[{\"depends_on_id\":\"sd-non\",\"issue_id\":\"sd-non.1\",\"type\":\"parent-child\"}],\"description\":\"Repro (2026-09-30, repo-local pendant): create A; create B --deps A; then 'create C --deps B' OR 'create C; dep add C B' -> rc=5 'B blockedOn: camayoc: blockedOn must point at a WorkItem the graph actually holds'. --dry-run passes. It succeeds only if C ALREADY depends on A (then A is in the validated subgraph). INFERRED: the write validates C plus its direct targets, whose blockedOn edges point at seeds outside that subgraph. Blocks any dependency chain deeper than 2.\",\"id\":\"sd-non.1\",\"issue_type\":\"bug\",\"labels\":[\"dogfood\"],\"notes\":null,\"outcome\":\"done\",\"owner\":null,\"parent\":\"sd-non\",\"priority\":1,\"revision\":3,\"status\":\"closed\",\"title\":\"a write that adds a blocker X is refused when X has its own blocker (create --deps AND dep add)\",\"updated_at\":\"2026-09-30T15:56:44Z\",\"workflow_run\":null}" .
 <https://seeds.local/item/sd-non.1> <https://seeds.local/ontology/issueType> "bug" .
-<https://seeds.local/item/sd-non.1> <https://seeds.local/ontology/label> "dogfood" .
 <https://seeds.local/item/sd-non.1> <https://seeds.local/ontology/priority> "1"^^<http://www.w3.org/2001/XMLSchema#integer> .
-<https://seeds.local/item/sd-non.1> <https://seeds.local/ontology/revision> "3"^^<http://www.w3.org/2001/XMLSchema#integer> .
 <https://seeds.local/item/sd-non.1> <https://seeds.local/ontology/status> "closed" .
-<https://seeds.local/item/sd-non.1> <https://seeds.local/ontology/updatedAt> "2026-09-30T15:56:44Z" .
-<https://seeds.local/item/sd-non.2> <http://aegis.gastown.local/ontology/closedAt> "2026-09-30T16:51:20Z" .
-<https://seeds.local/item/sd-non.2> <http://aegis.gastown.local/ontology/createdAt> "2026-09-30T15:49:58Z" .
-<https://seeds.local/item/sd-non.2> <http://aegis.gastown.local/ontology/identifier> "sd-non.2" .
-<https://seeds.local/item/sd-non.2> <http://aegis.gastown.local/ontology/outcome> "done" .
-<https://seeds.local/item/sd-non.2> <http://aegis.gastown.local/ontology/sourceKind> "declared" .
-<https://seeds.local/item/sd-non.2> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://aegis.gastown.local/ontology/WorkItem> .
+<https://seeds.local/item/sd-non.2> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <https://schema.org/Action> .
 <https://seeds.local/item/sd-non.2> <http://www.w3.org/2000/01/rdf-schema#label> "json write output has no tx field, so a script cannot find the tx to pass to --at" .
-<https://seeds.local/item/sd-non.2> <https://seeds.local/ontology/childOf> <https://seeds.local/item/sd-non> .
-<https://seeds.local/item/sd-non.2> <https://seeds.local/ontology/closeReason> "Every write's --json now carries tx (create/update/close/comments add; label/reopen/defer/dep already did); a CLI test pins each write's tx and reads it back with --at. scbrown/seeds#16 (aegis-w3k75d.8)." .
-<https://seeds.local/item/sd-non.2> <https://seeds.local/ontology/createdBy> "wu" .
-<https://seeds.local/item/sd-non.2> <https://seeds.local/ontology/description> "Found in the aegis-w3k75d.6 local baseline: the tx appears only in the human line '(tx N)'." .
+<https://seeds.local/item/sd-non.2> <https://scbrown.github.io/quechua/ns#outcome> "done" .
+<https://seeds.local/item/sd-non.2> <https://scbrown.github.io/quechua/ns#sourceKind> "declared" .
+<https://seeds.local/item/sd-non.2> <https://schema.org/actionStatus> <https://schema.org/CompletedActionStatus> .
+<https://seeds.local/item/sd-non.2> <https://schema.org/creator> <https://seeds.local/principal/wu> .
+<https://seeds.local/item/sd-non.2> <https://schema.org/dateCreated> "2026-09-30T15:49:58Z"^^<http://www.w3.org/2001/XMLSchema#dateTime> .
+<https://seeds.local/item/sd-non.2> <https://schema.org/dateModified> "2026-09-30T16:51:20Z"^^<http://www.w3.org/2001/XMLSchema#dateTime> .
+<https://seeds.local/item/sd-non.2> <https://schema.org/description> "Found in the aegis-w3k75d.6 local baseline: the tx appears only in the human line '(tx N)'." .
+<https://seeds.local/item/sd-non.2> <https://schema.org/endTime> "2026-09-30T16:51:20Z"^^<http://www.w3.org/2001/XMLSchema#dateTime> .
+<https://seeds.local/item/sd-non.2> <https://schema.org/identifier> "sd-non.2" .
+<https://seeds.local/item/sd-non.2> <https://schema.org/isPartOf> <https://seeds.local/item/sd-non> .
+<https://seeds.local/item/sd-non.2> <https://schema.org/keywords> "json" .
+<https://seeds.local/item/sd-non.2> <https://schema.org/keywords> "parity" .
+<https://seeds.local/item/sd-non.2> <https://schema.org/name> "json write output has no tx field, so a script cannot find the tx to pass to --at" .
+<https://seeds.local/item/sd-non.2> <https://schema.org/result> "Every write's --json now carries tx (create/update/close/comments add; label/reopen/defer/dep already did); a CLI test pins each write's tx and reads it back with --at. scbrown/seeds#16 (aegis-w3k75d.8)." .
+<https://seeds.local/item/sd-non.2> <https://schema.org/version> "2"^^<http://www.w3.org/2001/XMLSchema#integer> .
+<https://seeds.local/item/sd-non.2> <https://seeds.local/ontology/beadsJson> "{\"_seeds\":{\"facts\":[],\"format\":\"seeds-facts-v1\",\"revision\":2},\"assignee\":null,\"close_reason\":\"Every write's --json now carries tx (create/update/close/comments add; label/reopen/defer/dep already did); a CLI test pins each write's tx and reads it back with --at. scbrown/seeds#16 (aegis-w3k75d.8).\",\"closed_at\":\"2026-09-30T16:51:20Z\",\"comments\":[],\"created_at\":\"2026-09-30T15:49:58Z\",\"created_by\":\"wu\",\"defer_until\":null,\"dependencies\":[{\"depends_on_id\":\"sd-non\",\"issue_id\":\"sd-non.2\",\"type\":\"parent-child\"}],\"description\":\"Found in the aegis-w3k75d.6 local baseline: the tx appears only in the human line '(tx N)'.\",\"id\":\"sd-non.2\",\"issue_type\":\"bug\",\"labels\":[\"json\",\"parity\"],\"notes\":null,\"outcome\":\"done\",\"owner\":null,\"parent\":\"sd-non\",\"priority\":2,\"revision\":2,\"status\":\"closed\",\"title\":\"json write output has no tx field, so a script cannot find the tx to pass to --at\",\"updated_at\":\"2026-09-30T16:51:20Z\",\"workflow_run\":null}" .
 <https://seeds.local/item/sd-non.2> <https://seeds.local/ontology/issueType> "bug" .
-<https://seeds.local/item/sd-non.2> <https://seeds.local/ontology/label> "json" .
-<https://seeds.local/item/sd-non.2> <https://seeds.local/ontology/label> "parity" .
 <https://seeds.local/item/sd-non.2> <https://seeds.local/ontology/priority> "2"^^<http://www.w3.org/2001/XMLSchema#integer> .
-<https://seeds.local/item/sd-non.2> <https://seeds.local/ontology/revision> "2"^^<http://www.w3.org/2001/XMLSchema#integer> .
 <https://seeds.local/item/sd-non.2> <https://seeds.local/ontology/status> "closed" .
-<https://seeds.local/item/sd-non.2> <https://seeds.local/ontology/updatedAt> "2026-09-30T16:51:20Z" .
-<https://seeds.local/item/sd-non.3> <http://aegis.gastown.local/ontology/closedAt> "2026-09-30T20:18:08Z" .
-<https://seeds.local/item/sd-non.3> <http://aegis.gastown.local/ontology/createdAt> "2026-09-30T15:49:58Z" .
-<https://seeds.local/item/sd-non.3> <http://aegis.gastown.local/ontology/identifier> "sd-non.3" .
-<https://seeds.local/item/sd-non.3> <http://aegis.gastown.local/ontology/outcome> "done" .
-<https://seeds.local/item/sd-non.3> <http://aegis.gastown.local/ontology/sourceKind> "declared" .
-<https://seeds.local/item/sd-non.3> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://aegis.gastown.local/ontology/WorkItem> .
+<https://seeds.local/item/sd-non.3> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <https://schema.org/Action> .
 <https://seeds.local/item/sd-non.3> <http://www.w3.org/2000/01/rdf-schema#label> "update has no --type (br update -t)" .
-<https://seeds.local/item/sd-non.3> <https://seeds.local/ontology/childOf> <https://seeds.local/item/sd-non> .
-<https://seeds.local/item/sd-non.3> <https://seeds.local/ontology/closeReason> "sd update -t/--type changes a seed's type, as upstream update -t does; tested in tests/cli.rs. scbrown/seeds#45 (aegis-w3k75d.13)." .
-<https://seeds.local/item/sd-non.3> <https://seeds.local/ontology/createdBy> "wu" .
+<https://seeds.local/item/sd-non.3> <https://scbrown.github.io/quechua/ns#outcome> "done" .
+<https://seeds.local/item/sd-non.3> <https://scbrown.github.io/quechua/ns#sourceKind> "declared" .
+<https://seeds.local/item/sd-non.3> <https://schema.org/actionStatus> <https://schema.org/CompletedActionStatus> .
+<https://seeds.local/item/sd-non.3> <https://schema.org/creator> <https://seeds.local/principal/wu> .
+<https://seeds.local/item/sd-non.3> <https://schema.org/dateCreated> "2026-09-30T15:49:58Z"^^<http://www.w3.org/2001/XMLSchema#dateTime> .
+<https://seeds.local/item/sd-non.3> <https://schema.org/dateModified> "2026-09-30T20:18:08Z"^^<http://www.w3.org/2001/XMLSchema#dateTime> .
+<https://seeds.local/item/sd-non.3> <https://schema.org/endTime> "2026-09-30T20:18:08Z"^^<http://www.w3.org/2001/XMLSchema#dateTime> .
+<https://seeds.local/item/sd-non.3> <https://schema.org/identifier> "sd-non.3" .
+<https://seeds.local/item/sd-non.3> <https://schema.org/isPartOf> <https://seeds.local/item/sd-non> .
+<https://seeds.local/item/sd-non.3> <https://schema.org/keywords> "parity" .
+<https://seeds.local/item/sd-non.3> <https://schema.org/name> "update has no --type (br update -t)" .
+<https://seeds.local/item/sd-non.3> <https://schema.org/result> "sd update -t/--type changes a seed's type, as upstream update -t does; tested in tests/cli.rs. scbrown/seeds#45 (aegis-w3k75d.13)." .
+<https://seeds.local/item/sd-non.3> <https://schema.org/version> "2"^^<http://www.w3.org/2001/XMLSchema#integer> .
+<https://seeds.local/item/sd-non.3> <https://seeds.local/ontology/beadsJson> "{\"_seeds\":{\"facts\":[],\"format\":\"seeds-facts-v1\",\"revision\":2},\"assignee\":null,\"close_reason\":\"sd update -t/--type changes a seed's type, as upstream update -t does; tested in tests/cli.rs. scbrown/seeds#45 (aegis-w3k75d.13).\",\"closed_at\":\"2026-09-30T20:18:08Z\",\"comments\":[],\"created_at\":\"2026-09-30T15:49:58Z\",\"created_by\":\"wu\",\"defer_until\":null,\"dependencies\":[{\"depends_on_id\":\"sd-non\",\"issue_id\":\"sd-non.3\",\"type\":\"parent-child\"}],\"description\":null,\"id\":\"sd-non.3\",\"issue_type\":\"feature\",\"labels\":[\"parity\"],\"notes\":null,\"outcome\":\"done\",\"owner\":null,\"parent\":\"sd-non\",\"priority\":2,\"revision\":2,\"status\":\"closed\",\"title\":\"update has no --type (br update -t)\",\"updated_at\":\"2026-09-30T20:18:08Z\",\"workflow_run\":null}" .
 <https://seeds.local/item/sd-non.3> <https://seeds.local/ontology/issueType> "feature" .
-<https://seeds.local/item/sd-non.3> <https://seeds.local/ontology/label> "parity" .
 <https://seeds.local/item/sd-non.3> <https://seeds.local/ontology/priority> "2"^^<http://www.w3.org/2001/XMLSchema#integer> .
-<https://seeds.local/item/sd-non.3> <https://seeds.local/ontology/revision> "2"^^<http://www.w3.org/2001/XMLSchema#integer> .
 <https://seeds.local/item/sd-non.3> <https://seeds.local/ontology/status> "closed" .
-<https://seeds.local/item/sd-non.3> <https://seeds.local/ontology/updatedAt> "2026-09-30T20:18:08Z" .
-<https://seeds.local/item/sd-non.4> <http://aegis.gastown.local/ontology/createdAt> "2026-09-30T15:49:58Z" .
-<https://seeds.local/item/sd-non.4> <http://aegis.gastown.local/ontology/identifier> "sd-non.4" .
-<https://seeds.local/item/sd-non.4> <http://aegis.gastown.local/ontology/sourceKind> "declared" .
-<https://seeds.local/item/sd-non.4> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://aegis.gastown.local/ontology/WorkItem> .
+<https://seeds.local/item/sd-non.4> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <https://schema.org/Action> .
 <https://seeds.local/item/sd-non.4> <http://www.w3.org/2000/01/rdf-schema#label> "a positional title beginning with -- is parsed as a flag; check what br does and match it" .
-<https://seeds.local/item/sd-non.4> <https://seeds.local/ontology/childOf> <https://seeds.local/item/sd-non> .
-<https://seeds.local/item/sd-non.4> <https://seeds.local/ontology/createdBy> "wu" .
+<https://seeds.local/item/sd-non.4> <https://scbrown.github.io/quechua/ns#sourceKind> "declared" .
+<https://seeds.local/item/sd-non.4> <https://schema.org/actionStatus> <https://schema.org/PotentialActionStatus> .
+<https://seeds.local/item/sd-non.4> <https://schema.org/creator> <https://seeds.local/principal/wu> .
+<https://seeds.local/item/sd-non.4> <https://schema.org/dateCreated> "2026-09-30T15:49:58Z"^^<http://www.w3.org/2001/XMLSchema#dateTime> .
+<https://seeds.local/item/sd-non.4> <https://schema.org/dateModified> "2026-09-30T15:49:58Z"^^<http://www.w3.org/2001/XMLSchema#dateTime> .
+<https://seeds.local/item/sd-non.4> <https://schema.org/identifier> "sd-non.4" .
+<https://seeds.local/item/sd-non.4> <https://schema.org/isPartOf> <https://seeds.local/item/sd-non> .
+<https://seeds.local/item/sd-non.4> <https://schema.org/keywords> "parity" .
+<https://seeds.local/item/sd-non.4> <https://schema.org/name> "a positional title beginning with -- is parsed as a flag; check what br does and match it" .
+<https://seeds.local/item/sd-non.4> <https://schema.org/version> "1"^^<http://www.w3.org/2001/XMLSchema#integer> .
+<https://seeds.local/item/sd-non.4> <https://seeds.local/ontology/beadsJson> "{\"_seeds\":{\"facts\":[],\"format\":\"seeds-facts-v1\",\"revision\":1},\"assignee\":null,\"close_reason\":null,\"closed_at\":null,\"comments\":[],\"created_at\":\"2026-09-30T15:49:58Z\",\"created_by\":\"wu\",\"defer_until\":null,\"dependencies\":[{\"depends_on_id\":\"sd-non\",\"issue_id\":\"sd-non.4\",\"type\":\"parent-child\"}],\"description\":null,\"id\":\"sd-non.4\",\"issue_type\":\"question\",\"labels\":[\"parity\"],\"notes\":null,\"outcome\":null,\"owner\":null,\"parent\":\"sd-non\",\"priority\":3,\"revision\":1,\"status\":\"open\",\"title\":\"a positional title beginning with -- is parsed as a flag; check what br does and match it\",\"updated_at\":\"2026-09-30T15:49:58Z\",\"workflow_run\":null}" .
 <https://seeds.local/item/sd-non.4> <https://seeds.local/ontology/issueType> "question" .
-<https://seeds.local/item/sd-non.4> <https://seeds.local/ontology/label> "parity" .
 <https://seeds.local/item/sd-non.4> <https://seeds.local/ontology/priority> "3"^^<http://www.w3.org/2001/XMLSchema#integer> .
-<https://seeds.local/item/sd-non.4> <https://seeds.local/ontology/revision> "1"^^<http://www.w3.org/2001/XMLSchema#integer> .
 <https://seeds.local/item/sd-non.4> <https://seeds.local/ontology/status> "open" .
-<https://seeds.local/item/sd-non.4> <https://seeds.local/ontology/updatedAt> "2026-09-30T15:49:58Z" .
-<https://seeds.local/item/sd-non> <http://aegis.gastown.local/ontology/createdAt> "2026-09-30T15:49:17Z" .
-<https://seeds.local/item/sd-non> <http://aegis.gastown.local/ontology/identifier> "sd-non" .
-<https://seeds.local/item/sd-non> <http://aegis.gastown.local/ontology/sourceKind> "declared" .
-<https://seeds.local/item/sd-non> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://aegis.gastown.local/ontology/WorkItem> .
+<https://seeds.local/item/sd-non> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <https://schema.org/Action> .
 <https://seeds.local/item/sd-non> <http://www.w3.org/2000/01/rdf-schema#label> "seeds: tracker parity with br, CLI first (36 missing verbs, --json parity)" .
-<https://seeds.local/item/sd-non> <https://seeds.local/ontology/createdBy> "wu" .
-<https://seeds.local/item/sd-non> <https://seeds.local/ontology/description> "Tracked upstream as aegis-w3k75d.8. Rejections found while dogfooding land here." .
+<https://seeds.local/item/sd-non> <https://scbrown.github.io/quechua/ns#sourceKind> "declared" .
+<https://seeds.local/item/sd-non> <https://schema.org/actionStatus> <https://schema.org/PotentialActionStatus> .
+<https://seeds.local/item/sd-non> <https://schema.org/creator> <https://seeds.local/principal/wu> .
+<https://seeds.local/item/sd-non> <https://schema.org/dateCreated> "2026-09-30T15:49:17Z"^^<http://www.w3.org/2001/XMLSchema#dateTime> .
+<https://seeds.local/item/sd-non> <https://schema.org/dateModified> "2026-09-30T15:49:17Z"^^<http://www.w3.org/2001/XMLSchema#dateTime> .
+<https://seeds.local/item/sd-non> <https://schema.org/description> "Tracked upstream as aegis-w3k75d.8. Rejections found while dogfooding land here." .
+<https://seeds.local/item/sd-non> <https://schema.org/identifier> "sd-non" .
+<https://seeds.local/item/sd-non> <https://schema.org/keywords> "parity" .
+<https://seeds.local/item/sd-non> <https://schema.org/name> "seeds: tracker parity with br, CLI first (36 missing verbs, --json parity)" .
+<https://seeds.local/item/sd-non> <https://schema.org/version> "1"^^<http://www.w3.org/2001/XMLSchema#integer> .
+<https://seeds.local/item/sd-non> <https://seeds.local/ontology/beadsJson> "{\"_seeds\":{\"facts\":[],\"format\":\"seeds-facts-v1\",\"revision\":1},\"assignee\":null,\"close_reason\":null,\"closed_at\":null,\"comments\":[],\"created_at\":\"2026-09-30T15:49:17Z\",\"created_by\":\"wu\",\"defer_until\":null,\"dependencies\":[],\"description\":\"Tracked upstream as aegis-w3k75d.8. Rejections found while dogfooding land here.\",\"id\":\"sd-non\",\"issue_type\":\"epic\",\"labels\":[\"parity\"],\"notes\":null,\"outcome\":null,\"owner\":null,\"parent\":null,\"priority\":1,\"revision\":1,\"status\":\"open\",\"title\":\"seeds: tracker parity with br, CLI first (36 missing verbs, --json parity)\",\"updated_at\":\"2026-09-30T15:49:17Z\",\"workflow_run\":null}" .
 <https://seeds.local/item/sd-non> <https://seeds.local/ontology/issueType> "epic" .
-<https://seeds.local/item/sd-non> <https://seeds.local/ontology/label> "parity" .
 <https://seeds.local/item/sd-non> <https://seeds.local/ontology/priority> "1"^^<http://www.w3.org/2001/XMLSchema#integer> .
-<https://seeds.local/item/sd-non> <https://seeds.local/ontology/revision> "1"^^<http://www.w3.org/2001/XMLSchema#integer> .
 <https://seeds.local/item/sd-non> <https://seeds.local/ontology/status> "open" .
-<https://seeds.local/item/sd-non> <https://seeds.local/ontology/updatedAt> "2026-09-30T15:49:17Z" .
-<https://seeds.local/item/sd-p75> <http://aegis.gastown.local/ontology/closedAt> "2026-09-30T16:28:09Z" .
-<https://seeds.local/item/sd-p75> <http://aegis.gastown.local/ontology/createdAt> "2026-09-30T15:49:17Z" .
-<https://seeds.local/item/sd-p75> <http://aegis.gastown.local/ontology/identifier> "sd-p75" .
-<https://seeds.local/item/sd-p75> <http://aegis.gastown.local/ontology/outcome> "done" .
-<https://seeds.local/item/sd-p75> <http://aegis.gastown.local/ontology/sourceKind> "declared" .
-<https://seeds.local/item/sd-p75> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://aegis.gastown.local/ontology/WorkItem> .
+<https://seeds.local/item/sd-p75> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <https://schema.org/Action> .
 <https://seeds.local/item/sd-p75> <http://www.w3.org/2000/01/rdf-schema#label> "release parity: release-plz, mdBook on Pages, 4-platform binaries" .
-<https://seeds.local/item/sd-p75> <https://seeds.local/ontology/closeReason> "seeds-ai v0.0.2 released by release-plz: 4 binaries + SHA256SUMS, book on Pages (#7, #8, #9)" .
-<https://seeds.local/item/sd-p75> <https://seeds.local/ontology/createdBy> "wu" .
-<https://seeds.local/item/sd-p75> <https://seeds.local/ontology/description> "Tracked upstream as aegis-w3k75d.7." .
+<https://seeds.local/item/sd-p75> <https://scbrown.github.io/quechua/ns#outcome> "done" .
+<https://seeds.local/item/sd-p75> <https://scbrown.github.io/quechua/ns#sourceKind> "declared" .
+<https://seeds.local/item/sd-p75> <https://schema.org/actionStatus> <https://schema.org/CompletedActionStatus> .
+<https://seeds.local/item/sd-p75> <https://schema.org/creator> <https://seeds.local/principal/wu> .
+<https://seeds.local/item/sd-p75> <https://schema.org/dateCreated> "2026-09-30T15:49:17Z"^^<http://www.w3.org/2001/XMLSchema#dateTime> .
+<https://seeds.local/item/sd-p75> <https://schema.org/dateModified> "2026-09-30T16:28:09Z"^^<http://www.w3.org/2001/XMLSchema#dateTime> .
+<https://seeds.local/item/sd-p75> <https://schema.org/description> "Tracked upstream as aegis-w3k75d.7." .
+<https://seeds.local/item/sd-p75> <https://schema.org/endTime> "2026-09-30T16:28:09Z"^^<http://www.w3.org/2001/XMLSchema#dateTime> .
+<https://seeds.local/item/sd-p75> <https://schema.org/identifier> "sd-p75" .
+<https://seeds.local/item/sd-p75> <https://schema.org/keywords> "release" .
+<https://seeds.local/item/sd-p75> <https://schema.org/name> "release parity: release-plz, mdBook on Pages, 4-platform binaries" .
+<https://seeds.local/item/sd-p75> <https://schema.org/result> "seeds-ai v0.0.2 released by release-plz: 4 binaries + SHA256SUMS, book on Pages (#7, #8, #9)" .
+<https://seeds.local/item/sd-p75> <https://schema.org/version> "2"^^<http://www.w3.org/2001/XMLSchema#integer> .
+<https://seeds.local/item/sd-p75> <https://seeds.local/ontology/beadsJson> "{\"_seeds\":{\"facts\":[],\"format\":\"seeds-facts-v1\",\"revision\":2},\"assignee\":null,\"close_reason\":\"seeds-ai v0.0.2 released by release-plz: 4 binaries + SHA256SUMS, book on Pages (#7, #8, #9)\",\"closed_at\":\"2026-09-30T16:28:09Z\",\"comments\":[],\"created_at\":\"2026-09-30T15:49:17Z\",\"created_by\":\"wu\",\"defer_until\":null,\"dependencies\":[],\"description\":\"Tracked upstream as aegis-w3k75d.7.\",\"id\":\"sd-p75\",\"issue_type\":\"feature\",\"labels\":[\"release\"],\"notes\":null,\"outcome\":\"done\",\"owner\":null,\"parent\":null,\"priority\":1,\"revision\":2,\"status\":\"closed\",\"title\":\"release parity: release-plz, mdBook on Pages, 4-platform binaries\",\"updated_at\":\"2026-09-30T16:28:09Z\",\"workflow_run\":null}" .
 <https://seeds.local/item/sd-p75> <https://seeds.local/ontology/issueType> "feature" .
-<https://seeds.local/item/sd-p75> <https://seeds.local/ontology/label> "release" .
 <https://seeds.local/item/sd-p75> <https://seeds.local/ontology/priority> "1"^^<http://www.w3.org/2001/XMLSchema#integer> .
-<https://seeds.local/item/sd-p75> <https://seeds.local/ontology/revision> "2"^^<http://www.w3.org/2001/XMLSchema#integer> .
 <https://seeds.local/item/sd-p75> <https://seeds.local/ontology/status> "closed" .
-<https://seeds.local/item/sd-p75> <https://seeds.local/ontology/updatedAt> "2026-09-30T16:28:09Z" .
