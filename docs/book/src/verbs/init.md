@@ -19,5 +19,8 @@ sd init --force        # restore missing files; never changes the id or prefix
     asking it to change a configured prefix is refused (exit 5).
 - Commit `config.toml` and `project-id`.
 - The default prefix is `$SEEDS_PREFIX`, else `sd`.
+- Explicit `--store`, `--quipu` and `--graph` overrides are refused (exit 2)
+  before any files are written. `init` configures the current directory;
+  it does not provision a store or a remote project.
 
 **`--json`**: `{path, prefix, project_id, graph, created, kept}`.

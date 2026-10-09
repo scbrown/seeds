@@ -792,6 +792,34 @@ fn init_makes_a_project_and_never_changes_its_id_or_prefix() {
 }
 
 #[test]
+fn init_refuses_explicit_routing_before_writing_any_project_files() {
+    for (name, flag, value) in [
+        ("store", "--store", "requested.db"),
+        ("remote", "--quipu", "https://example.invalid"),
+        ("graph", "--graph", "https://example.org/project/requested"),
+    ] {
+        let sb = Sandbox::new(&format!("init-routing-{name}"));
+        for json in [false, true] {
+            let mut args = vec![flag, value, "init"];
+            if json {
+                args.push("--json");
+            }
+            let output = sb.run(&args);
+            assert_eq!(code(&output), 2);
+            assert!(String::from_utf8_lossy(&output.stderr).contains("not supported with init"));
+            if json {
+                let error: Value = serde_json::from_slice(&output.stdout).unwrap();
+                assert!(error.to_string().contains("not supported with init"));
+            } else {
+                assert!(output.stdout.is_empty());
+            }
+            assert!(!sb.work().join(".seeds").exists());
+            assert!(!sb.work().join("requested.db").exists());
+        }
+    }
+}
+
+#[test]
 fn owner_is_set_changed_cleared_and_survives_a_pendant_round_trip() {
     let sb = Sandbox::new("owner");
     let a = sb
