@@ -2,3 +2,5 @@
 *.log
 .DS_Store
 docs/book/book/
+__pycache__/
+*.pyc
