@@ -288,6 +288,23 @@ fn load(base: &str, graph: &str, snap: &Snapshot) -> RemoteBackend {
     nt += &format!("<{}> a <{a}> ; <{id}> \"irr-str\" ; <{name}> \"string assignee\" ; <{st}> \"open\" ; <{ag}> \"ian\" ; <{ty}> \"bug\" .\n", it("irr-str"));
     // a priority out of range: the default
     nt += &format!("<{}> a <{a}> ; <{id}> \"irr-prio\" ; <{name}> \"big priority\" ; <{st}> \"open\" ; <{pr}> 300 .\n", it("irr-prio"));
+    // Noninteger numeric priorities decode as the default P2, never P0.5.
+    nt += &format!("<{}> a <{a}> ; <{id}> \"irr-fractional-prio\" ; <{name}> \"fractional priority\" ; <{st}> \"open\" ; <{pr}> 0.5 .\n", it("irr-fractional-prio"));
+    for (suffix, value) in [
+        (
+            "decimal",
+            "\"0\"^^<http://www.w3.org/2001/XMLSchema#decimal>",
+        ),
+        ("double", "1.0e0"),
+        ("long", "\"1\"^^<http://www.w3.org/2001/XMLSchema#long>"),
+        ("maximum", "255"),
+        ("negative", "-1"),
+        ("language", "\"1\"@en"),
+        ("string", "\"1\""),
+    ] {
+        let key = format!("irr-priority-{suffix}");
+        nt += &format!("<{}> a <{a}> ; <{id}> \"{key}\" ; <{name}> \"{key}\" ; <{st}> \"open\" ; <{pr}> {value} .\n", it(&key));
+    }
     if dangling {
         let owner = snap
             .seeds

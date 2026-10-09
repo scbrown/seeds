@@ -9,7 +9,7 @@ fn literal(s: &str) -> String {
 // Self-subtraction must be the integer term zero (not decimal/double zero),
 // and adding integer zero must preserve term identity (not promote a typed
 // integer subtype). Checked i64 arithmetic retains MAX without f64 rounding.
-pub(super) fn comment_index_guard(variable: &str) -> String {
+pub(super) fn nonnegative_integer_guard(variable: &str) -> String {
     format!("sameTerm({variable} - {variable}, 0) && sameTerm({variable}, {variable} + 0) && {variable} >= 0")
 }
 
@@ -150,7 +150,7 @@ impl RemoteBackend {
             // its fields, and also accepts ephemeral comments on project seeds.
             let parent = format!("?s a <{}> . {valid_id} {fields} {guard}", term::work_item());
             let effective_parent = format!("{{ GRAPH <{}> {{ {parent} }} FILTER NOT EXISTS {{ GRAPH <{eph}> {{ ?shadow a <{}> ; <{}> ?id }} }} }} UNION {{ GRAPH <{eph}> {{ {parent} }} }}",self.graph,term::work_item(),term::identifier());
-            branches.push(format!("{{ ?comment a <{}> ; <{}> ?text ; <{}> ?s ; <{}> ?index . FILTER(isIRI(?s) && STRSTARTS(STR(?s), {}) && {} && isLiteral(?text) && sameTerm(?text, STR(?text)) && CONTAINS(LCASE(STR(?text)), {needle})) {{ {effective_parent} }} }}",term::comment(),term::text(),term::comment_on(),term::comment_index(),literal(&format!("{}item/",vocab::SEEDS_BASE)), comment_index_guard("?index")));
+            branches.push(format!("{{ ?comment a <{}> ; <{}> ?text ; <{}> ?s ; <{}> ?index . FILTER(isIRI(?s) && STRSTARTS(STR(?s), {}) && {} && isLiteral(?text) && sameTerm(?text, STR(?text)) && CONTAINS(LCASE(STR(?text)), {needle})) {{ {effective_parent} }} }}",term::comment(),term::text(),term::comment_on(),term::comment_index(),literal(&format!("{}item/",vocab::SEEDS_BASE)), nonnegative_integer_guard("?index")));
         }
 
         branches
@@ -487,7 +487,7 @@ impl RemoteBackend {
             );
         }
         if f.priority.is_some() || f.priority_min.is_some() || f.priority_max.is_some() {
-            fields += &format!(" OPTIONAL {{ ?s <{}> ?raw_priority . FILTER(isNumeric(?raw_priority) && ?raw_priority >= 0 && ?raw_priority <= 255) }} BIND(COALESCE(?raw_priority, 2) AS ?priority)", term::priority());
+            fields += &format!(" OPTIONAL {{ ?s <{}> ?raw_priority . FILTER({} && ?raw_priority <= 255) }} BIND(COALESCE(?raw_priority, 2) AS ?priority)", term::priority(), nonnegative_integer_guard("?raw_priority"));
             for (value, operator) in [
                 (&f.priority, "="),
                 (&f.priority_min, ">="),
@@ -536,7 +536,7 @@ impl RemoteBackend {
         Ok(match by {
             "status" => String::new(),
             "type" => string_field(&term::issue_type(), "key", "task"),
-            "priority" => format!("OPTIONAL {{ ?s <{}> ?raw_key . FILTER(isNumeric(?raw_key) && ?raw_key >= 0 && ?raw_key <= 255) }} BIND(CONCAT(\"P\", STR(COALESCE(?raw_key, 2))) AS ?key)", term::priority()),
+            "priority" => format!("OPTIONAL {{ ?s <{}> ?raw_key . FILTER({} && ?raw_key <= 255) }} BIND(CONCAT(\"P\", STR(COALESCE(?raw_key, 2))) AS ?key)", term::priority(), nonnegative_integer_guard("?raw_key")),
             "assignee" => format!("OPTIONAL {{ ?s <{}> ?raw_key }} BIND(COALESCE(?raw_key, \"(unassigned)\") AS ?key)", term::assigned_to()),
             "label" => string_field(&term::label(), "key", "(no labels)"),
             _ => return Err(SdError::usage("unknown --by; expected status, priority, type, assignee or label")),
