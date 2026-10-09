@@ -13,6 +13,14 @@ pub(super) fn nonnegative_integer_guard(variable: &str) -> String {
     format!("sameTerm({variable} - {variable}, 0) && sameTerm({variable}, {variable} + 0) && {variable} >= 0")
 }
 
+fn principal_guard(variable: &str) -> String {
+    format!("(isIRI({variable}) && STRSTARTS(STR({variable}), {})) || (isLiteral({variable}) && sameTerm({variable}, STR({variable})))", literal(&format!("{}principal/", vocab::SEEDS_BASE)))
+}
+
+fn title_field(field: &str) -> String {
+    format!("OPTIONAL {{ ?s <{}> ?raw_{field}_name . FILTER(isLiteral(?raw_{field}_name) && sameTerm(?raw_{field}_name, STR(?raw_{field}_name))) }} OPTIONAL {{ ?s <{}> ?raw_{field}_label . FILTER(isLiteral(?raw_{field}_label) && sameTerm(?raw_{field}_label, STR(?raw_{field}_label))) }} BIND(COALESCE(?raw_{field}_name, ?raw_{field}_label, \"\") AS ?{field})", term::name(), vocab::RDFS_LABEL)
+}
+
 fn string_field(predicate: &str, field: &str, default: &str) -> String {
     format!("OPTIONAL {{ ?s <{predicate}> ?raw_{field} . FILTER(isLiteral(?raw_{field}) && sameTerm(?raw_{field}, STR(?raw_{field}))) }} BIND(COALESCE(?raw_{field}, {}) AS ?{field})", literal(default))
 }
@@ -454,7 +462,11 @@ impl RemoteBackend {
             );
         }
         if f.assignee.is_some() || f.unassigned {
-            fields += &format!(" OPTIONAL {{ ?s <{}> ?assignee }}", term::assigned_to());
+            fields += &format!(
+                " OPTIONAL {{ ?s <{}> ?assignee . FILTER({}) }}",
+                term::assigned_to(),
+                principal_guard("?assignee")
+            );
             if let Some(person) = &f.assignee {
                 fields += &format!(
                     " FILTER(?assignee = <{}> || ?assignee = {})",
@@ -520,8 +532,15 @@ impl RemoteBackend {
             (&f.notes_contains, term::notes(), "notes"),
         ] {
             if let Some(text) = text {
+                if key == "title" {
+                    fields += &title_field(key);
+                } else {
+                    // Optional text is absent unless the decoder sees a plain
+                    // string, including when an empty substring was requested.
+                    fields += &format!(" ?s <{predicate}> ?{key} . FILTER(isLiteral(?{key}) && sameTerm(?{key}, STR(?{key})))");
+                }
                 fields += &format!(
-                    " ?s <{predicate}> ?{key} . FILTER(CONTAINS(LCASE(STR(?{key})), {}))",
+                    " FILTER(CONTAINS(LCASE(STR(?{key})), {}))",
                     literal(&text.to_lowercase())
                 );
             }
@@ -537,7 +556,7 @@ impl RemoteBackend {
             "status" => String::new(),
             "type" => string_field(&term::issue_type(), "key", "task"),
             "priority" => format!("OPTIONAL {{ ?s <{}> ?raw_key . FILTER({} && ?raw_key <= 255) }} BIND(CONCAT(\"P\", STR(COALESCE(?raw_key, 2))) AS ?key)", term::priority(), nonnegative_integer_guard("?raw_key")),
-            "assignee" => format!("OPTIONAL {{ ?s <{}> ?raw_key }} BIND(COALESCE(?raw_key, \"(unassigned)\") AS ?key)", term::assigned_to()),
+            "assignee" => format!("OPTIONAL {{ ?s <{}> ?raw_key . FILTER({}) }} BIND(COALESCE(?raw_key, \"(unassigned)\") AS ?key)", term::assigned_to(), principal_guard("?raw_key")),
             "label" => string_field(&term::label(), "key", "(no labels)"),
             _ => return Err(SdError::usage("unknown --by; expected status, priority, type, assignee or label")),
         })

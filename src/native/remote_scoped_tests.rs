@@ -305,6 +305,44 @@ fn load(base: &str, graph: &str, snap: &Snapshot) -> RemoteBackend {
         let key = format!("irr-priority-{suffix}");
         nt += &format!("<{}> a <{a}> ; <{id}> \"{key}\" ; <{name}> \"{key}\" ; <{st}> \"open\" ; <{pr}> {value} .\n", it(&key));
     }
+    // Foreign assignee IRIs do not decode as principals and stay unassigned.
+    nt += &format!("<{}> a <{a}> ; <{id}> \"irr-foreign-assignee\" ; <{name}> \"foreign assignee\" ; <{st}> \"open\" ; <{ag}> <https://example.org/foreign-worker> .\n", it("irr-foreign-assignee"));
+    for (suffix, value) in [
+        ("language", "\"worker\"@en"),
+        ("numeric", "1"),
+        ("typed", "\"worker\"^^<https://example.org/typed-principal>"),
+    ] {
+        let key = format!("irr-assignee-{suffix}");
+        nt += &format!("<{}> a <{a}> ; <{id}> \"{key}\" ; <{name}> \"{key}\" ; <{st}> \"open\" ; <{ag}> {value} .\n", it(&key));
+    }
+    let label = vocab::RDFS_LABEL;
+    for (suffix, title) in [
+        ("label-only", format!("<{label}> \"seed 1 fallback\"")),
+        ("language", format!("<{name}> \"seed 1 language\"@en")),
+        (
+            "language-fallback",
+            format!("<{name}> \"not plain\"@en ; <{label}> \"seed 1 fallback\""),
+        ),
+        (
+            "preferred-name",
+            format!("<{name}> \"preferred plain name\" ; <{label}> \"seed 1 fallback\""),
+        ),
+    ] {
+        let key = format!("irr-title-{suffix}");
+        nt += &format!(
+            "<{}> a <{a}> ; <{id}> \"{key}\" ; <{st}> \"open\" ; {title} .\n",
+            it(&key)
+        );
+    }
+    for (suffix, value) in [
+        ("plain", "\"needle field\""),
+        ("language", "\"needle field\"@en"),
+        ("typed", "\"needle field\"^^<https://example.org/text>"),
+        ("empty", "\"\""),
+    ] {
+        let key = format!("irr-text-{suffix}");
+        nt += &format!("<{}> a <{a}> ; <{id}> \"{key}\" ; <{name}> \"{key}\" ; <{st}> \"open\" ; <{}> {value} ; <{}> {value} .\n", it(&key), term::description(), term::notes());
+    }
     if dangling {
         let owner = snap
             .seeds
@@ -431,6 +469,11 @@ fn reads(b: &dyn Backend, c: &Ctx, n: &[String], all_ids: &[String]) -> Vec<Stri
         f(&|f: &mut Filter| f.parent = Some(n[EPIC].as_str().into())),
         f(&|f: &mut Filter| f.ids = ids(&[n[1].as_str(), n[2].as_str(), n[20].as_str(), "nope"])),
         f(&|f: &mut Filter| f.title_contains = Some("seed 1".into())),
+        f(&|f: &mut Filter| f.title_contains = Some("".into())),
+        f(&|f: &mut Filter| f.desc_contains = Some("needle field".into())),
+        f(&|f: &mut Filter| f.notes_contains = Some("needle field".into())),
+        f(&|f: &mut Filter| f.desc_contains = Some("".into())),
+        f(&|f: &mut Filter| f.notes_contains = Some("".into())),
         f(&|f: &mut Filter| {
             f.status = Some("open".into());
             f.assignee = Some("ian".into());
