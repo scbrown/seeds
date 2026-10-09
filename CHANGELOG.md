@@ -2,6 +2,24 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.2.0] - 2026-10-09
+
+### Added
+
+- *(shapes)* Add remote Seeds admission profile (#108) ([497b9a9](https://github.com/scbrown/seeds/commit/497b9a9dc2893032691169d9ccfde0810f22c404))
+- *(sync)* Bound remote reads with a push-only mode (#115) ([08d9e92](https://github.com/scbrown/seeds/commit/08d9e929fac8b79978eddc306da43bacde23d25f))
+
+### Fixed
+
+- Derive signing identity on macOS (#109) ([a8e11e4](https://github.com/scbrown/seeds/commit/a8e11e4efe3a703de6a93db640a1ce65790364a4))
+- *(remote)* Bound reads and make full-field search explicit (#111) ([0b1332c](https://github.com/scbrown/seeds/commit/0b1332cfb140d4d496ae4f89c6c7d80251db9d11))
+- *(remote)* Align summary filters with seed decoding (#112) ([51db9d7](https://github.com/scbrown/seeds/commit/51db9d7a577932ea3d9cde695503cd3619c5bf0d))
+- *(remote)* Preserve snapshot fallback for full search (#114) ([467ecc6](https://github.com/scbrown/seeds/commit/467ecc68b57573b0ed9567c6c5794c74798dc4ef))
+
+### Perf
+
+- *(remote)* Narrow list candidates through decoded text predicates (#113) ([f0bb8c4](https://github.com/scbrown/seeds/commit/f0bb8c4b25d42715986cb884488179618dccd7be))
+
 ## [0.1.4] - 2026-10-08
 
 ### Documentation
