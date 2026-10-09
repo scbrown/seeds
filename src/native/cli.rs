@@ -81,7 +81,7 @@ pub enum Command {
     Show(ShowArgs),
     /// List seeds (open ones by default; 50 at a time, --limit 0 for all)
     List(ListArgs),
-    /// Find seeds whose id, title, description or comments contain the text
+    /// Find titles containing the text (--full also searches ids, descriptions and comments)
     /// (closed ones are hidden and counted unless --all)
     Search(SearchArgs),
     /// List open seeds with no open blockers. Never truncated unless you pass
@@ -315,6 +315,10 @@ pub struct VersionArgs {
 /// `sd info`.
 #[derive(Debug, Args)]
 pub struct InfoArgs {
+    /// ADMIN: compute the exact comment count (takes both shared read slots).
+    /// Measured cold cost exceeds 400 MB on a 30k-item board; not for automation.
+    #[arg(long, conflicts_with_all = ["whats_new", "thanks"])]
+    pub exact_comments: bool,
     /// Include the schema: the shapes' digest and target classes, and the
     /// vocabularies (sd schema prints the --json schemas). br's --schema
     #[arg(long)]
@@ -586,6 +590,9 @@ pub struct ListArgs {
     /// Include deferred seeds (hidden by default, as br does)
     #[arg(long)]
     pub deferred: bool,
+    /// Only seeds with a defer-until field (including past or malformed dates)
+    #[arg(long)]
+    pub defer_until_present: bool,
     /// With --format csv: the columns, comma-separated (default id,title,status,priority,issue_type,assignee,created_at,updated_at)
     #[arg(long)]
     pub fields: Option<String>,
@@ -605,6 +612,9 @@ pub struct ListArgs {
 pub struct SearchArgs {
     /// Text to find (case-insensitive)
     pub query: String,
+    /// Search ids, descriptions and comments too (single-flight admin read)
+    #[arg(long)]
+    pub full: bool,
     /// Only this status (includes closed when you ask for closed)
     #[arg(short, long)]
     pub status: Option<String>,

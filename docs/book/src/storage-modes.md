@@ -125,10 +125,15 @@ whole graph: `show`, `update` (but `--parent`), `close`, `comments add` and
 `dep add` (but `parent-child`) read
 the seeds they name, their comments, and the seeds on the other end of their
 edges; `ready` runs the ready query on the server and reads only the seeds it
-returns; `list` and `count` push their status, type, assignee, label,
-priority and parent filters into the query and read only the matches. Each
-prints exactly what a whole-graph read would. `--at` and the remaining
-commands read the whole graph. Writes are one SPARQL Update per command,
+returns. `list` and `search` select matching subjects and compact sorting
+metadata first, then retrieve full seed bodies only for the requested page.
+Search matches titles by default; `search --full` explicitly includes ids,
+descriptions and comments and holds a user-wide single-flight lock. Incoming-edge
+counts are aggregates, so a page does not load its dependents' bodies.
+`count`, `info` and `stats` use aggregate queries; even mean lead time is
+computed on the server, without downloading closed seeds or comments. Local
+stores keep the snapshot implementation. `--at`, recursive ready scopes and
+the remaining commands read the whole graph. Writes are one SPARQL Update per command,
 shaped as a compare-and-set:
 
 ```text

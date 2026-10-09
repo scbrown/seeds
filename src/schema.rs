@@ -135,7 +135,11 @@ pub const TARGETS: &[(&str, &str)] = &[
     ),
     (
         "issue-with-counts",
-        "a list/search row: a seed plus dependent_count",
+        "a list/full-search row: a seed plus dependent_count",
+    ),
+    (
+        "search-issue",
+        "a search row, with nullable dependency/dependent counts in title mode",
     ),
     (
         "issue-details",
@@ -149,6 +153,10 @@ pub const TARGETS: &[(&str, &str)] = &[
     ),
     ("comment", "a comment"),
     ("statistics", "stats output"),
+    (
+        "info",
+        "info counts with explicit omitted or exact comment count",
+    ),
     (
         "error",
         "the --json error envelope (stdout, with a non-zero exit)",
@@ -164,6 +172,10 @@ pub fn target(name: &str) -> Option<Json> {
     Some(match name {
         "issue" | "ready-issue" | "stale-issue" => seed_with(&[]),
         "issue-with-counts" => seed_with(&[dependent_count]),
+        "search-issue" => seed_with(&[
+            ("dependency_count", kind(Kind::OptInt)),
+            ("dependent_count", kind(Kind::OptInt)),
+        ]),
         "issue-details" => seed_with(&[
             (
                 "dependencies",
@@ -178,6 +190,15 @@ pub fn target(name: &str) -> Option<Json> {
             ("blocked_by_count", kind(Kind::Int)),
         ]),
         "comment" => comment,
+        "info" => {
+            json!({"type":"object", "required":["issue_count","comment_count","comment_count_status"],
+            "properties":{"issue_count":{"type":"integer","minimum":0},"comment_count":{"type":["integer","null"],"minimum":0},
+                "comment_count_status":{"enum":["not_computed","exact"]}},
+            "allOf":[
+                {"if":{"properties":{"comment_count_status":{"const":"not_computed"}}},"then":{"properties":{"comment_count":{"type":"null"}}}},
+                {"if":{"properties":{"comment_count_status":{"const":"exact"}}},"then":{"properties":{"comment_count":{"type":"integer"}}}}
+            ]})
+        }
         "statistics" => {
             let ints = [
                 "total_issues",
@@ -227,7 +248,7 @@ pub fn commands() -> Json {
         ("create", "object", "issue", "."),
         ("show", "array", "issue-details", ".[]"),
         ("list", "envelope", "issue-with-counts", ".issues[]"),
-        ("search", "envelope", "issue-with-counts", ".issues[]"),
+        ("search", "envelope", "search-issue", ".issues[]"),
         ("blocked", "envelope", "blocked-issue", ".issues[]"),
         ("ready", "array", "ready-issue", ".[]"),
         ("stale", "array", "stale-issue", ".[]"),
@@ -236,6 +257,7 @@ pub fn commands() -> Json {
         ("comments add", "object", "comment", "."),
         ("comments list", "array", "comment", ".[]"),
         ("stats", "object", "statistics", ".summary"),
+        ("info", "object", "info", "."),
     ];
     let mut m = Map::new();
     for (verb, shape, item, jq) in rows {

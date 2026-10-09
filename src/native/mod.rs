@@ -792,8 +792,20 @@ fn schema_info() -> serde_json::Value {
 }
 
 /// `sd info`: `where`, plus what the ledger holds.
-fn info_outcome(json: bool, cfg: &Resolved, b: &dyn Backend, with_schema: bool) -> Result<Outcome> {
-    let snap = b.snapshot(None)?;
+fn info_outcome(
+    json: bool,
+    cfg: &Resolved,
+    b: &dyn Backend,
+    with_schema: bool,
+    exact_comments: bool,
+) -> Result<Outcome> {
+    let (issues, comments, tx) = if exact_comments {
+        let (issues, comments, tx) = b.ledger_counts()?;
+        (issues, Some(comments), tx)
+    } else {
+        let (issues, tx) = b.ledger_issue_count()?;
+        (issues, None, tx)
+    };
     let (store, url, mode) = location_parts(cfg);
     let size = store
         .as_ref()
@@ -802,7 +814,8 @@ fn info_outcome(json: bool, cfg: &Resolved, b: &dyn Backend, with_schema: bool) 
     let value = serde_json::json!({
         "database_path": store, "beads_dir": cfg.project_id_file.parent().map(|p| p.display().to_string()),
         "mode": mode, "quipu_url": url, "graph": cfg.graph,
-        "issue_count": snap.seeds.len(), "comment_count": snap.comments.len(), "tx": snap.tx,
+        "issue_count": issues, "comment_count": comments, "tx": tx,
+        "comment_count_status": if exact_comments { "exact" } else { "not_computed" },
         "config": {"issue_prefix": cfg.prefix}, "db_size": size, "jsonl_path": null,
     });
     let mut value = value;
@@ -811,9 +824,11 @@ fn info_outcome(json: bool, cfg: &Resolved, b: &dyn Backend, with_schema: bool) 
     }
     let mut text = format!(
         "{} seeds, {} comments at tx {} ({mode}: {})",
-        snap.seeds.len(),
-        snap.comments.len(),
-        snap.tx,
+        issues,
+        comments
+            .map(|n| n.to_string())
+            .unwrap_or_else(|| "not computed (--exact-comments for admin count)".into()),
+        tx,
         store.or(url).unwrap_or_default()
     );
     if with_schema {
@@ -831,7 +846,12 @@ fn info_outcome(json: bool, cfg: &Resolved, b: &dyn Backend, with_schema: bool) 
                 .unwrap_or_default()
         ));
     }
-    Ok(ok(json, value, text, vec![]))
+    let warnings = if exact_comments {
+        vec!["ADMIN exact comments: measured cold memory exceeds 400 MB on a 30k-item board; excluded from routine automation; occupies both shared read slots".into()]
+    } else {
+        vec![]
+    };
+    Ok(ok(json, value, text, warnings))
 }
 
 /// Every leaf command path (e.g. `["comments", "add"]`) with its clap definition.
@@ -1115,6 +1135,13 @@ fn actor(cli: &Cli) -> String {
 /// - **sync** (`[sync] remote`): a local store (with or without a pendant)
 ///   that `sd sync` merges with a remote.
 pub fn run_with(cli: &Cli, cfg: &Resolved) -> Result<Outcome> {
+    // Admit before opening the backend: even connection/provenance reads
+    // must stay behind the host budget. Keep the guard through the command.
+    let _search_admission = match &cli.command {
+        Command::Search(args) => Some(store::lock_search(args.full)?),
+        Command::Info(args) if args.exact_comments => Some(store::lock_search(true)?),
+        _ => None,
+    };
     let ctx = Ctx {
         now: now(),
         actor: actor(cli),
@@ -2243,6 +2270,7 @@ fn dispatch(cli: &Cli, cfg: &Resolved, ctx: &Ctx, b: &mut dyn Backend) -> Result
                 offset: a.offset,
                 reverse: a.reverse,
                 deferred: a.deferred,
+                defer_until_present: a.defer_until_present,
             };
             let p = engine::list(b, &req, at)?;
             let mut warnings = vec![];
@@ -2301,6 +2329,7 @@ fn dispatch(cli: &Cli, cfg: &Resolved, ctx: &Ctx, b: &mut dyn Backend) -> Result
         Command::Search(a) => {
             let req = engine::SearchReq {
                 query: a.query.clone(),
+                full: a.full,
                 filter: Filter {
                     status: a.status.clone(),
                     issue_type: a.issue_type.clone(),
@@ -2328,7 +2357,11 @@ fn dispatch(cli: &Cli, cfg: &Resolved, ctx: &Ctx, b: &mut dyn Backend) -> Result
             let r = engine::search(b, &req, at)?;
             let layout = layout_of(cli, a.long, a.pretty, a.tree)?;
             let text = match csv_of(cli, &r.page.issues, &a.fields)? {
-                Some(csv) => csv,
+                Some(csv) => {
+                    eprintln!("{}", output::search_scope(&r));
+                    if !r.full { eprintln!("dependency/dependent counts: not computed (--full for exact counts)"); }
+                    csv
+                }
                 None => output::search_text(&r, &a.query, layout),
             };
             Ok(ok(json, output::search_json(&r), text, vec![]))
@@ -3009,7 +3042,7 @@ fn dispatch(cli: &Cli, cfg: &Resolved, ctx: &Ctx, b: &mut dyn Backend) -> Result
                 Ok(ok(json, output::dep_list_json(&rows), text, vec![]))
             }
         },
-        Command::Info(a) => info_outcome(json, cfg, b, a.schema),
+        Command::Info(a) => info_outcome(json, cfg, b, a.schema, a.exact_comments),
         Command::Doctor(a) => doctor(json, cfg, b, a),
         Command::Cutover(_)
         | Command::Export(_)

@@ -618,7 +618,7 @@ fn view(snap: &Snapshot, id: &str) -> Result<SeedView> {
 // ---------------------------------------------------------------- list / ready / count
 
 /// Filters shared by `list`, `ready` and `count`.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Filter {
     /// Only this status.
     pub status: Option<String>,
@@ -796,6 +796,8 @@ pub struct ListReq {
     pub reverse: bool,
     /// Include deferred seeds (hidden by default, as br does).
     pub deferred: bool,
+    /// Require a defer-until field, without interpreting its timestamp.
+    pub defer_until_present: bool,
 }
 
 /// A page of seeds and whether it was cut short.
@@ -820,6 +822,11 @@ pub struct Page {
 pub fn list(b: &dyn Backend, req: &ListReq, at: Option<u64>) -> Result<Page> {
     let f = req.filter.compile()?;
     let scoped = scoped(b, at);
+    if scoped {
+        if let Some(page) = b.list_page(req)? {
+            return Ok(page);
+        }
+    }
     let mut snap = if scoped {
         let mut hidden = vec![model::TOMBSTONE];
         if !req.all {
@@ -841,7 +848,7 @@ pub fn list(b: &dyn Backend, req: &ListReq, at: Option<u64>) -> Result<Page> {
                     && (req.all || s.status != "closed")
                     && (req.all || req.deferred || s.status != "deferred"))
         })
-        .filter(|s| f.matches(s))
+        .filter(|s| f.matches(s) && (!req.defer_until_present || s.defer_until.is_some()))
         .cloned()
         .collect();
     sort_seeds(&mut seeds, req.sort.as_deref())?;
@@ -849,26 +856,89 @@ pub fn list(b: &dyn Backend, req: &ListReq, at: Option<u64>) -> Result<Page> {
         seeds.reverse();
     }
     let limit = req.limit.unwrap_or(DEFAULT_LIST_LIMIT);
-    if scoped {
+    let counts = if scoped {
+        b.dependent_counts(&page_ids(&seeds, req.offset, limit))?
+    } else {
+        None
+    };
+    if scoped && counts.is_none() {
         with_dependents(b, &mut snap, &page_ids(&seeds, req.offset, limit))?;
     }
-    Ok(page_at(seeds, req.offset, limit, &snap))
+    let mut page = page_at(seeds, req.offset, limit, &snap);
+    if let Some(counts) = counts {
+        page.dependent_counts = counts;
+    }
+    Ok(page)
+}
+
+#[cfg(feature = "native")]
+pub(crate) fn listing_seed_query(req: &ListReq) -> Result<SeedQuery> {
+    let f = req.filter.compile()?;
+    let mut hidden = vec![model::TOMBSTONE];
+    if !req.all {
+        hidden.push("closed");
+        if !req.deferred {
+            hidden.push("deferred");
+        }
+    }
+    Ok(listing_query(&f, &hidden))
+}
+
+#[cfg(feature = "native")]
+pub(crate) fn list_matches_page(req: &ListReq, snap: &Snapshot) -> Result<Page> {
+    let f = req.filter.compile()?;
+    let mut seeds = snap
+        .seeds
+        .values()
+        .filter(|s| {
+            f.status.is_some()
+                || (!s.is_tombstone()
+                    && (req.all || s.status != "closed")
+                    && (req.all || req.deferred || s.status != "deferred"))
+        })
+        .filter(|s| f.matches(s) && (!req.defer_until_present || s.defer_until.is_some()))
+        .cloned()
+        .collect::<Vec<_>>();
+    sort_seeds(&mut seeds, req.sort.as_deref())?;
+    if req.reverse {
+        seeds.reverse();
+    }
+    Ok(page_at(
+        seeds,
+        req.offset,
+        req.limit.unwrap_or(DEFAULT_LIST_LIMIT),
+        snap,
+    ))
 }
 
 fn page(seeds: Vec<Seed>, limit: usize, snap: &Snapshot) -> Page {
     page_at(seeds, 0, limit, snap)
 }
 
-fn page_at(mut seeds: Vec<Seed>, offset: usize, limit: usize, snap: &Snapshot) -> Page {
+fn page_at(seeds: Vec<Seed>, offset: usize, limit: usize, snap: &Snapshot) -> Page {
+    page_at_counted(seeds, offset, limit, snap, true)
+}
+
+fn page_at_counted(
+    mut seeds: Vec<Seed>,
+    offset: usize,
+    limit: usize,
+    snap: &Snapshot,
+    counts: bool,
+) -> Page {
     let total = seeds.len();
     seeds.drain(..offset.min(seeds.len()));
     if limit > 0 && seeds.len() > limit {
         seeds.truncate(limit);
     }
-    let dependent_counts = seeds
-        .iter()
-        .map(|s| (s.id.clone(), snap.dependents(&s.id).len()))
-        .collect();
+    let dependent_counts = if counts {
+        seeds
+            .iter()
+            .map(|s| (s.id.clone(), snap.dependents(&s.id).len()))
+            .collect()
+    } else {
+        BTreeMap::new()
+    };
     Page {
         has_more: offset + seeds.len() < total,
         issues: seeds,
@@ -884,6 +954,8 @@ fn page_at(mut seeds: Vec<Seed>, offset: usize, limit: usize, snap: &Snapshot) -
 pub struct SearchReq {
     /// Text to find (case-insensitive substring).
     pub query: String,
+    /// Include ids, descriptions and comments. The default searches titles.
+    pub full: bool,
     /// Filters.
     pub filter: Filter,
     /// Include closed seeds (hidden, and counted, unless `--status` or `--all`).
@@ -907,6 +979,8 @@ pub struct SearchPage {
     pub page: Page,
     /// Closed seeds that matched but were hidden (pass `--all` to see them).
     pub hidden_closed: usize,
+    /// Whether the query searched all supported text fields.
+    pub full: bool,
 }
 
 /// `sd search`: seeds whose id, title, description or any comment contains
@@ -917,13 +991,19 @@ pub fn search(b: &dyn Backend, req: &SearchReq, at: Option<u64>) -> Result<Searc
         return Err(SdError::usage("search needs a non-empty query"));
     }
     let f = req.filter.compile()?;
+    if scoped(b, at) {
+        if let Some(page) = b.search_page(req)? {
+            return Ok(page);
+        }
+    }
     let snap = b.snapshot(at)?;
     let hit = |s: &Seed| {
         let has = |t: &str| t.to_lowercase().contains(&query);
-        has(&s.id)
-            || has(&s.title)
-            || s.description.as_deref().is_some_and(has)
-            || snap.comments_on(&s.id).iter().any(|c| has(&c.text))
+        has(&s.title)
+            || (req.full
+                && (has(&s.id)
+                    || s.description.as_deref().is_some_and(has)
+                    || snap.comments_on(&s.id).iter().any(|c| has(&c.text))))
     };
     let show_closed = req.all || f.status.is_some();
     let (mut seeds, mut hidden_closed) = (Vec::new(), 0);
@@ -944,13 +1024,52 @@ pub fn search(b: &dyn Backend, req: &SearchReq, at: Option<u64>) -> Result<Searc
         seeds.reverse();
     }
     Ok(SearchPage {
-        page: page_at(
+        page: page_at_counted(
             seeds,
             req.offset,
             req.limit.unwrap_or(DEFAULT_LIST_LIMIT),
             &snap,
+            req.full,
         ),
         hidden_closed,
+        full: req.full,
+    })
+}
+
+/// Page seeds already selected by an indexed text search. The backend must
+/// include every matching seed; filters and ordering remain the core's.
+#[cfg(feature = "native")]
+pub(crate) fn search_matches_page(req: &SearchReq, snap: &Snapshot) -> Result<SearchPage> {
+    let f = req.filter.compile()?;
+    let show_closed = req.all || f.status.is_some();
+    let mut hidden_closed = 0;
+    let mut seeds = Vec::new();
+    for seed in snap
+        .seeds
+        .values()
+        .filter(|s| f.matches(s) && (f.status.is_some() || !s.is_tombstone()))
+        .filter(|s| f.status.is_some() || req.all || req.deferred || s.status != "deferred")
+    {
+        if seed.status == "closed" && !show_closed {
+            hidden_closed += 1;
+        } else {
+            seeds.push(seed.clone());
+        }
+    }
+    sort_seeds(&mut seeds, req.sort.as_deref())?;
+    if req.reverse {
+        seeds.reverse();
+    }
+    Ok(SearchPage {
+        page: page_at_counted(
+            seeds,
+            req.offset,
+            req.limit.unwrap_or(DEFAULT_LIST_LIMIT),
+            snap,
+            req.full,
+        ),
+        hidden_closed,
+        full: req.full,
     })
 }
 
@@ -1055,6 +1174,11 @@ pub struct Stats {
 
 /// `sd stats`, as of `at`. Breakdowns count every seed, closed included (br).
 pub fn stats(b: &dyn Backend, ctx: &Ctx, req: StatsReq, at: Option<u64>) -> Result<Stats> {
+    if scoped(b, at) {
+        if let Some(stats) = b.aggregate_stats(ctx, req)? {
+            return Ok(stats);
+        }
+    }
     let snap = b.snapshot(at)?;
     let tombstones = snap.seeds.values().filter(|s| s.is_tombstone()).count();
     let seeds: Vec<&Seed> = snap.seeds.values().filter(|s| !s.is_tombstone()).collect();
@@ -1800,7 +1924,22 @@ pub fn ready(b: &dyn Backend, ctx: &Ctx, req: &ReadyReq, at: Option<u64>) -> Res
     let f = filter.compile()?;
     // A descendant scope walks the whole parent tree: it keeps the snapshot.
     let scoped = scoped(b, at) && scope.is_none();
-    let ready_ids = b.ready_ids(at)?;
+    let query = SeedQuery {
+        issue_type: f.issue_type.clone(),
+        assignee: f.assignee.clone(),
+        labels: f.labels.clone(),
+        priority: f.priority,
+        parent: f.parent.clone(),
+        ..SeedQuery::default()
+    };
+    let ready_ids = if scoped {
+        match b.ready_ids_where(&query)? {
+            Some(ids) => ids,
+            None => b.ready_ids(at)?,
+        }
+    } else {
+        b.ready_ids(at)?
+    };
     let mut snap = if scoped {
         let mut snap = b.snapshot_seeds(&ready_ids)?;
         // A scoped read finds a seed at its canonical IRI. One the ready query
@@ -1814,7 +1953,7 @@ pub fn ready(b: &dyn Backend, ctx: &Ctx, req: &ReadyReq, at: Option<u64>) -> Res
             // unblocked ones are found below exactly as in a snapshot.
             let deferred = SeedQuery {
                 statuses: Some(["deferred".to_string()].into()),
-                ..SeedQuery::default()
+                ..query.clone()
             };
             merge_snapshots(&mut snap, b.snapshot_where(&deferred)?);
             let targets: Vec<String> = snap
@@ -1868,10 +2007,19 @@ pub fn ready(b: &dyn Backend, ctx: &Ctx, req: &ReadyReq, at: Option<u64>) -> Res
         _ => sort_seeds(&mut seeds, Some("priority"))?,
     }
     let limit = req.limit.unwrap_or(0);
-    if scoped {
+    let counts = if scoped {
+        b.dependent_counts(&page_ids(&seeds, 0, limit))?
+    } else {
+        None
+    };
+    if scoped && counts.is_none() {
         with_dependents(b, &mut snap, &page_ids(&seeds, 0, limit))?;
     }
-    Ok(page(seeds, limit, &snap))
+    let mut page = page(seeds, limit, &snap);
+    if let Some(counts) = counts {
+        page.dependent_counts = counts;
+    }
+    Ok(page)
 }
 
 /// The refusal for a seed a scoped read did not find at its canonical IRI,
@@ -1964,6 +2112,11 @@ pub struct Count {
 /// `sd count`, as of `at`.
 pub fn count(b: &dyn Backend, req: &CountReq, at: Option<u64>) -> Result<Count> {
     let f = req.filter.compile()?;
+    if scoped(b, at) {
+        if let Some(count) = b.aggregate_count(req)? {
+            return Ok(count);
+        }
+    }
     let snap = if scoped(b, at) {
         let mut hidden = vec![model::TOMBSTONE];
         if !req.include_closed {

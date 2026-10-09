@@ -83,10 +83,14 @@ fn corpus() -> (Snapshot, Vec<String>) {
             issue_type: Some(types[n % types.len()].into()),
             priority: Some((n % 5).to_string()),
             assignee: (n % 4 != 0).then(|| people[n % 3].to_string()),
-            labels: match n % 3 {
-                0 => vec!["infra".into()],
-                1 => vec!["infra".into(), "cutover".into()],
-                _ => vec![],
+            labels: if n == 1 {
+                vec!["infra".into(), "cutover".into(), "{ ?s".into(), "?s".into()]
+            } else {
+                match n % 3 {
+                    0 => vec!["infra".into()],
+                    1 => vec!["infra".into(), "cutover".into()],
+                    _ => vec![],
+                }
             },
             ..CreateReq::default()
         };
@@ -208,6 +212,18 @@ fn corpus() -> (Snapshot, Vec<String>) {
     all.push(epic);
     all.push(e1);
     let mut snap = b.snapshot(None).unwrap();
+    // Nonzero lead times cross a century leap day and month boundary. This
+    // checks the remote mean against the core's independent calendar model.
+    for (index, created, closed) in [
+        (0, "1999-12-31T23:00:00Z", "2000-03-01T00:00:01.999Z"),
+        (6, "1900-02-28T23:00:00Z", "1900-03-01T01:00:00Z"),
+        (12, "1999-12-31T23:00:00-03:00", "2000-01-01T00:00:00+03:00"),
+        (24, "2026-10-07T01:00:00", "2026-10-07T02:10:00"),
+    ] {
+        let seed = snap.seeds.get_mut(&all[index]).unwrap();
+        seed.created_at = created.into();
+        seed.closed_at = Some(closed.into());
+    }
     // a dangling edge: a dependency on a seed that is not in the ledger
     if let Some(s) = snap.seeds.get_mut(&all[26]) {
         s.blocked_on.insert("ghost-1".into());
@@ -300,6 +316,59 @@ fn load(base: &str, graph: &str, snap: &Snapshot) -> RemoteBackend {
 /// Everything a read command prints, both ways.
 fn reads(b: &dyn Backend, c: &Ctx, n: &[String], all_ids: &[String]) -> Vec<String> {
     let mut out = Vec::new();
+    out.push(format!("ledger counts {:?}", b.ledger_counts()));
+    for req in [
+        engine::StatsReq::default(),
+        engine::StatsReq {
+            by_type: true,
+            by_priority: true,
+            by_assignee: true,
+            by_label: true,
+            activity_hours: Some(48),
+        },
+    ] {
+        let stats = engine::stats(b, c, req, None).map(|mut stats| {
+            // Decimal AVG and f64 summation may differ at the last bit.
+            // Compare the mean to one nanohour; all other fields stay exact.
+            stats.average_lead_time_hours = (stats.average_lead_time_hours * 1e9).round() / 1e9;
+            stats
+        });
+        out.push(format!("stats {req:?} {stats:?}"));
+    }
+    for term in [
+        "seed",
+        "note",
+        "ephemeral",
+        "irregular",
+        "no such matching text",
+        "SEED 1",
+    ] {
+        for (full, all, offset, reverse, sort) in [
+            (false, false, 0, false, "priority"),
+            (false, true, 3, true, "title"),
+            (true, false, 0, false, "priority"),
+            (true, true, 3, true, "title"),
+        ] {
+            let req = engine::SearchReq {
+                query: term.into(),
+                full,
+                all,
+                offset,
+                reverse,
+                sort: Some(sort.into()),
+                limit: Some(5),
+                ..Default::default()
+            };
+            out.push(match engine::search(b, &req, None) {
+                Ok(result) => format!(
+                    "search {req:?} hidden={} {}",
+                    result.hidden_closed,
+                    output::search_json(&result)
+                ),
+                Err(e) => format!("search {req:?} {}", err(&e)),
+            });
+        }
+    }
     let mut shows: Vec<Vec<String>> = all_ids.iter().map(|id| vec![id.clone()]).collect();
     shows.push(ids(&[n[3].as_str(), n[1].as_str(), n[EPH].as_str()]));
     shows.push(ids(&[n[0].as_str(), "nope"]));
@@ -330,6 +399,10 @@ fn reads(b: &dyn Backend, c: &Ctx, n: &[String], all_ids: &[String]) -> Vec<Stri
         f(&|f: &mut Filter| f.status = Some("in_progress".into())),
         f(&|f: &mut Filter| f.status = Some("tombstone".into())),
         f(&|f: &mut Filter| f.assignee = Some("ian".into())),
+        f(&|f: &mut Filter| {
+            f.assignee = Some("ellie".into());
+            f.labels = vec!["{ ?s".into(), "?s".into()];
+        }),
         f(&|f: &mut Filter| f.unassigned = true),
         f(&|f: &mut Filter| f.labels = vec!["infra".into()]),
         f(&|f: &mut Filter| f.labels = vec!["infra".into(), "cutover".into()]),
@@ -348,10 +421,11 @@ fn reads(b: &dyn Backend, c: &Ctx, n: &[String], all_ids: &[String]) -> Vec<Stri
         }),
     ];
     for filter in &filters {
-        for (all, deferred, limit, offset, sort, reverse) in [
-            (false, false, None, 0, None, false),
-            (true, false, Some(0), 0, Some("created"), false),
-            (false, true, Some(5), 3, Some("id"), true),
+        for (all, deferred, limit, offset, sort, reverse, defer_until_present) in [
+            (false, false, None, 0, None, false, false),
+            (true, false, Some(0), 0, Some("created"), false, false),
+            (false, true, Some(5), 3, Some("id"), true, false),
+            (true, true, Some(0), 0, Some("id"), false, true),
         ] {
             let req = ListReq {
                 filter: filter.clone(),
@@ -361,6 +435,7 @@ fn reads(b: &dyn Backend, c: &Ctx, n: &[String], all_ids: &[String]) -> Vec<Stri
                 offset,
                 reverse,
                 deferred,
+                defer_until_present,
             };
             out.push(match engine::list(b, &req, None) {
                 Ok(p) => format!(
@@ -660,4 +735,151 @@ fn ready_refuses_a_seed_stored_under_a_non_canonical_iri() {
             e.message
         );
     }
+}
+
+#[test]
+fn search_shadowing_and_identifier_counts_match_effective_snapshot() {
+    let Some(server) = quipu_server() else {
+        eprintln!("SKIPPED: set SEEDS_TEST_QUIPU_SERVER");
+        return;
+    };
+    let graph = "https://seeds.local/project/shadow-controls";
+    let eph = vocab::ephemeral_graph(graph);
+    let mut remote = RemoteBackend::connect(&server.base, graph, None, None, &[]).unwrap();
+    let item = |id: &str| vocab::item_iri(id);
+    let a = term::work_item();
+    let id = term::identifier();
+    let name = term::name();
+    let desc = term::description();
+    let status = term::status();
+    let update = |r: &RemoteBackend, q: String| {
+        r.post(
+            "/update",
+            "application/x-www-form-urlencoded",
+            &format!("update={}", super::form_encode(&q)),
+            true,
+        )
+        .unwrap();
+    };
+    update(&remote, format!("INSERT DATA {{ GRAPH <{graph}> {{
+        <{}> a <{a}> ; <{id}> \"control\" ; <{name}> \"positive needle\" ; <{status}> \"open\" .
+        <{}> a <{a}> ; <{id}> \"shadow\" ; <{name}> \"obsolete needle\" ; <{desc}> \"old needle description\" ; <{status}> \"open\" .
+        <https://example.org/alias> a <{a}> ; <{id}> \"control\" ; <{name}> \"positive needle\" .
+        <{}> a <{a}> ; <{id}> 42 ; <{name}> \"numeric needle\" .
+        <{}> a <{a}> ; <{id}> \"bad-language\"@en ; <{name}> \"language needle\" .
+        <{}> a <{a}> ; <{id}> <https://example.org/id> ; <{name}> \"IRI needle\" .
+        <{}> <{id}> \"untyped\" ; <{name}> \"untyped needle\" .
+        }} }}", item("control"),item("shadow"),item("bad-number"),item("bad-language"),item("bad-iri"),item("untyped")));
+    assert_eq!(remote.ledger_issue_count().unwrap().0, 2);
+    assert_eq!(
+        remote.snapshot(None).unwrap().seeds.len(),
+        2,
+        "nonempty decoder control"
+    );
+    let compare = |r: &mut RemoteBackend,
+                   query: &str,
+                   full: bool,
+                   all: bool,
+                   expected: usize,
+                   hidden: usize| {
+        let req = engine::SearchReq {
+            query: query.into(),
+            full,
+            all,
+            limit: Some(0),
+            ..Default::default()
+        };
+        let actual = engine::search(r, &req, None).unwrap();
+        let old = engine::search(&Whole(r), &req, None).unwrap();
+        assert_eq!(output::search_json(&actual), output::search_json(&old));
+        assert_eq!(actual.page.total, expected);
+        assert_eq!(actual.hidden_closed, hidden);
+    };
+    compare(&mut remote, "needle", false, true, 2, 0);
+    update(&remote, format!("INSERT DATA {{ GRAPH <{eph}> {{ <{}> a <{a}> ; <{id}> \"shadow\" ; <{name}> \"replacement unrelated\" ; <{desc}> \"replacement unrelated\" ; <{status}> \"open\" . }} }}",item("shadow")));
+    compare(&mut remote, "needle", false, true, 1, 0);
+    compare(&mut remote, "needle", true, true, 1, 0);
+    update(
+        &remote,
+        format!(
+            "DELETE WHERE {{ GRAPH <{eph}> {{ <{}> ?p ?o }} }}",
+            item("shadow")
+        ),
+    );
+    update(&remote, format!("INSERT DATA {{ GRAPH <{eph}> {{ <{}> a <{a}> ; <{id}> \"shadow\" ; <{name}> \"fresh needle\" ; <{desc}> \"fresh needle\" ; <{status}> \"closed\" . }} }}",item("shadow")));
+    compare(&mut remote, "needle", false, false, 1, 1);
+    compare(&mut remote, "needle", true, false, 1, 1);
+    update(&remote, format!("DELETE DATA {{ GRAPH <{eph}> {{ <{}> <{name}> \"fresh needle\" ; <{desc}> \"fresh needle\" . }} }}; INSERT DATA {{ GRAPH <{eph}> {{ <{}> <{name}> \"unrelated\" ; <{desc}> \"unrelated\" . }} }}",item("shadow"),item("shadow")));
+    update(&remote, format!("INSERT DATA {{ GRAPH <{graph}> {{ <https://example.org/comment-main> a <{}> ; <{}> <{}> ; <{}> 0 ; <{}> \"needle retained project comment\" . }} GRAPH <{eph}> {{ <https://example.org/comment-eph> a <{}> ; <{}> <{}> ; <{}> 1 ; <{}> \"ephemeral phrase\" . }} }}",term::comment(),term::comment_on(),item("shadow"),term::comment_index(),term::text(),term::comment(),term::comment_on(),item("control"),term::comment_index(),term::text()));
+    compare(&mut remote, "needle", false, true, 1, 0);
+    compare(&mut remote, "needle", true, false, 1, 1);
+    compare(&mut remote, "needle", true, true, 2, 0);
+    compare(&mut remote, "ephemeral phrase", true, true, 1, 0);
+    update(&remote, format!("INSERT DATA {{ GRAPH <{graph}> {{ <https://example.org/comment-max> a <{}> ; <{}> <{}> ; <{}> 9223372036854775807 ; <{}> \"max range positive\" . }} }}", term::comment(),term::comment_on(),item("control"),term::comment_index(),term::text()));
+    compare(&mut remote, "max range positive", true, true, 1, 0);
+    assert_eq!(
+        remote.snapshot(None).unwrap().comments.len(),
+        3,
+        "valid integer comment control"
+    );
+    for (number, position) in [
+        "0.5",
+        "-1",
+        "\"0\"^^<http://www.w3.org/2001/XMLSchema#decimal>",
+        "\"1\"^^<http://www.w3.org/2001/XMLSchema#long>",
+        "\"9223372036854775808\"^^<http://www.w3.org/2001/XMLSchema#integer>",
+        "\"18446744073709551616\"^^<http://www.w3.org/2001/XMLSchema#integer>",
+        "\"1.5\"^^<http://www.w3.org/2001/XMLSchema#integer>",
+        "\"0\"@en",
+        "\"0\"",
+        "<https://example.org/index>",
+    ]
+    .iter()
+    .enumerate()
+    {
+        let payload = format!("INSERT DATA {{ GRAPH <{graph}> {{ <https://example.org/invalid-comment-{number}> a <{}> ; <{}> <{}> ; <{}> {position} ; <{}> \"invalid-index-marker-{number}\" . }} }}",term::comment(),term::comment_on(),item("control"),term::comment_index(),term::text());
+        let result = remote.post(
+            "/update",
+            "application/x-www-form-urlencoded",
+            &format!("update={}", super::form_encode(&payload)),
+            true,
+        );
+        if (4..=6).contains(&number) {
+            // Some parser versions refuse oversized/invalid integer lexical
+            // forms before storage. That is a proven write rejection, not an
+            // empty decode result; the nonempty valid count remains controlled.
+            if let Err(error) = &result {
+                assert!(error.message.contains("integer"), "{error:?}");
+            }
+        } else {
+            result.unwrap();
+        }
+    }
+    // The served parser canonicalizes xsd:long into an integer term, which
+    // the snapshot decoder accepts. Preserve that positive case as well.
+    let decoded = remote.snapshot(None).unwrap();
+    assert_eq!(decoded.comments.len(), 4);
+    assert!(decoded
+        .comments
+        .iter()
+        .any(|c| c.text == "invalid-index-marker-3" && c.index == 1));
+    assert_eq!(
+        remote.ledger_counts().unwrap().1,
+        decoded.comments.len(),
+        "exact count differs from the snapshot decoder"
+    );
+    for number in 0..10 {
+        compare(
+            &mut remote,
+            &format!("invalid-index-marker-{number}"),
+            true,
+            true,
+            usize::from(number == 3),
+            0,
+        );
+    }
+    assert_eq!(
+        remote.ledger_issue_count().unwrap().0,
+        remote.snapshot(None).unwrap().seeds.len()
+    );
 }

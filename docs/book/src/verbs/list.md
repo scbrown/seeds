@@ -49,3 +49,9 @@ unless `--deferred`).
 > **Deferred seeds are hidden by default**, as in br: pass `--deferred` (or
 > `--all`, or `--status deferred`) to see them. Earlier versions of sd listed
 > them by default.
+
+`--defer-until-present` selects items that carry a deferral date field,
+including past or malformed values. It does not interpret the date or change
+status. Combine it with `--status open` to find date-based deferrals without
+reading every open item's body; status-based deferrals still need their own
+`--status deferred` query.

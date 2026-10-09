@@ -35,3 +35,7 @@ Only `blocks` dependencies gate readiness; `related`, `parent-child` and
 `discovered-from` do not.
 
 **`--json`**: a bare array of seed objects, as br prints it.
+
+Remote enumeration refuses a ready set that reaches the server's bounded row
+ceiling rather than treating it as a complete result. Narrow the filters if
+that ceiling is reached; a refusal is an unreadable set, not an empty one.

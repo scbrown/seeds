@@ -7,7 +7,8 @@ sd version            # sd 0.0.x
 sd version --short    # just the number, for scripts
 sd version --check    # is a newer release published? exit 0 / 1 / 7
 sd where              # store file or server, graph, prefix, pendant
-sd info --json        # where, plus how many seeds and comments, at which tx
+sd info --json        # exact seed count; comment_count=null, explicitly omitted
+sd info --exact-comments  # ADMIN exact comments; takes both shared read slots
 sd info --schema      # plus the shapes' sha256 and target classes
 sd info --whats-new   # this build's latest changelog section (no store)
 sd info --thanks      # the projects sd builds on (no store)
@@ -25,8 +26,14 @@ sd info --thanks      # the projects sd builds on (no store)
 - `where` reads the **configuration only**. It never creates a store or a
   project id, so it is safe to run anywhere, including before the first
   write.
-- `info` opens the ledger read-only and reports its size: seeds, comments,
-  the current transaction and, for a local store, the file size.
+- `info` reports the exact seed count, current transaction and local file size.
+  `comment_count` is explicitly `null`, with `comment_count_status: "not_computed"`.
+  Human output says the comment count was not computed; it never substitutes zero.
+- `info --exact-comments` is an administrative opt-in: `comment_count` is an exact
+  integer and its status is `"exact"`. The measured cold memory cost exceeded
+  400 MB on a 30k-item board. A warning discloses this cost; routine automation
+  must accept the explicit omission instead of selecting this flag. Exact info
+  takes both shared search slots, excluding title and full-search peers.
 - `info --schema` adds `schema: {shapes_sha256, target_classes, vocabularies,
   json_schemas}`. The digest identifies the shapes this build validates a
   ledger against (the same bytes as a pendant's `shapes.ttl`); `sd schema`
