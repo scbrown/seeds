@@ -1389,6 +1389,14 @@ fn with_notes(mut o: Outcome, notes: Vec<String>) -> Outcome {
 }
 
 fn run_remote(cli: &Cli, cfg: &Resolved, ctx: &Ctx, url: &str) -> Result<Outcome> {
+    // pendant_of currently assembles an unpinned snapshot in a local scratch
+    // store. Do not silently turn a historical export into a current one.
+    // Refuse before connect, vocabulary probes, or any destination write.
+    if matches!(&cli.command, Command::Export(_)) && cli.at.is_some() {
+        return Err(SdError::refused(
+            "remote pendant export does not support --at; no historical source receipt is available",
+        ));
+    }
     let mut remote = remote::RemoteBackend::connect(
         url,
         cfg.graph(),
@@ -1406,7 +1414,7 @@ fn run_remote(cli: &Cli, cfg: &Resolved, ctx: &Ctx, url: &str) -> Result<Outcome
             let dir = export_dir(a.to.as_deref(), cfg)?;
             let p = pendant_of(&remote)?;
             let changed = store::write_pendant_dir(&dir, &p)?;
-            Ok(export_outcome(cli.json, &dir, &p, changed))
+            remote_export_outcome(cli.json, &dir, &p, changed, cfg.graph())
         }
         Command::Import(a) => import_into(cli, ctx, &mut remote, a),
         Command::Sync(_) => Err(SdError::usage(
@@ -1415,6 +1423,49 @@ fn run_remote(cli: &Cli, cfg: &Resolved, ctx: &Ctx, url: &str) -> Result<Outcome
         )),
         _ => dispatch(cli, cfg, ctx, &mut remote),
     }
+}
+
+/// The pendant's manifest describes its producer scratch store, not the remote
+/// server or a historical transaction. Report the two origins separately and
+/// keep an unpinned acquisition explicitly unverified.
+fn remote_export_outcome(
+    json: bool,
+    dir: &std::path::Path,
+    p: &pendant::Pendant,
+    changed: bool,
+    graph: &str,
+) -> Result<Outcome> {
+    let mut outcome = export_outcome(json, dir, p, changed);
+    if json {
+        let mut report: serde_json::Value = serde_json::from_str(&outcome.stdout)
+            .map_err(|_| SdError::failed("cannot serialize remote export report"))?;
+        let manifest: serde_json::Value = serde_json::from_str(
+            p.files
+                .get(pendant::MANIFEST_JSON)
+                .ok_or_else(|| SdError::failed("exported pendant has no manifest"))?,
+        )
+        .map_err(|_| SdError::failed("exported pendant has an invalid manifest"))?;
+        report["source"] = serde_json::json!({
+            "graph": graph,
+            "pin": null,
+            "authority": "unverified",
+            "snapshot_consistency": "unproven",
+        });
+        report["artifact_origin"] = serde_json::json!({
+            "scope": manifest["scope"],
+            "store_id": manifest["store_id"],
+            "tx_anchor": manifest["tx_anchor"],
+        });
+        outcome.stdout = format!(
+            "{}\n",
+            serde_json::to_string(&report)
+                .map_err(|_| SdError::failed("cannot serialize remote export report"))?
+        );
+    }
+    Ok(with_notes(
+        outcome,
+        vec!["remote export is unpinned and snapshot consistency is unproven; manifest scope/store/tx describe the local artifact, not an authoritative remote source receipt".into()],
+    ))
 }
 
 /// A pendant of any backend: load its snapshot into a scratch in-memory store
@@ -3319,6 +3370,63 @@ pub fn main_entry() -> i32 {
         eprintln!("{}", o.stderr);
     }
     o.code
+}
+
+#[cfg(test)]
+mod remote_export_tests {
+    use super::*;
+
+    #[test]
+    fn report_separates_unverified_remote_source_from_unchanged_artifact_origin() {
+        let store = QuipuBackend::in_memory("https://seeds.local/project/scratch").unwrap();
+        let pendant = pendant::export(&store).unwrap();
+        let original = pendant.files.clone();
+        let manifest: serde_json::Value =
+            serde_json::from_str(&pendant.files[pendant::MANIFEST_JSON]).unwrap();
+        let outcome = remote_export_outcome(
+            true,
+            std::path::Path::new("private-output"),
+            &pendant,
+            true,
+            "https://example.org/project/authoritative",
+        )
+        .unwrap();
+        let report: serde_json::Value = serde_json::from_str(&outcome.stdout).unwrap();
+        assert_eq!(report["source"]["pin"], serde_json::Value::Null);
+        assert_eq!(report["source"]["authority"], "unverified");
+        assert_eq!(report["source"]["snapshot_consistency"], "unproven");
+        assert_eq!(
+            report["source"]["graph"],
+            "https://example.org/project/authoritative"
+        );
+        for key in ["scope", "store_id", "tx_anchor"] {
+            assert_eq!(report["artifact_origin"][key], manifest[key]);
+        }
+        assert_eq!(pendant.files, original); // No cosmetic relabel or reseal.
+        assert!(outcome
+            .stderr
+            .contains("not an authoritative remote source receipt"));
+        let local = export_outcome(true, std::path::Path::new("private-output"), &pendant, true);
+        let local: serde_json::Value = serde_json::from_str(&local.stdout).unwrap();
+        assert!(local.get("source").is_none());
+    }
+
+    #[test]
+    fn text_report_also_discloses_unpinned_unproven_acquisition() {
+        let store = QuipuBackend::in_memory("https://seeds.local/project/scratch").unwrap();
+        let pendant = pendant::export(&store).unwrap();
+        let outcome = remote_export_outcome(
+            false,
+            std::path::Path::new("private-output"),
+            &pendant,
+            false,
+            "https://example.org/project/authoritative",
+        )
+        .unwrap();
+        assert!(outcome.stdout.contains("unchanged:"));
+        assert!(outcome.stderr.contains("unpinned"));
+        assert!(outcome.stderr.contains("local artifact"));
+    }
 }
 
 #[cfg(test)]

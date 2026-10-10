@@ -97,6 +97,104 @@ fn code(o: &Output) -> i32 {
 }
 
 #[test]
+fn remote_export_at_refuses_before_http_or_artifact_creation() {
+    use std::io::{Read, Write};
+    use std::sync::{
+        atomic::{AtomicBool, AtomicUsize, Ordering},
+        Arc,
+    };
+    use std::time::Duration;
+    let s = Sandbox::new("remote-export-at");
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    listener.set_nonblocking(true).unwrap();
+    let stopped = Arc::new(AtomicBool::new(false));
+    let requests = Arc::new(AtomicUsize::new(0));
+    let stop = stopped.clone();
+    let count = requests.clone();
+    let server = std::thread::spawn(move || {
+        while !stop.load(Ordering::SeqCst) {
+            match listener.accept() {
+                Ok((mut stream, _)) => {
+                    count.fetch_add(1, Ordering::SeqCst);
+                    stream
+                        .set_read_timeout(Some(Duration::from_secs(1)))
+                        .unwrap();
+                    let mut buffer = [0; 8192];
+                    let _ = stream.read(&mut buffer);
+                    let body = r#"{"boolean":false,"results":{"bindings":[{"n":{"type":"literal","value":"0"}}]}}"#;
+                    let reply = format!("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}", body.len(), body);
+                    let _ = stream.write_all(reply.as_bytes());
+                }
+                Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                    std::thread::sleep(Duration::from_millis(5));
+                }
+                Err(e) => panic!("private listener: {e}"),
+            }
+        }
+    });
+    let destination = s.root.join("refused-pendant");
+    let output = s
+        .cmd(
+            &s.work(),
+            &[
+                "--quipu",
+                &url,
+                "--graph",
+                "https://example.org/project/test",
+                "--at",
+                "777",
+                "export",
+                "--to",
+                destination.to_str().unwrap(),
+                "--json",
+            ],
+        )
+        .env_remove("SEEDS_QUIPU_TOKEN")
+        .env_remove("QUIPU_AUTH_TOKEN")
+        .output()
+        .unwrap();
+    std::fs::create_dir(&destination).unwrap();
+    let retained = destination.join("export.nt");
+    std::fs::write(&retained, "private existing artifact control").unwrap();
+    let again = s
+        .cmd(
+            &s.work(),
+            &[
+                "--quipu",
+                &url,
+                "--graph",
+                "https://example.org/project/test",
+                "--at",
+                "777",
+                "export",
+                "--to",
+                destination.to_str().unwrap(),
+            ],
+        )
+        .env_remove("SEEDS_QUIPU_TOKEN")
+        .env_remove("QUIPU_AUTH_TOKEN")
+        .output()
+        .unwrap();
+    stopped.store(true, Ordering::SeqCst);
+    server.join().unwrap();
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("does not support --at"));
+    assert_eq!(
+        requests.load(Ordering::SeqCst),
+        0,
+        "refuse before even a health/vocabulary probe"
+    );
+    assert!(!again.status.success());
+    assert!(String::from_utf8_lossy(&again.stderr).contains("does not support --at"));
+    assert_eq!(
+        std::fs::read_to_string(retained).unwrap(),
+        "private existing artifact control"
+    );
+    assert!(!destination.join("manifest.json").exists());
+}
+
+#[test]
 fn key_init_derives_a_session_without_hostname_env() {
     let s = Sandbox::new("key-default-session");
     let o = s
