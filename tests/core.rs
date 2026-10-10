@@ -3561,3 +3561,85 @@ fn push_only_resumes_a_partial_split_without_rewriting_landed_items() {
     sync::apply_sync_plan(p, &mut local, &mut remote, &ctx(10), false, &mut |_| {}).unwrap();
     assert_same(&local, remote.inner);
 }
+
+struct LabelReadScope {
+    inner: QuipuBackend,
+    full_reads: std::cell::Cell<usize>,
+    named_reads: std::cell::RefCell<Vec<Vec<String>>>,
+    allow_full: bool,
+}
+impl Backend for LabelReadScope {
+    fn snapshot(&self, at: Option<u64>) -> seeds::error::Result<seeds::model::Snapshot> {
+        assert!(
+            self.allow_full,
+            "named label read attempted full-board snapshot"
+        );
+        self.full_reads.set(self.full_reads.get() + 1);
+        self.inner.snapshot(at)
+    }
+    fn scoped_reads(&self) -> bool {
+        true
+    }
+    fn snapshot_seeds(&self, ids: &[String]) -> seeds::error::Result<seeds::model::Snapshot> {
+        self.named_reads.borrow_mut().push(ids.to_vec());
+        self.inner.snapshot_seeds(ids)
+    }
+    fn ready_ids(&self, at: Option<u64>) -> seeds::error::Result<Vec<String>> {
+        self.inner.ready_ids(at)
+    }
+    fn claims_of(&self, id: &str) -> seeds::error::Result<Vec<(u64, seeds::backend::Claims)>> {
+        self.inner.claims_of(id)
+    }
+    fn commit(&mut self, batch: &WriteBatch, ctx: &Ctx) -> seeds::error::Result<u64> {
+        self.inner.commit(batch, ctx)
+    }
+}
+#[test]
+fn label_list_current_named_reads_only_the_named_seed() {
+    let mut inner = backend();
+    let id = mk(&mut inner, "label target", 1);
+    let other = mk(&mut inner, "other", 2);
+    engine::label_change(
+        &mut inner,
+        &ctx(3),
+        std::slice::from_ref(&id),
+        "wanted",
+        true,
+    )
+    .unwrap();
+    engine::label_change(&mut inner, &ctx(4), &[other], "unrelated", true).unwrap();
+    let b = LabelReadScope {
+        inner,
+        full_reads: Default::default(),
+        named_reads: Default::default(),
+        allow_full: false,
+    };
+    assert_eq!(engine::labels(&b, Some(&id), None).unwrap(), vec!["wanted"]);
+    assert_eq!(*b.named_reads.borrow(), vec![vec![id]]);
+    assert_eq!(b.full_reads.get(), 0);
+    assert_eq!(
+        engine::labels(&b, Some("missing"), None).unwrap_err().kind,
+        ErrorKind::NotFound
+    );
+}
+#[test]
+fn label_list_unscoped_and_pinned_keep_snapshot_semantics() {
+    let mut inner = backend();
+    let id = mk(&mut inner, "label target", 1);
+    let (_, tx) =
+        engine::label_change(&mut inner, &ctx(2), std::slice::from_ref(&id), "old", true).unwrap();
+    engine::label_change(&mut inner, &ctx(3), std::slice::from_ref(&id), "new", true).unwrap();
+    let b = LabelReadScope {
+        inner,
+        full_reads: Default::default(),
+        named_reads: Default::default(),
+        allow_full: true,
+    };
+    assert_eq!(
+        engine::labels(&b, Some(&id), Some(tx)).unwrap(),
+        vec!["old"]
+    );
+    assert_eq!(engine::labels(&b, None, None).unwrap(), vec!["new", "old"]);
+    assert_eq!(b.full_reads.get(), 2);
+    assert!(b.named_reads.borrow().is_empty());
+}

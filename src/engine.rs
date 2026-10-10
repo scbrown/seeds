@@ -2518,7 +2518,10 @@ pub fn label_rename(b: &mut dyn Backend, ctx: &Ctx, old: &str, new: &str) -> Res
 /// `sd label list [id]`: one seed's labels, or every label in use (closed
 /// seeds included, as br does), sorted.
 pub fn labels(b: &dyn Backend, id: Option<&str>, at: Option<u64>) -> Result<Vec<String>> {
-    let snap = b.snapshot(at)?;
+    let snap = match id {
+        Some(id) if scoped(b, at) => b.snapshot_seeds(&[id.to_string()])?,
+        _ => b.snapshot(at)?,
+    };
     Ok(match id {
         Some(id) => snap.get(id)?.labels.iter().cloned().collect(),
         None => snap
