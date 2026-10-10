@@ -1,5 +1,14 @@
 # Storage modes
 
+Remote pendant export currently acquires unpinned current facts. It does not
+support historical `export --at`; that request refuses before contacting the
+server or creating output. JSON output separates the requested remote graph and
+unverified, unpinned source from `artifact_origin`, whose scope/store/transaction
+come from the pendant's local scratch producer. The manifest is not relabeled or
+resealed as remote authority. A current export has no proven cross-query snapshot
+receipt; do not use its artifact transaction as a source pin. Historical work-item
+reads through `show --at` remain a separate supported operation.
+
 Where the ledger lives is configuration ([Configuration](config.md)). There are
 three arrangements, and they compose.
 
