@@ -1,8 +1,8 @@
 //! Structured write provenance for every request seeds sends to quipu.
 //!
 //! Who wrote a fact must be machine-readable. Beside `X-Quipu-Client: seeds`,
-//! each request carries up to five headers, filled by machinery from facts the
-//! environment already holds and never typed by a user:
+//! each request carries up to six headers from the environment. The task
+//! label is explicitly declared diagnostic metadata; no task is inferred:
 //!
 //! | header            | first of                                                        |
 //! |-------------------|-----------------------------------------------------------------|
@@ -11,6 +11,7 @@
 //! | `X-Quipu-Model`   | `QUIPU_MODEL`; `SHANTY_MODEL`                                   |
 //! | `X-Quipu-Session` | `QUIPU_SESSION`; the harness's own: `CODEX_SESSION_ID` then `CODEX_THREAD_ID` in a Codex session, else `CLAUDE_CODE_SESSION_ID` |
 //! | `X-Quipu-Host`    | `QUIPU_HOST`; the machine's hostname                            |
+//! | `X-Quipu-Task`    | explicit valid `QUIPU_TASK` only; no inferred task              |
 //!
 //! An agent session is `CLAUDECODE=1` or a non-empty `CODEX_HOME`. Outside one,
 //! an inherited `SHANTY_AGENT` is ignored, so a cron or service that merely
@@ -36,12 +37,13 @@ pub const PRODUCER_HARNESS: &str = "cli";
 pub const MAX_LEN: usize = 128;
 
 /// The provenance fields, in header order.
-pub const FIELDS: [(&str, &str); 5] = [
+pub const FIELDS: [(&str, &str); 6] = [
     ("agent", "X-Quipu-Agent"),
     ("harness", "X-Quipu-Harness"),
     ("model", "X-Quipu-Model"),
     ("session", "X-Quipu-Session"),
     ("host", "X-Quipu-Host"),
+    ("task", "X-Quipu-Task"),
 ];
 
 /// Keep printable ASCII and space only, trim spaces, cut to [`MAX_LEN`].
@@ -53,6 +55,19 @@ pub fn clean(value: &str) -> Option<String> {
         .collect();
     let text: String = kept.trim_matches(' ').chars().take(MAX_LEN).collect();
     (!text.is_empty()).then_some(text)
+}
+
+/// A declared task id compatible with the server's bounded task label.
+/// Invalid values are omitted rather than cleaned into another task's id.
+/// This is diagnostic metadata, never a principal or a write authorization.
+pub fn task_header(value: &str) -> Option<String> {
+    let value = value.trim();
+    (!value.is_empty()
+        && value.len() <= 64
+        && value
+            .bytes()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, b'.' | b'_' | b'-')))
+    .then(|| value.to_ascii_lowercase())
 }
 
 /// The provenance headers `(name, value)` for the environment `env` (a lookup
@@ -93,6 +108,7 @@ pub fn headers_from(
             }
         }),
         get("QUIPU_HOST").or_else(|| hostname().filter(|h| !h.is_empty())),
+        get("QUIPU_TASK").and_then(|value| task_header(&value)),
     ];
     FIELDS
         .iter()
@@ -152,6 +168,33 @@ mod tests {
 
     fn expect(pairs: &[(&'static str, &str)]) -> BTreeMap<&'static str, String> {
         pairs.iter().map(|(k, v)| (*k, v.to_string())).collect()
+    }
+
+    #[test]
+    fn explicit_task_metadata_is_bounded_and_never_inferred() {
+        assert_eq!(
+            task_header("  TASK-1.Child_2  "),
+            Some("task-1.child_2".into())
+        );
+        assert!(task_header(&"a".repeat(64)).is_some());
+        for bad in [
+            "".into(),
+            "a".repeat(65),
+            "task/1".into(),
+            "task\r\n1".into(),
+            "tâsk".into(),
+        ] {
+            assert!(task_header(&bad).is_none(), "invalid task {bad:?}");
+        }
+        assert_eq!(
+            run(&[("QUIPU_TASK", "Task-1")], None)["X-Quipu-Task"],
+            "task-1"
+        );
+        assert!(!run(&[("QUIPU_TASK", "task/1")], None).contains_key("X-Quipu-Task"));
+        assert!(
+            !run(&[("SHANTY_AGENT", "task-1"), ("CODEX_HOME", "/c")], None)
+                .contains_key("X-Quipu-Task")
+        );
     }
 
     #[test]

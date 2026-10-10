@@ -63,3 +63,17 @@ In `--json` mode an error prints `{"error": {"code": "<NAME>", "message":
 "..."}}` on stdout, where `<NAME>` is `FAILED`, `USAGE`, `NOT_FOUND`,
 `CONFLICT`, `REFUSED`, `CONFIG`, `UNREACHABLE`, `INDETERMINATE`, `NOT_BUILT` or `ELSEWHERE`. The message
 always goes to stderr as well.
+
+### Remote request task attribution
+
+Every remote request retains `X-Quipu-Client: seeds`. Set `QUIPU_TASK`
+explicitly to attach diagnostic `X-Quipu-Task` metadata. Valid task ids are
+1–64 ASCII letters, digits, dots, underscores or hyphens after trimming;
+they are lowercased for the server's bounded task label. Invalid or absent
+values send no task header and remain unattributed. This header grants no
+authority and does not change the selected graph, actor or signed writes.
+
+Owner-filtered readiness discovers only explicitly open candidates before
+checking dependencies. Closed ownership history does not create readiness
+requests. Deferred inclusion still uses its separate existing read, and all
+remaining filters and claim checks retain their existing semantics.

@@ -1145,12 +1145,17 @@ impl Backend for RemoteBackend {
             // Candidate owner index first, then readiness with a bound source.
             // Joining owner UNION to the open Action class materializes the
             // unrelated class before applying the owner restriction.
+            // Readiness requires explicit open status below. Apply that
+            // same necessary condition during owner discovery so closed
+            // ownership history never creates readiness batches.
             let owners = format!(
-                "{{ ?s <{}> <{}> }} UNION {{ ?s <{}> \"{}\" }}",
+                "{{ ?s <{}> <{}> ; <{}> \"open\" }} UNION {{ ?s <{}> \"{}\" ; <{}> \"open\" }}",
                 term::assigned_to(),
                 vocab::principal_iri(owner),
+                term::status(),
                 term::assigned_to(),
-                escape_literal(owner)
+                escape_literal(owner),
+                term::status()
             );
             let subjects = self.subjects_where(&self.graph, &owners, None)?;
             let subjects = subjects.into_iter().collect::<Vec<_>>();
