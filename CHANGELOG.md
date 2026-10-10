@@ -2,6 +2,18 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.2.1] - 2026-10-10
+
+### Fixed
+
+- Refuse ignored routing overrides during init (#119) ([3259dc8](https://github.com/scbrown/seeds/commit/3259dc8a7b5c53076ed7e58149035d590b9073f0))
+- Refuse unsupported remote export pins and disclose artifact origin (#120) ([df451a7](https://github.com/scbrown/seeds/commit/df451a76c6414b9382c6cfa7cd962f60a2591e23))
+
+### Miscellaneous
+
+- Remove generated Python bytecode (#116) ([74a0caf](https://github.com/scbrown/seeds/commit/74a0caf57971088bba793d60ce525d5deec9d593))
+- Migrate dogfood pendant to current vocabulary (#118) ([c14c032](https://github.com/scbrown/seeds/commit/c14c0322ead85e9e70269ecdbb0415a34c18dea9))
+
 ## [0.2.0] - 2026-10-09
 
 ### Added
