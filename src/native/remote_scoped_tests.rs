@@ -943,3 +943,163 @@ fn search_shadowing_and_identifier_counts_match_effective_snapshot() {
         remote.snapshot(None).unwrap().seeds.len()
     );
 }
+
+// Owner history must not amplify a routine ready read. This runs against an
+// isolated real server; the request counter measures discovery and readiness,
+// while the unscoped ready query is the independent membership reference.
+#[test]
+fn owner_ready_requests_do_not_grow_with_closed_history() {
+    let Some(server) = quipu_server() else {
+        eprintln!("SKIPPED: set SEEDS_TEST_QUIPU_SERVER");
+        return;
+    };
+    let graph = "https://seeds.local/project/owner-history";
+    let remote = RemoteBackend::connect(&server.base, graph, None, None, &[]).unwrap();
+    let owner = "reader";
+    let mut triples = String::new();
+    for n in 0..500 {
+        triples += &format!(
+            "<{}> a <{}> ; <{}> \"history-{n}\" ; <{}> <{}> ; <{}> \"closed\" .\n",
+            vocab::item_iri(&format!("history-{n}")),
+            term::work_item(),
+            term::identifier(),
+            term::assigned_to(),
+            vocab::principal_iri(owner),
+            term::status()
+        );
+    }
+    for (id, status, assignment) in [
+        (
+            "open-iri",
+            "open",
+            format!("<{}>", vocab::principal_iri(owner)),
+        ),
+        ("open-literal", "open", format!("\"{owner}\"")),
+        ("deferred", "deferred", format!("\"{owner}\"")),
+        ("blocked", "blocked", format!("\"{owner}\"")),
+        ("unknown", "unexpected", format!("\"{owner}\"")),
+        ("in-progress", "in_progress", format!("\"{owner}\"")),
+        ("other-owner", "open", "\"different\"".into()),
+        ("open-blocked", "open", format!("\"{owner}\"")),
+    ] {
+        triples += &format!(
+            "<{}> a <{}> ; <{}> \"{id}\" ; <{}> {assignment} ; <{}> \"{status}\" .\n",
+            vocab::item_iri(id),
+            term::work_item(),
+            term::identifier(),
+            term::assigned_to(),
+            term::status()
+        );
+    }
+    triples += &format!(
+        "<{}> <{}> <{}> .",
+        vocab::item_iri("open-blocked"),
+        term::blocked_on(),
+        vocab::item_iri("blocked")
+    );
+    // Missing status is not open; an unrelated graph cannot turn a local
+    // blocker into a closed one or donate another owner's ready seed.
+    triples += &format!(
+        "<{}> a <{}> ; <{}> \"missing-status\" ; <{}> \"{owner}\" .",
+        vocab::item_iri("missing-status"),
+        term::work_item(),
+        term::identifier(),
+        term::assigned_to()
+    );
+    remote.post("/update", "application/sparql-update", &format!("INSERT DATA {{ GRAPH <{graph}> {{ {triples} }} GRAPH <urn:unrelated> {{ <{}> <{}> \"closed\" . <{}> a <{}> ; <{}> \"foreign\" ; <{}> \"{owner}\" ; <{}> \"open\" . }} }}",vocab::item_iri("blocked"),term::status(),vocab::item_iri("foreign"),term::work_item(),term::identifier(),term::assigned_to(),term::status()),true).unwrap();
+    let reference = remote.ready_ids(None).unwrap();
+    let counter = || {
+        let text = ureq::get(&format!("{}/metrics", server.base))
+            .call()
+            .unwrap()
+            .into_string()
+            .unwrap();
+        text.lines()
+            .filter(|line| {
+                line.starts_with("quipu_http_client_requests_total{")
+                    && line.contains("client=\"seeds\"")
+                    && line.contains("endpoint=\"/query\"")
+            })
+            .map(|line| line.rsplit_once(' ').unwrap().1.parse::<u64>().unwrap())
+            .sum::<u64>()
+    };
+    let before = counter();
+    let found = remote
+        .ready_ids_where(&crate::backend::SeedQuery {
+            assignee: Some(owner.into()),
+            ..Default::default()
+        })
+        .unwrap()
+        .unwrap();
+    let requests = counter() - before;
+    assert_eq!(found, ids(&["open-iri", "open-literal"]));
+    assert!(
+        found.iter().all(|id| reference.contains(id)),
+        "membership differs from unscoped readiness"
+    );
+    eprintln!("owner history: 500 closed, 2 ready, {requests} query requests");
+    assert!(
+        requests <= 5,
+        "closed history amplified readiness into {requests} queries"
+    );
+}
+
+#[test]
+fn owner_ready_discovery_errors_never_become_an_empty_ready_set() {
+    use std::io::{BufRead, Read, Write};
+    for (status, reply, expected) in [
+        ("503 Service Unavailable", "{}", "503"),
+        (
+            "200 OK",
+            r#"{"results":{"bindings":[]},"truncated":true}"#,
+            "truncated",
+        ),
+        ("200 OK", r#"{"rows":[]}"#, "SPARQL results JSON"),
+    ] {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        let handle = std::thread::spawn(move || {
+            for number in 0..2 {
+                let (mut stream, _) = listener.accept().unwrap();
+                let mut reader = std::io::BufReader::new(stream.try_clone().unwrap());
+                let mut line = String::new();
+                reader.read_line(&mut line).unwrap();
+                let mut bytes = 0;
+                loop {
+                    let mut header = String::new();
+                    reader.read_line(&mut header).unwrap();
+                    if header == "\r\n" {
+                        break;
+                    }
+                    if let Some((name, value)) = header.split_once(':') {
+                        if name.eq_ignore_ascii_case("content-length") {
+                            bytes = value.trim().parse().unwrap();
+                        }
+                    }
+                }
+                let mut body = vec![0; bytes];
+                reader.read_exact(&mut body).unwrap();
+                let (code, content) = if number == 0 {
+                    assert!(line.starts_with("GET /health "));
+                    ("200 OK", "{}")
+                } else {
+                    assert!(line.starts_with("POST /query "));
+                    (status, reply)
+                };
+                write!(stream, "HTTP/1.1 {code}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{content}", content.len()).unwrap();
+            }
+        });
+        let remote = RemoteBackend::connect(&base, "urn:owner-errors", None, None, &[]).unwrap();
+        let error = remote
+            .ready_ids_where(&crate::backend::SeedQuery {
+                assignee: Some("reader".into()),
+                ..Default::default()
+            })
+            .unwrap_err();
+        assert!(
+            error.message.contains(expected),
+            "expected {expected}: {error:?}"
+        );
+        handle.join().unwrap();
+    }
+}
