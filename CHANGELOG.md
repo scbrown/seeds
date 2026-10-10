@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.2.2] - 2026-10-10
+
+### Fixed
+
+- *(remote)* Bound owner readiness discovery and attach explicit task metadata (#121) ([92274d3](https://github.com/scbrown/seeds/commit/92274d3abc18f646d618211eb512ae638f5b942d))
+
 ## [0.2.1] - 2026-10-10
 
 ### Fixed
