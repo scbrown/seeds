@@ -5070,3 +5070,94 @@ fn rank_moves_preserve_neighbors_and_deadlines() {
         None
     );
 }
+
+#[test]
+fn default_search_covers_description_but_not_comments_or_notes() {
+    let mut b = backend();
+    let (seed, _) = engine::create(
+        &mut b,
+        &ctx(1),
+        &CreateReq {
+            title: "visible title".into(),
+            description: Some("read process pool".into()),
+            ..CreateReq::default()
+        },
+    )
+    .unwrap();
+    engine::comment_add(&mut b, &ctx(2), &seed.id, "comment-only-zebra", None).unwrap();
+    engine::update(
+        &mut b,
+        &ctx(3),
+        std::slice::from_ref(&seed.id),
+        &UpdateReq {
+            notes: Some("notes-only-quokka".into()),
+            ..UpdateReq::default()
+        },
+    )
+    .unwrap();
+    let hits = |q: &str, full| {
+        engine::search(
+            &b,
+            &engine::SearchReq {
+                query: q.into(),
+                full,
+                ..Default::default()
+            },
+            None,
+        )
+        .unwrap()
+        .page
+        .total
+    };
+    assert_eq!(hits("visible title", false), 1, "populated title control");
+    assert_eq!(
+        hits("READ PROCESS POOL", false),
+        1,
+        "description-only match"
+    );
+    assert_eq!(
+        hits("comment-only-zebra", false),
+        0,
+        "comments excluded by default"
+    );
+    assert_eq!(
+        hits("comment-only-zebra", true),
+        1,
+        "--full comment positive"
+    );
+    assert_eq!(
+        hits("notes-only-quokka", true),
+        0,
+        "notes remain outside scope"
+    );
+    assert_eq!(hits("absent-needle", false), 0, "real zero control");
+    engine::close(
+        &mut b,
+        &ctx(4),
+        std::slice::from_ref(&seed.id),
+        Some("done"),
+        false,
+    )
+    .unwrap();
+    let closed = engine::search(
+        &b,
+        &engine::SearchReq {
+            query: "read process pool".into(),
+            ..Default::default()
+        },
+        None,
+    )
+    .unwrap();
+    assert_eq!((closed.page.total, closed.hidden_closed), (0, 1));
+    let all = engine::search(
+        &b,
+        &engine::SearchReq {
+            query: "read process pool".into(),
+            all: true,
+            ..Default::default()
+        },
+        None,
+    )
+    .unwrap();
+    assert_eq!(all.page.total, 1);
+}

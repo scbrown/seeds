@@ -144,7 +144,7 @@ pub struct RemoteBackend {
     /// a missed or phantom seed. "Empty" is never remembered (aegis-r7k).
     ephemeral_seen: std::cell::Cell<bool>,
     /// Refuse, unsent, a write request larger than this many bytes.
-    /// Scoped to one full-search call; never a cached readiness observation.
+    /// Scoped to one search call; never a cached readiness observation.
     require_substring: std::cell::Cell<bool>,
     max_write_bytes: usize,
     /// Refuse, unsent, a write nesting more guard clauses than this.
@@ -379,7 +379,7 @@ impl RemoteBackend {
         };
         match response {
             Ok(r) if require_substring && r.header("X-Quipu-Substring-Index") != Some("v6") => Err((false,
-                SdError::refused("remote full-field search requires the supported complete substring index; server did not acknowledge readiness, refusing a snapshot fallback"))),
+                SdError::refused("remote title+description/full search requires the supported complete substring index; server did not acknowledge readiness, refusing a snapshot fallback"))),
             Ok(r) => r.into_string().map_err(|e| {
                 (
                     true,
@@ -1212,26 +1212,26 @@ impl Backend for RemoteBackend {
         &self,
         req: &crate::engine::SearchReq,
     ) -> Result<Option<crate::engine::SearchPage>> {
-        if req.full {
+        {
             let needle = req.query.trim().to_lowercase();
             if needle.contains('\0') || needle.chars().count() < 3 {
                 return Err(SdError::refused(
-                    "remote full-field search requires at least three lowercase Unicode characters and no NUL; refusing an unindexed scan",
+                    "remote title+description/full search requires at least three lowercase Unicode characters and no NUL; refusing an unindexed scan",
                 ));
             }
         }
         // RemoteBackend is not Sync (it already has per-call Cell state).
         // Restore the scoped requirement on all returns and unwinding, so
-        // ordinary title searches and unrelated verbs retain their contract.
+        // unrelated verbs retain their contract. Both search scopes require the index.
         struct Restore<'a>(&'a std::cell::Cell<bool>, bool);
         impl Drop for Restore<'_> {
             fn drop(&mut self) {
                 self.0.set(self.1);
             }
         }
-        let previous = self.require_substring.replace(req.full);
+        let previous = self.require_substring.replace(true);
         let _restore = Restore(&self.require_substring, previous);
-        if req.full {
+        {
             let text = self.post("/query", "application/json", r#"{"query":"ASK {}"}"#, false)?;
             let answer: Json = serde_json::from_str(&text)
                 .map_err(|_| SdError::failed("invalid substring readiness response"))?;
@@ -2446,14 +2446,19 @@ mod tests {
 
     #[test]
     fn full_search_contract_refuses_missing_or_wrong_echo_and_restores_scope() {
-        for echo in [None, Some("wrong")] {
+        for (full, echo) in [
+            (false, None),
+            (false, Some("wrong")),
+            (true, None),
+            (true, Some("wrong")),
+        ] {
             let (base, seen) = recording_server_with_contract(echo);
             let backend =
                 RemoteBackend::connect(&base, "https://example.org/project", None, None, &[])
                     .unwrap();
             let req = crate::engine::SearchReq {
                 query: "needle".into(),
-                full: true,
+                full,
                 ..Default::default()
             };
             let error = backend.search_page(&req).unwrap_err();
@@ -2496,14 +2501,18 @@ mod tests {
 
     #[test]
     fn full_search_contract_refuses_unindexable_terms_before_any_query() {
-        for term in ["a", "ab", "  ab  ", "éé", "😃😃", "needle\0"] {
+        for (full, term) in [false, true].into_iter().flat_map(|full| {
+            ["a", "ab", "  ab  ", "éé", "😃😃", "needle\0"]
+                .into_iter()
+                .map(move |term| (full, term))
+        }) {
             let (base, seen) = recording_server_with_contract(Some("v6"));
             let backend =
                 RemoteBackend::connect(&base, "https://example.org/project", None, None, &[])
                     .unwrap();
             let req = crate::engine::SearchReq {
                 query: term.into(),
-                full: true,
+                full,
                 ..Default::default()
             };
             assert!(backend

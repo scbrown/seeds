@@ -1,0 +1,15 @@
+Script started on 2026-10-17 13:03:52-04:00 [COMMAND="python3 docs/demos/title-description-search/demo.py" <not executed on terminal>]
+Disposable local fixture: title='Capture work'; description='read process pool'; comment='comment-only-zebra'
+$ BASE sd search 'Capture work'
+{"total": 1, "scope": "searched: titles only (IDs/descriptions/comments NOT searched by the query; full: sd search --full)", "titles": ["Capture work"]}
+$ BASE sd search 'read process pool'
+{"total": 0, "scope": "searched: titles only (IDs/descriptions/comments NOT searched by the query; full: sd search --full)", "titles": []}
+$ CANDIDATE sd search 'read process pool'
+{"total": 1, "scope": "searched: title+description (IDs/comments NOT searched by the query; full: sd search --full)", "titles": ["Capture work"]}
+$ CANDIDATE sd search 'comment-only-zebra'
+{"total": 0, "scope": "searched: title+description (IDs/comments NOT searched by the query; full: sd search --full)", "titles": []}
+$ CANDIDATE sd search 'comment-only-zebra' --full
+{"total": 1, "scope": "full-field envelope", "titles": ["Capture work"]}
+PASS: description-only miss -> hit; comment excluded by default and included with --full
+
+Script done on 2026-10-17 13:03:53-04:00 [COMMAND_EXIT_CODE="0"]

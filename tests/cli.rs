@@ -2632,21 +2632,18 @@ fn search_scope_is_explicit_for_hits_zeros_json_and_csv() {
         "body-only-needle",
     ]);
     let id = seed["id"].as_str().unwrap();
-    let scope = "searched: titles only";
+    let scope = "searched: title+description";
     for query in ["visible-title", "body-only-needle", "absent-needle"] {
         let text = sb.ok(&["search", query]);
         assert!(text.contains(scope), "scope footer missing: {text}");
-        assert!(
-            text.contains("descriptions/comments NOT searched"),
-            "{text}"
-        );
-        if query != "visible-title" {
-            assert!(text.contains("0 title matches"), "{text}");
+        assert!(text.contains("IDs/comments NOT searched"), "{text}");
+        if query == "absent-needle" {
+            assert!(text.contains("0 title+description matches"), "{text}");
             assert!(!text.contains("No issues found"), "{text}");
         }
         let json = sb.json(&["search", query]);
         assert!(json["search_scope"].as_str().unwrap().contains(scope));
-        assert_eq!(json["total"], if query == "visible-title" { 1 } else { 0 });
+        assert_eq!(json["total"], if query == "absent-needle" { 0 } else { 1 });
         assert_eq!(json["counts"], "not_computed");
         for row in json["issues"].as_array().unwrap() {
             assert!(row.get("dependency_count").is_some_and(Value::is_null));

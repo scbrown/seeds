@@ -674,7 +674,7 @@ pub struct ListArgs {
 pub struct SearchArgs {
     /// Text to find (case-insensitive)
     pub query: String,
-    /// Search ids, descriptions and comments too (single-flight admin read)
+    /// Search ids and comments too (single-flight admin read)
     #[arg(long)]
     pub full: bool,
     /// Only this status (includes closed when you ask for closed)

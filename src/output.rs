@@ -80,7 +80,7 @@ pub fn search_json(r: &SearchPage) -> Json {
     o["search_notice"] = json!(if r.full {
         format!("{} full-field matches", r.page.total)
     } else {
-        format!("{} title matches", r.page.total)
+        format!("{} title+description matches", r.page.total)
     });
     o
 }
@@ -88,7 +88,7 @@ pub fn search_json(r: &SearchPage) -> Json {
 /// `search` as text: the hits, then how many closed ones were hidden.
 pub fn search_text(r: &SearchPage, query: &str, layout: Layout) -> String {
     let mut out = if !r.full && r.page.total == 0 {
-        "0 title matches".into()
+        "0 title+description matches".into()
     } else {
         page_text_layout(&r.page, "matching", layout)
     };
@@ -107,13 +107,13 @@ pub fn search_text(r: &SearchPage, query: &str, layout: Layout) -> String {
     out
 }
 
-/// Scope travels with every result, so a title-only zero cannot claim absence
-/// from the descriptions or comments that were not queried.
+/// Scope travels with every result, so a routine zero cannot claim absence
+/// from comments or identifiers that were not queried.
 pub fn search_scope(r: &SearchPage) -> &'static str {
     if r.full {
         "searched: IDs, titles, descriptions and comments (--full)"
     } else {
-        "searched: titles only (IDs/descriptions/comments NOT searched by the query; full: sd search --full)"
+        "searched: title+description (IDs/comments NOT searched by the query; full: sd search --full)"
     }
 }
 

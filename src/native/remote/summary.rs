@@ -60,27 +60,18 @@ impl RemoteBackend {
             guard
         };
         let mut subjects = BTreeSet::new();
-        if req.full {
-            let branches = self
-                .both_graphs()
-                .into_iter()
-                .map(|graph| {
-                    let pattern = self
-                        .search_branches(&needle, &visible, false, true, &graph)
-                        .join(" UNION ");
-                    format!("{{ GRAPH <{graph}> {{ {pattern} }} }}")
-                })
-                .collect::<Vec<_>>()
-                .join(" UNION ");
-            subjects.extend(self.subjects_scoped(&branches, "full-search graphs", None)?);
-        } else {
-            for graph in self.both_graphs() {
+        let branches = self
+            .both_graphs()
+            .into_iter()
+            .map(|graph| {
                 let pattern = self
-                    .search_branches(&needle, &visible, false, false, &graph)
+                    .search_branches(&needle, &visible, false, req.full, &graph)
                     .join(" UNION ");
-                subjects.extend(self.subjects_where(&graph, &pattern, None)?);
-            }
-        }
+                format!("{{ GRAPH <{graph}> {{ {pattern} }} }}")
+            })
+            .collect::<Vec<_>>()
+            .join(" UNION ");
+        subjects.extend(self.subjects_scoped(&branches, "search graphs", None)?);
         let hidden_closed = if hidden {
             let fields = if req.filter == Filter::default() {
                 String::new()
@@ -164,17 +155,15 @@ impl RemoteBackend {
                 term::description(),
             ]
         } else {
-            vec![term::name(), vocab::RDFS_LABEL.into()]
+            vec![term::name(), vocab::RDFS_LABEL.into(), term::description()]
         };
         let mut branches = predicates.into_iter().map(|p| {
             let fallback = if p == vocab::RDFS_LABEL { format!("FILTER NOT EXISTS {{ ?s <{}> ?name FILTER(isLiteral(?name) && sameTerm(?name, STR(?name))) }}",term::name()) } else { String::new() };
-            if full {
+            {
                 // Project matching subjects before joining their metadata. Keeping
                 // the text binding out of those joins avoids retaining every
                 // description through type/status/shadow evaluation.
                 format!("{{ {{ SELECT ?s WHERE {{ ?s <{p}> ?text . FILTER(isLiteral(?text) && sameTerm(?text, STR(?text)) && CONTAINS(LCASE(STR(?text)), {needle})) }} }} {valid_id} FILTER EXISTS {{ ?s a <{}> . {fields} {guard} {fallback} {shadow} }} }}", term::work_item())
-            } else {
-                format!("{{ {{ ?s <{p}> ?text ; a <{}> . {fields} {valid_id} FILTER(isLiteral(?text) && sameTerm(?text, STR(?text)) && CONTAINS(LCASE(STR(?text)), {needle})) }} {guard} {fallback} {shadow} }}",term::work_item())
             }
         }).collect::<Vec<_>>();
         if full {

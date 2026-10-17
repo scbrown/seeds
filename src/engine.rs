@@ -1097,7 +1097,7 @@ fn page_at_counted(
 pub struct SearchReq {
     /// Text to find (case-insensitive substring).
     pub query: String,
-    /// Include ids, descriptions and comments. The default searches titles.
+    /// Include ids and comments. The default searches titles and descriptions.
     pub full: bool,
     /// Filters.
     pub filter: Filter,
@@ -1143,10 +1143,8 @@ pub fn search(b: &dyn Backend, req: &SearchReq, at: Option<u64>) -> Result<Searc
     let hit = |s: &Seed| {
         let has = |t: &str| t.to_lowercase().contains(&query);
         has(&s.title)
-            || (req.full
-                && (has(&s.id)
-                    || s.description.as_deref().is_some_and(has)
-                    || snap.comments_on(&s.id).iter().any(|c| has(&c.text))))
+            || s.description.as_deref().is_some_and(has)
+            || (req.full && (has(&s.id) || snap.comments_on(&s.id).iter().any(|c| has(&c.text))))
     };
     let show_closed = req.all || f.status.is_some();
     let (mut seeds, mut hidden_closed) = (Vec::new(), 0);
