@@ -2,6 +2,20 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.6.0] - 2026-10-17
+
+### Added
+
+- *(rank)* Order work within priority without changing deadlines (#158) ([e760c8b](https://github.com/scbrown/seeds/commit/e760c8b3fd8f871c0681a97b91b23a3f546233e3))
+
+### Documentation
+
+- Describe current storage and provenance behavior (#162) ([fcc06c4](https://github.com/scbrown/seeds/commit/fcc06c4d1c59b59e3d8254185f20753114c5de25))
+
+### Fixed
+
+- *(docs)* Keep demo artifacts outside ignored log paths (#159) ([f997e13](https://github.com/scbrown/seeds/commit/f997e13e88dafe8bde9b6e6a4dcf23aebab771e6))
+
 ## [0.5.0] - 2026-10-17
 
 ### Added
